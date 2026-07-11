@@ -1,0 +1,67 @@
+{
+  "name": "@infino-ai/code-context",
+  "version": "0.1.0",
+  "description": "Local-first code search for AI coding agents — CLI + MCP server over an index that lives in plain files. Keyword search the moment indexing finishes; semantic and hybrid search when vectors backfill; SQL with relevance-ranked aggregation.",
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/infino-ai/code-context#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/infino-ai/code-context.git"
+  },
+  "bugs": {
+    "url": "https://github.com/infino-ai/code-context/issues"
+  },
+  "keywords": [
+    "code-search",
+    "mcp",
+    "model-context-protocol",
+    "coding-agent",
+    "claude-code",
+    "cursor",
+    "codebase-context",
+    "semantic-search",
+    "hybrid-search",
+    "bm25",
+    "grep",
+    "sql",
+    "tree-sitter",
+    "local-first",
+    "infino"
+  ],
+  "type": "module",
+  "bin": {
+    "code-context": "dist/cli.js",
+    "cx": "dist/cli.js"
+  },
+  "main": "dist/cli.js",
+  "files": [
+    "dist",
+    "assets"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch",
+    "test": "vitest run",
+    "prepack": "npm run build"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "^4.2.0",
+    "@infino-ai/infino": "^0.1.4",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@vscode/tree-sitter-wasm": "^0.3.1",
+    "commander": "^15.0.0",
+    "ignore": "^7.0.5",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "typescript": "^5",
+    "vitest": "^3"
+  }
+}

@@ -1,0 +1,58 @@
+name: Publish (npm)
+
+# Publishes @infino-ai/code-context to the public npm registry.
+#
+# npm auth is the classic NPM_TOKEN secret (publish rights under the infino-ai
+# org). Provenance — the "built from this repo at this commit" attestation on
+# npmjs.org — is emitted via NPM_CONFIG_PROVENANCE + the OIDC id-token
+# (requires a public source repo).
+#
+# Triggered manually. The default run is a dry run: it builds and validates,
+# publishing nothing. Re-run with dry_run unchecked to publish for real.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Validate only — build + pack, publish nothing"
+        type: boolean
+        default: true
+
+permissions:
+  id-token: write # OIDC token for npm provenance
+  contents: read
+
+jobs:
+  publish:
+    name: Build and publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+      - name: Install dependencies
+        run: npm ci
+      - name: Build
+        run: npm run build
+      - name: Test
+        run: npm test
+
+      - name: Validate (dry run)
+        if: ${{ inputs.dry_run }}
+        run: npm publish --dry-run --tag latest --access public
+      # Idempotent: skip if this version is already on npm, so a re-run
+      # doesn't fail on "cannot publish over existing version".
+      - name: Publish to npm
+        if: ${{ !inputs.dry_run }}
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          if npm view "@infino-ai/code-context@$VERSION" version >/dev/null 2>&1; then
+            echo "version $VERSION already published — skipping"
+          else
+            npm publish --tag latest --access public
+          fi
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_PROVENANCE: true

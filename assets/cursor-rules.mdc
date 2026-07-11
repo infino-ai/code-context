@@ -1,0 +1,21 @@
+---
+description: Use the code-context MCP tools (search, sql, reindex) for codebase questions — ranked local index instead of crawling files.
+alwaysApply: true
+---
+
+This repository has a local code-context search index (MCP server
+`code-context`). For any question about the codebase, prefer its tools over
+reading files blindly:
+
+- `search` — finding code, always: exact identifiers and error strings AND
+  paraphrases / renamed symbols, one ranked pass. Hits include chunk
+  content — answer from it directly when it's enough.
+- `sql` — counts and rankings over the whole repo in one query, on
+  `chunks(path, start_line, end_line, lang, content)`. Ranked aggregation:
+  `SELECT path, SUM(end_line - start_line + 1) AS lines FROM
+  bm25_search('chunks','content','<terms>', 300) GROUP BY path ORDER BY lines
+  DESC LIMIT 15`. Regex via `regexp_like(content, 'pattern')` in WHERE.
+- `reindex` — sync after significant edits.
+
+Results cite path:start-end line ranges; open files only for what the
+returned chunks don't show, and read just that range.

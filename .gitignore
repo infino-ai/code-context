@@ -1,0 +1,5 @@
+node_modules/
+dist/
+.infino/
+*.tgz
+.DS_Store
