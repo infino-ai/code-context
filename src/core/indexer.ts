@@ -125,6 +125,7 @@ export async function indexRepoStaged(opts: IndexOptions): Promise<StagedIndexRu
     textTable.append(chunks.slice(i, i + APPEND_BATCH).map(toTextRow));
     onProgress?.(Math.min(i + APPEND_BATCH, chunks.length), chunks.length);
   }
+  if (!embedder) compact(textTable);
   const indexMs = Math.round(performance.now() - t0);
 
   const stats: IndexStats = {
@@ -171,6 +172,7 @@ export async function indexRepoStaged(opts: IndexOptions): Promise<StagedIndexRu
           })),
         );
       }
+      compact(hybridTable);
       stats.vectors = "ready";
       stats.embedMs = Math.round(performance.now() - tEmbed);
       writeManifest(
@@ -342,6 +344,19 @@ export async function syncRepo(opts: IndexOptions): Promise<SyncOutcome> {
     vectors: nextManifest.vectors,
     tookMs: Math.round(performance.now() - t0),
   };
+}
+
+/** Post-build compaction: batched appends leave many small superfiles behind
+ * (measured 3–4× index-size bloat on large repos); merge them and sweep the
+ * orphans. The 60s gc grace protects any reader mid-query in another
+ * process. Best-effort — a failed compaction never fails the build. */
+function compact(table: { optimize(): void; gc(graceSecs: number): unknown }): void {
+  try {
+    table.optimize();
+    table.gc(60);
+  } catch {
+    /* e.g. non-durable storage — the index still works, just bigger */
+  }
 }
 
 function toTextRow(c: Chunk) {

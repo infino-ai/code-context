@@ -36,11 +36,21 @@ macOS and Linux (x64/arm64, glibc and musl); Windows via WSL.
 Coding agents answer codebase questions by grepping and reading files into
 the context window — and pay for every token they read. A ranked index
 returns just the relevant chunks with `path:line` citations instead.
-Measured end-to-end on the same engine (same model, same turn budget, public
-live demo): **10× fewer tokens and 5.6× cheaper** across a 10-question set,
-with aggregation questions up to 24.5× — methodology and per-question numbers
-at [lantern.infino.ai](https://lantern.infino.ai). A benchmark of this tool's
-exact surface is being published the same way.
+
+Measured on real agent runs — same model (claude-opus-4-8), same turn
+budget, unsteered, stock file tools as the baseline
+([methodology & full tables](docs/benchmark.md), harness in
+[`bench/`](bench/)):
+
+| Question class | Result |
+|---|---|
+| Relevance aggregation — "which files have the most code about X", "break down the codebase" | **6.5× fewer tokens** (per-question 1.7–22×), answered by one SQL query with near-zero variance |
+| Comprehension — "how does X work" | **1.4× fewer tokens**, every answer with `path:line` citations |
+| Bug localization — SWE-bench_Verified protocol | **Better accuracy** (F1 0.69 vs 0.66) in fewer calls, at ~2× the tokens — content-rich hits cost more than lean grep lines |
+
+Where file tools win, the tables say so. The same engine under a steered
+embedded agent measures larger multiples — live at
+[lantern.infino.ai](https://lantern.infino.ai).
 
 ## What you get
 

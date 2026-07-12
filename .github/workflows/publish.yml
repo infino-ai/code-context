@@ -1,11 +1,19 @@
-name: Publish (npm)
+name: Publish (npm + MCP Registry)
 
-# Publishes @infino-ai/code-context to the public npm registry.
+# Publishes in two stages:
+#   1. npm — @infino-ai/code-context to the public npm registry.
+#   2. MCP Registry — the server metadata (server.json) to
+#      registry.modelcontextprotocol.io, which propagates to downstream
+#      catalogs. The registry hosts only metadata and verifies ownership of
+#      the npm package via the "mcpName" field in package.json, so npm must
+#      publish first.
 #
 # npm auth is the classic NPM_TOKEN secret (publish rights under the infino-ai
 # org). Provenance — the "built from this repo at this commit" attestation on
 # npmjs.org — is emitted via NPM_CONFIG_PROVENANCE + the OIDC id-token
-# (requires a public source repo).
+# (requires a public source repo). MCP Registry auth is GitHub OIDC — no
+# secret; the id-token from this repo authorizes the io.github.infino-ai/*
+# namespace.
 #
 # Triggered manually. The default run is a dry run: it builds and validates,
 # publishing nothing. Re-run with dry_run unchecked to publish for real.
@@ -39,6 +47,7 @@ jobs:
       - name: Test
         run: npm test
 
+      # --- stage 1: npm ---
       - name: Validate (dry run)
         if: ${{ inputs.dry_run }}
         run: npm publish --dry-run --tag latest --access public
@@ -56,3 +65,35 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_PROVENANCE: true
+
+      # --- stage 2: MCP Registry ---
+      # Keep server.json's versions in lockstep with the package version so
+      # the registry entry always points at the version just published to npm.
+      - name: Sync server.json version
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          jq --arg v "$VERSION" '.version = $v | .packages[0].version = $v' server.json > server.tmp
+          mv server.tmp server.json
+      - name: Install mcp-publisher
+        run: |
+          curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
+      - name: Validate server.json (dry run)
+        if: ${{ inputs.dry_run }}
+        run: ./mcp-publisher validate
+      - name: Authenticate to MCP Registry (GitHub OIDC)
+        if: ${{ !inputs.dry_run }}
+        run: ./mcp-publisher login github-oidc
+      # Idempotent: the registry rejects re-publishing an existing version,
+      # so skip if this version is already listed.
+      - name: Publish to MCP Registry
+        if: ${{ !inputs.dry_run }}
+        run: |
+          VERSION=$(node -p "require('./server.json').version")
+          NAME_ENC=$(node -p "encodeURIComponent(require('./server.json').name)")
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' \
+            "https://registry.modelcontextprotocol.io/v0.1/servers/${NAME_ENC}/versions/${VERSION}")
+          if [ "$CODE" = "200" ]; then
+            echo "version $VERSION already in the registry — skipping"
+          else
+            ./mcp-publisher publish
+          fi

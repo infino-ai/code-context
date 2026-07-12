@@ -1,0 +1,46 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.infino-ai/code-context",
+  "description": "Local code search for AI coding agents: ranked hybrid search, SQL with relevance-ranked aggregation, and incremental auto-sync over an index in plain files. No accounts, no keys, no server.",
+  "repository": {
+    "url": "https://github.com/infino-ai/code-context",
+    "source": "github"
+  },
+  "version": "0.1.0",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "@infino-ai/code-context",
+      "version": "0.1.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "CX_ROOT",
+          "description": "Repository root to serve. Optional — defaults to the working directory the server is launched in.",
+          "isRequired": false,
+          "format": "string"
+        },
+        {
+          "name": "CX_INDEX_DIR",
+          "description": "Where the index lives. Optional — defaults to .infino/ inside the repository root.",
+          "isRequired": false,
+          "format": "string"
+        },
+        {
+          "name": "CX_AUTO_SYNC",
+          "description": "Set to 0 to disable the background staleness sync that runs as queries arrive.",
+          "isRequired": false,
+          "format": "string"
+        },
+        {
+          "name": "CX_NO_EMBED",
+          "description": "Set (1/true/yes) for keyword-only mode — skip the vector stage entirely.",
+          "isRequired": false,
+          "format": "string"
+        }
+      ]
+    }
+  ]
+}

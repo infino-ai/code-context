@@ -1,0 +1,9 @@
+{
+  "name": "code-context-bench",
+  "private": true,
+  "type": "module",
+  "description": "Benchmark harness for code-context — real agent lanes over stock file tools vs the MCP surface.",
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.207"
+  }
+}
