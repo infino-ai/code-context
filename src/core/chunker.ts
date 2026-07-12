@@ -142,7 +142,11 @@ const require = createRequire(import.meta.url);
 
 type TSParser = {
   setLanguage(lang: unknown): void;
-  parse(input: string): { rootNode: TSNode } | null;
+  parse(
+    input: string,
+    oldTree?: unknown,
+    options?: { progressCallback?: (state: unknown) => boolean },
+  ): { rootNode: TSNode } | null;
 };
 type TSNode = {
   type: string;
@@ -154,6 +158,15 @@ type TSNode = {
 let runtime: Promise<{ Parser: new () => TSParser; Language: { load(path: string): Promise<unknown> } }> | null = null;
 const languages = new Map<string, Promise<unknown | null>>();
 let parser: TSParser | null = null;
+
+// Adversarial inputs (parser stress fixtures, generated code) can abort the
+// WASM runtime, and a post-abort runtime is undefined behavior — sometimes
+// every later call throws fast, sometimes it busy-loops. Count failures and
+// permanently fall back to fixed windows once the runtime looks unhealthy;
+// losing syntactic cuts on the tail of a hostile corpus is fine, hanging
+// an index run is not.
+let parseFailures = 0;
+const MAX_PARSE_FAILURES = 20;
 
 function getRuntime() {
   if (!runtime) {
@@ -188,19 +201,29 @@ function getLanguage(grammar: string): Promise<unknown | null> {
 async function syntacticBreaks(lang: string, content: string): Promise<number[] | undefined> {
   const grammar = TS_GRAMMAR[lang];
   if (!grammar || content.length > PARSE_CAP_BYTES) return undefined;
+  if (parseFailures >= MAX_PARSE_FAILURES) return undefined;
   const language = await getLanguage(grammar);
   if (!language) return undefined;
   try {
     const { Parser } = await getRuntime();
     if (!parser) parser = new Parser();
     parser.setLanguage(language);
-    const tree = parser.parse(content);
+    // Per-file parse budget, enforced through the parser's progress callback
+    // (returning true cancels the parse): a single pathological file
+    // (generated code, parser stress fixtures) must never stall the run.
+    // A cancelled parse returns null → fixed-window fallback.
+    const deadline = performance.now() + 200;
+    const tree = parser.parse(content, undefined, {
+      progressCallback: () => performance.now() > deadline,
+    });
     if (!tree) return undefined;
     const defs = DEF_TYPES[grammar];
     const rows = new Set<number>();
     collect(tree.rootNode, defs, rows, 0);
     return [...rows].sort((a, b) => a - b);
   } catch {
+    parseFailures++;
+    parser = null; // a failed parser instance is not trusted again
     return undefined;
   }
 }
