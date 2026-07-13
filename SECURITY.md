@@ -16,14 +16,20 @@ code-context is designed to keep your code on your machine:
 - Everything runs **locally**: indexing, storage (`.infino/` in your repo),
   and search. The MCP server is a local subprocess over stdio - no network
   listener, no remote service, no telemetry.
-- Embedding is **always local**: a small model downloaded once, then no
-  network at all. Your code is never sent to any API, and there is no key
-  to provision.
-- The SQL surface is **read-only** (single SELECT/WITH statement); the index
-  is only ever rebuilt from your working tree, never mutated through queries.
-- `.gitignore` is respected at every directory level, so ignored files
-  (secrets, envs, build output) stay out of the index; `cx install` also
-  gitignores the index itself.
+- Embedding is **always local**. The model (~25 MB) is downloaded once
+  from huggingface.co on first use; after that there is no network at query
+  or index time. Your code is never sent to any API, and there is no key to
+  provision. (Running the server via `npx` also contacts the npm registry;
+  install the package for fully offline use.)
+- Mutating SQL is rejected by client-side statement filtering (a single
+  SELECT/WITH statement is allowed). The index is a derived artifact: it is
+  rebuilt from your working tree by `cx index --full` at any time, so it is
+  never the only copy of anything.
+- Per-directory `.gitignore` files are respected at every level, so files
+  ignored there (secrets, envs, build output) stay out of the index. Global
+  git excludes and `.git/info/exclude` are NOT read - keep secrets ignored
+  in-repo if you rely on this. `cx install` also gitignores the index
+  itself.
 
 ## Supported versions
 

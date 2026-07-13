@@ -11,14 +11,17 @@ export const RESULTS = join(WORK, "results");
 export const CX = resolve(BENCH, "..", "dist", "cli.js");
 export const MODEL = process.env.BENCH_MODEL ?? "claude-opus-4-8";
 
-/** Lane options: identical hermetic base, only the toolset differs. */
+/** Lane options: identical hermetic base, only the toolset differs.
+ *   cx    - the MCP tools plus Read (retrieval via the index)
+ *   files - stock file tools only
+ *   combo - both, which is what installing the MCP server actually
+ *           produces in a real client */
 export function laneOptions(lane, repoDir, indexDir) {
   const hermetic = { cwd: repoDir, settingSources: [], strictMcpConfig: true };
-  if (lane === "cx") {
+  if (lane === "cx" || lane === "combo") {
     return {
       ...hermetic,
-      // retrieval via the index; Read stays for following citations
-      tools: ["Read"],
+      tools: lane === "combo" ? ["Glob", "Grep", "Read", "LS"] : ["Read"],
       mcpServers: {
         "code-context": {
           command: "node",

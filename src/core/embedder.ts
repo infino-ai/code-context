@@ -15,8 +15,9 @@
 export const LOCAL_MODEL_DEFAULT = "Xenova/all-MiniLM-L6-v2";
 const MODEL = process.env.CX_EMBED_MODEL ?? LOCAL_MODEL_DEFAULT;
 
-// Quantization is the main speed lever for local indexing (q8 embeds this
-// model ~40% faster than fp32 on CPU with equivalent retrieval quality).
+// Quantization is the main speed lever for local indexing; q8 measured
+// faster than fp32 on CPU with similar retrieval quality on our eval
+// (docs/embedder-eval.md).
 const DTYPE = (process.env.CX_EMBED_DTYPE ?? "q8") as "fp32" | "fp16" | "q8" | "q4";
 
 export interface Embedder {

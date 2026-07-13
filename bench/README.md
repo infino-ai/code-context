@@ -11,7 +11,7 @@ environment. Everything writes under `bench/.work/` (gitignored).
 cd bench && npm install    # installs @anthropic-ai/claude-agent-sdk
 
 # 1. Question suite (aggregation + comprehension) on any repo you have:
-node run-questions.mjs both /path/to/repo
+node run-questions.mjs both /path/to/repo    # lanes: cx | files | combo | both
 
 # 2. SWE-bench_Verified localization (downloads dataset, clones repos,
 #    builds an index per instance - the vector stage takes a while):

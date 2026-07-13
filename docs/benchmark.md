@@ -14,10 +14,13 @@ Run 2026-07-12 on the frozen v0.1 surface.
     repo without an index.
   - *code-context* - the MCP tools (`search`, `sql`, `reindex`) plus Read
     for following citations.
-- **Unsteered:** a minimal identical system prompt ("answer questions about
-  this repository; be efficient"); no lane is taught which tool to prefer;
-  steering comes only from tool names and descriptions, the way a fresh
-  install behaves.
+- **Prompting:** both lanes get the identical minimal system prompt,
+  verbatim: *"You answer questions about the repository checked out at
+  \<path\>. Use the available tools to find the answer. Cite file paths
+  (with line ranges when you have them). Be efficient: prefer few,
+  well-chosen tool calls."* Both lanes are equally asked to cite and to be
+  efficient; neither is told which tool to prefer, so tool choice comes
+  from tool names and descriptions alone.
 - **Tokens** = input + cache writes + cache reads + output, as reported by
   the API for the full run - everything the run made the API process.
   **Cost** uses the API's own per-run accounting (which prices cache reads
@@ -27,12 +30,15 @@ Three question classes, because they stress retrieval differently.
 
 ## 1. Relevance aggregation - "which files have the most code about X"
 
-Ten questions against a public ~180k-line Rust codebase (3,042 indexed
-chunks); questions 1-6 are aggregation-shaped: rank files by how much
-they're about a topic, tally the codebase by language, find the largest
-files. File tools must read source into context to tally; `sql` composes
-ranked search with GROUP BY in one engine pass. Two independent runs per
-question per lane.
+Ten questions we authored (disclosed mix: 6 aggregation-shaped, 4
+comprehension) against [infino](https://github.com/infino-ai/infino), the
+public ~180k-line Rust engine this tool is built on (3,042 indexed chunks).
+Using our own repo is a limitation worth naming - run the harness on yours.
+Questions 1-6 are aggregation-shaped: rank files by how much they're about
+a topic, tally the codebase by language, find the largest files. File tools
+must read source into context to tally; `sql` composes ranked search with
+GROUP BY in one engine pass. Two independent runs per question per lane;
+no run errored or hit the turn cap.
 
 | # | Question shape | code-context (2 runs) | file tools (2 runs) | mean ratio |
 |---|---|---|---|---|
@@ -70,18 +76,31 @@ when one precise grep hits immediately, an index can't beat it.
 lower cost** (28.3k vs 63.2k tokens, 2.2 vs 7.5 calls, $0.102 vs $0.174
 per question).
 
+**Answer quality:** cheaper is only a win if the answers hold up, so all
+20 answer pairs went to a blind pairwise judge (claude-opus-4-8, lanes
+anonymized and order randomized, judging correctness-consistency,
+completeness, and usefulness). Verdicts: 8 for code-context, 12 for file
+tools, none decisive - a 12/20 split is well within binomial noise
+(p≈0.25), i.e. no measurable quality difference. The judge cannot verify
+claims against the repo, so this measures answer completeness and
+consistency, not ground truth.
+
 ## 3. Localization study - SWE-bench_Verified
 
 A harder secondary test: 29 instances from
-[SWE-bench_Verified](https://huggingface.co/datasets/princeton-nlp/SWE-bench_Verified)
-(filtered to 15-60-minute difficulty with exactly two modified Python
-files, spanning django, sympy, astropy, scikit-learn, matplotlib, sphinx,
-xarray, pytest, pylint, seaborn). The agent reads the real GitHub issue and
-must name the files the merged fix actually touched.
+[SWE-bench_Verified](https://huggingface.co/datasets/princeton-nlp/SWE-bench_Verified) -
+the complete yield of the filter (15-60-minute difficulty, exactly two
+modified Python files), no further selection, spanning django, sympy,
+astropy, scikit-learn, matplotlib, sphinx, xarray, pytest, pylint, seaborn.
+The agent reads the real GitHub issue and must name the files the merged
+fix actually touched. One run per instance per lane, so treat small deltas
+(including the F1 gap below) as indicative, not significant.
 
 Isolated lanes measure the substrate; the third lane is the real
 deployment. An MCP server adds tools and never removes the native ones,
-so an installed agent has both and picks per query.
+so an installed agent has both and picks per query. 27 of 29 instances
+completed in all three lanes (the rest hit turn budgets or transient API
+errors) and the table aggregates those 27.
 
 | | code-context only | file tools only | both installed |
 |---|---|---|---|
@@ -107,14 +126,16 @@ survive real deployment.
 ## Reading the results
 
 - **Aggregation is the structural win**: ranked search composed with SQL
-  aggregation has no file-tools equivalent at any budget, and its cost
-  doesn't grow with repo size.
+  aggregation has no file-tools equivalent at any budget. Its cost grows
+  with the index, not with how much source the model would otherwise read.
 - **Comprehension leans code-context**, with citations for free.
-- **Localization stays native-grep territory**, and adding code-context
-  costs nothing there because native tools remain available.
-- Where file tools win, we say so. Single-run numbers per cell are
-  indicative, not gospel - model tool choice varies run to run (the
-  aggregation table shows the baseline varying 8x between identical runs).
+- **Localization stays native-grep territory**: adding code-context does
+  not reduce accuracy there (native tools remain available and the agent
+  uses them), though runs that mix in content-rich hits spend more tokens
+  than lean grep output alone.
+- Where file tools win, we say so. These are small-n measurements -
+  model tool choice varies run to run (the baseline swings more than 2x
+  between identical runs on some questions, and 8x across questions).
 
 ## Indexing at scale
 
@@ -124,9 +145,13 @@ Sizes are after the automatic post-build compaction.
 
 | Repo | Files → chunks | Keyword index | Unchanged-tree check | One-file sync | Index on disk |
 |---|---|---|---|---|---|
-| ~180k-LOC Rust engine | 311 → 3,042 | 0.9s | ~10ms | ~250ms (vectors kept current) | 30M |
-| django | 3,597 → 15,824 | 6.7s | 149ms | 370ms | 37M |
-| TypeScript (whole repo, incl. its 45k-file test suite) | 51,826 → 117,344 | 83s | 1.8s | 2.9s | 126M |
+| ~180k-LOC Rust engine | 311 → 3,042 | 0.9s | 20ms | 0.7s (vectors kept current) | 20M with vectors |
+| django | 3,597 → 15,824 | 6.7s | 149ms | 370ms | 37M keyword-only |
+| TypeScript (whole repo, incl. its 45k-file test suite) | 51,826 → 117,344 | 83s | 1.8s | 2.9s | 126M keyword-only |
+
+The Rust-engine row is a full index (vector stage: 102s); the django and
+TypeScript rows were measured keyword-only, with sync timings that do not
+include re-embedding.
 
 The TypeScript row is a deliberately hostile corpus: its test suite
 contains parser stress fixtures that abort or stall parsers. Every parse

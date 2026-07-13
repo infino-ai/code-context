@@ -1,5 +1,5 @@
 // Aggregation + comprehension lanes over any indexed repo.
-// Usage: node run-questions.mjs <cx|files|both> <repoPath> [questions.json]
+// Usage: node run-questions.mjs <cx|files|combo|both> <repoPath> [questions.json]
 // The repo must be indexed first (`cx index <repoPath>`); the cx lane reads
 // the index from <repoPath>/.infino (or CX_INDEX_DIR).
 import { readFileSync } from "node:fs";
@@ -20,8 +20,8 @@ const DEFAULT_QUESTIONS = [
 ];
 
 const [lane, repoArg, questionsArg] = process.argv.slice(2);
-if (!["cx", "files", "both"].includes(lane) || !repoArg) {
-  console.error("usage: node run-questions.mjs <cx|files|both> <repoPath> [questions.json]");
+if (!["cx", "files", "combo", "both"].includes(lane) || !repoArg) {
+  console.error("usage: node run-questions.mjs <cx|files|combo|both> <repoPath> [questions.json]");
   process.exit(1);
 }
 const repoDir = resolve(repoArg);

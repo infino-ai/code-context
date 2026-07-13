@@ -148,6 +148,19 @@ export async function runSql(
   sql: string,
   embeds?: Record<string, string>,
 ): Promise<Array<Record<string, unknown>>> {
+  // The mismatch guard applies to every path that embeds a query, not just
+  // `search` - a same-dimension model swap would otherwise return silently
+  // wrong vector_search/hybrid_search results through SQL.
+  if (PLACEHOLDER.test(sql)) {
+    PLACEHOLDER.lastIndex = 0;
+    const indexed = handle.manifest.embedder;
+    if (indexed && indexed.model !== embedder.model) {
+      throw new Error(
+        `query embedder (${embedder.model}) does not match the index embedder (${indexed.model}) - ` +
+          `set CX_EMBED_MODEL=${indexed.model} or re-run \`cx index\``,
+      );
+    }
+  }
   const withVectors = await applyEmbeds(sql, embeds, embedder);
   return handle.db.querySql(guardSql(withVectors)) as Array<Record<string, unknown>>;
 }

@@ -1,8 +1,6 @@
 <div align="center">
 
-# code-context
-
-### Let your coding agent search your codebase, not crawl it
+![code-context: let your coding agent search, not crawl](docs/banner.png)
 
 [![CI](https://github.com/infino-ai/code-context/actions/workflows/ci.yml/badge.svg)](https://github.com/infino-ai/code-context/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/@infino-ai/code-context?label=%40infino-ai%2Fcode-context&logo=npm)](https://www.npmjs.com/package/@infino-ai/code-context)
@@ -23,9 +21,11 @@ lives in plain files inside your repo.
   ranked by relevance, tallied by `GROUP BY`.
 - ⚡ **Searching in seconds, fresh forever.** The keyword index commits
   before the embedding model even finishes downloading, vectors backfill in
-  the background, and every edit re-syncs incrementally in milliseconds.
+  the background, and edits re-sync incrementally: only changed files
+  re-chunk and re-embed.
 - 🔒 **Nothing leaves your machine.** No accounts, no API keys, no database
-  server, no telemetry. Embedding is a small local model. Works offline.
+  server, no telemetry. Embedding is a small local model, downloaded once;
+  after that everything works offline.
 
 Built on [infino](https://github.com/infino-ai/infino), a fast retrieval
 engine that runs SQL, full-text search, and vector search over a single copy
@@ -39,7 +39,7 @@ the same engine handles logs, docs, and agent memory.
 ```
 npm install -g @infino-ai/code-context
 cd your-repo
-cx install && cx index      # keyword search live in seconds; vectors follow
+cx install && cx index      # keyword search live in seconds on typical repos
 ```
 
 Or zero-install, straight into Claude Code with one command:
@@ -51,14 +51,17 @@ claude mcp add code-context -- npx -y @infino-ai/code-context mcp
 (ask the agent to "index this codebase": the `reindex` tool bootstraps an
 unindexed repo in-chat, and search works while indexing runs)
 
-Runs on macOS and Linux (x64/arm64, glibc and musl); Windows via WSL.
+CI-tested on Linux x64 (glibc) and macOS arm64; linux-arm64, musl, and
+Windows-via-WSL are expected to work through the engine's prebuilt bindings
+but are not CI-covered.
 
 ## Evaluation
 
 Real agent runs over a codebase-Q&A suite: same model (claude-opus-4-8),
-same turn budget, unsteered, stock file tools (Glob/Grep/Read/LS) as the
-baseline. **55% fewer tokens and 71% fewer tool calls overall**, with the
-same answers and `path:line` citations on every one.
+same turn budget, the same prompt for both lanes, stock file tools
+(Glob/Grep/Read/LS) as the baseline. **55% fewer tokens and 71% fewer tool
+calls overall**, at answer quality a blind pairwise judge could not tell
+apart (8 vs 12 of 20, within noise; details in the benchmark doc).
 
 ![Benchmark: tokens per question, code-context vs stock file tools](docs/benchmark-chart.png)
 
@@ -88,8 +91,8 @@ deliberately small tool surface for agents:
 
 Three tools is a deliberate design: one way to find, one way to count, one
 way to stay fresh. Every additional near-duplicate retrieval tool worsens an
-agent's tool selection, and hybrid search's keyword half already matches
-exact identifiers precisely, so a separate lexical tool has no job left.
+agent's tool selection, and hybrid search's keyword half already ranks
+exact identifier terms highly, so a separate lexical tool has no job left.
 
 ### The SQL move
 
@@ -248,12 +251,13 @@ stack, so run both.
   same model the index was built with, and a mismatch is a clear error, not
   silently wrong results.
 - **Freshness:** incremental by design. A per-file state map (size/mtime
-  prefilter, then content hash) means a sync re-chunks and re-embeds only the
-  files that changed: an unchanged repo checks in ~10ms, a one-file edit
-  syncs in ~250ms with vectors kept current. The MCP server auto-syncs in
-  the background as queries arrive (never blocking a query), `cx index` is
-  incremental by default (`--full` to rebuild), and `cx index --watch`
-  syncs on file events.
+  prefilter, then content hash) means a sync re-chunks and re-embeds only
+  the files that changed: on a ~3,000-chunk repo an unchanged tree checks
+  in ~20ms and a one-file edit syncs in ~0.7s with vectors kept current
+  (larger-repo numbers in the [benchmark](docs/benchmark.md)). The MCP
+  server auto-syncs in the background as queries arrive (never blocking a
+  query), `cx index` is incremental by default (`--full` to rebuild), and
+  `cx index --watch` syncs on file events.
 
 ## License
 

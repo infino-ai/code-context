@@ -10,8 +10,8 @@
 //
 // Three tools, deliberately: one way to find, one way to count, one way to
 // stay fresh - every additional near-duplicate retrieval tool worsens the
-// agent's tool selection. Results carry took_ms - local engine+process
-// time, no model or transport latency in it.
+// agent's tool selection. Results carry took_ms - server-side time for
+// the call (query embedding included where one happens; no transport).
 
 import { existsSync } from "node:fs";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -44,9 +44,9 @@ export async function serveMcp(rootPath?: string): Promise<void> {
   const getEmbedder = () => (embedder ??= createEmbedder());
 
   // --- freshness: one index mutation at a time, auto-sync on queries ----------
-  // Queries never wait on a sync; they run against the current index and the
+  // Queries are not queued behind syncs; they run against the current index and the
   // next query sees the fresh one. CX_AUTO_SYNC=0 disables; the debounce keeps
-  // the stat walk off the hot path (it's ~100ms, but not per-query).
+  // the stat walk off the hot path (~20ms to ~2s depending on repo size).
   const autoSyncEnabled = !["0", "false", "no"].includes((process.env.CX_AUTO_SYNC ?? "").toLowerCase());
   const syncIntervalMs = Number(process.env.CX_SYNC_INTERVAL_SECS ?? 30) * 1000;
   let lastSyncCheck = 0;
@@ -86,8 +86,13 @@ export async function serveMcp(rootPath?: string): Promise<void> {
   const maybeAutoSync = () => {
     if (!autoSyncEnabled || performance.now() - lastSyncCheck < syncIntervalMs) return;
     lastSyncCheck = performance.now();
-    const p = exclusive(doSync);
-    p?.catch((err) => console.error(`auto-sync failed: ${(err as Error).message}`));
+    // Deferred so the triggering query's engine call runs first; the sync's
+    // stat walk still shares the process, so on very large repos a
+    // concurrent query can feel it. Queries are never queued behind syncs.
+    setImmediate(() => {
+      const p = exclusive(doSync);
+      p?.catch((err) => console.error(`auto-sync failed: ${(err as Error).message}`));
+    });
   };
 
   const ok = (value: unknown) => ({ content: [{ type: "text" as const, text: jsonify(value, true) }] });
@@ -196,8 +201,8 @@ export async function serveMcp(rootPath?: string): Promise<void> {
       title: "Sync the code index",
       description:
         "Bring the index up to date with the working tree. Incremental by default: only files that " +
-        "changed since the last index are re-chunked and re-embedded (an unchanged repo is a ~100ms " +
-        "no-op), so call this freely after edits. The server also auto-syncs in the background as " +
+        "changed since the last index are re-chunked and re-embedded, and an unchanged tree is a " +
+        "fast no-op, so call this freely after edits. The server also auto-syncs in the background as " +
         "queries arrive. On a repo that has never been indexed this builds the index from scratch, " +
         "replying as soon as keyword search is live (seconds) while vectors backfill behind it. " +
         "Pass full=true to force a rebuild from scratch. Returns what changed plus index status.",

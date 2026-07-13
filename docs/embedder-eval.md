@@ -27,23 +27,27 @@ How the default local embedding model was chosen (2026-07-10).
 | bge-small-en-v1.5 (q8) | 33M | 3.4 min | 6/15 / 0.197 | 5/15 / 0.200 |
 
 Also considered: Model2Vec / potion static embeddings (no maintained
-JavaScript inference path at eval time) and remote APIs (supported via
-`CX_EMBED_PROVIDER=openai`, but the default must work with no key).
+JavaScript inference path at eval time) and remote embedding APIs
+(evaluated but not shipped: the embedder is local-only, so the default
+works with no key and code never leaves the machine).
 
 ## Verdict
 
 - **Default: `Xenova/all-MiniLM-L6-v2` (q8).** The code-trained jina model
-  ranks meaningfully better (+40% MRR on hard paraphrase queries), but costs
-  ~17x the indexing time - and a re-index today re-embeds every chunk, so the
-  default optimizes quality-per-minute. On this corpus the vector stage
-  finishes in under two minutes in the background while keyword search is
-  already live.
+  ranks meaningfully better on hard paraphrase queries (hybrid MRR 0.328 vs
+  0.228; vector MRR 0.400 vs 0.311), but costs ~17x the indexing time.
+  Every first index and every full rebuild embeds the whole repo (only
+  incremental syncs are scoped to changed files), so the default optimizes
+  quality-per-minute for the experience most users hit first. On this
+  corpus the vector stage finishes in under two minutes in the background
+  while keyword search is already live.
 - **Quality option:** `CX_EMBED_MODEL=jinaai/jina-embeddings-v2-base-code`
-  - worth it for repos indexed rarely (CI-cached indexes, overnight builds),
-  and int8 quantization loses nothing (identical scores to fp32).
-- Revisit the default when incremental re-indexing ships: once only changed
-  files re-embed, the code-trained model's one-time cost amortizes and it
-  becomes the natural default again.
+  - worth it for repos indexed rarely (CI-cached indexes, overnight
+  builds). For jina, int8 quantization scored identically to fp32; for
+  MiniLM the q8/fp32 deltas are small and mixed (q8 better on vector MRR,
+  slightly worse on hybrid hit@5) - within the noise of a 15-question eval.
+- The timings marked * above ran with CPU contention; treat them as
+  approximate. The unstarred timings are clean runs.
 
 ## Reproducing
 

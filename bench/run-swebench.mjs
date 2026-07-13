@@ -1,6 +1,6 @@
-// SWE-bench_Verified file-localization lanes, unsteered.
+// SWE-bench_Verified file-localization lanes.
 // Scoring: precision/recall/F1 of predicted file paths vs the gold patch
-// files. Usage: node run-swebench.mjs <cx|files|both> [instanceId ...]
+// files. Usage: node run-swebench.mjs <cx|files|combo|both> [instanceId ...]
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { WORK, RESULTS, runLane, record } from "./lanes.mjs";
@@ -41,8 +41,8 @@ function score(predicted, gold) {
 }
 
 const lane = process.argv[2];
-if (!["cx", "files", "both"].includes(lane)) {
-  console.error("usage: node run-swebench.mjs <cx|files|both> [instanceId ...]");
+if (!["cx", "files", "combo", "both"].includes(lane)) {
+  console.error("usage: node run-swebench.mjs <cx|files|combo|both> [instanceId ...]");
   process.exit(1);
 }
 const ids = process.argv.slice(3);
