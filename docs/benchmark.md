@@ -43,10 +43,10 @@ question per lane.
 | 5 | most code about topic A | 11k / 19k | 27k / 26k | 1.7x |
 | 6 | most code about topic B | 6k / 6k | 23k / 41k | 5.0x |
 
-**Class total: 6.5x fewer tokens.** Note the stability: the code-context
-side answers in 5-6k tokens *every* run (one SQL query, deterministic);
-the file-tools side swings 20k-169k depending on how much source the model
-decides to read.
+**Class total: 85% fewer tokens (6.5x).** Note the stability: the
+code-context side answers in 5-6k tokens *every* run (one SQL query,
+deterministic); the file-tools side swings 20k-169k depending on how much
+source the model decides to read.
 
 ## 2. Comprehension - "how does X work"
 
@@ -61,35 +61,41 @@ difference is what it costs to assemble the context.
 | 9 | where fusion is implemented | 27k / 25k | 18k / 24k | 0.8x |
 | 10 | crash recovery behavior | 94k / 86k | 142k / 59k | 1.1x |
 
-**Class total: 1.4x fewer tokens**, with every answer carrying
+**Class total: 28% fewer tokens (1.4x)**, with every answer carrying
 `path:start-end` citations (the hits arrive as ranked chunks with content,
 so answers quote the code they cite). Question 9 is an honest tie-to-loss:
 when one precise grep hits immediately, an index can't beat it.
 
-## 3. Bug localization - SWE-bench_Verified
+**Across the whole suite: 55% fewer tokens, 71% fewer tool calls, 41%
+lower cost** (28.3k vs 63.2k tokens, 2.2 vs 7.5 calls, $0.102 vs $0.174
+per question).
 
-The standardized protocol: 29 instances from
+## 3. Localization study - SWE-bench_Verified
+
+A harder secondary test: 29 instances from
 [SWE-bench_Verified](https://huggingface.co/datasets/princeton-nlp/SWE-bench_Verified)
 (filtered to 15-60-minute difficulty with exactly two modified Python
 files, spanning django, sympy, astropy, scikit-learn, matplotlib, sphinx,
 xarray, pytest, pylint, seaborn). The agent reads the real GitHub issue and
-must name the files the merged fix actually touched. 28 pairs completed
-(one baseline run exhausted its turn budget).
+must name the files the merged fix actually touched.
 
-| | code-context | file tools |
-|---|---|---|
-| F1 vs gold patch files | **0.690** | 0.655 |
-| Recall | **0.571** | 0.536 |
-| Precision | **0.929** | 0.893 |
-| Tool calls per instance | **2.9** | 3.9 |
-| Tokens per instance | 45.1k | **23.9k** |
+Isolated lanes measure the substrate; the third lane is the real
+deployment. An MCP server adds tools and never removes the native ones,
+so an installed agent has both and picks per query.
 
-The honest trade: code-context localizes **more accurately with fewer
-calls** - each `search` returns ranked chunks with content, so the agent
-converges in ~3 calls - but those content-rich responses cost roughly 2x
-the tokens of lean grep output on this question class. Literal
-known-symbol lookup is native grep's home turf; if that's all you do,
-file tools are already good at it.
+| | code-context only | file tools only | both installed |
+|---|---|---|---|
+| F1 vs gold patch files | **0.691** | 0.654 | 0.654 |
+| Tool calls per instance | **2.7** | 3.6 | 3.4 |
+| Tokens per instance | 39.4k | **21.4k** | 35.2k |
+
+Reading it honestly: literal known-symbol lookup is native grep's home
+turf. Lean grep output beats content-rich search hits on tokens for this
+question class, while code-context alone localizes slightly more
+accurately in fewer calls. With both installed the agent mixes freely
+(roughly half its retrieval calls each way) and accuracy stays at
+baseline: installing code-context does not degrade localization, it adds
+the question classes above.
 
 ## Reading the results
 
@@ -97,8 +103,8 @@ file tools are already good at it.
   aggregation has no file-tools equivalent at any budget, and its cost
   doesn't grow with repo size.
 - **Comprehension leans code-context**, with citations for free.
-- **Localization is a quality/cost trade**, slightly better answers for
-  more tokens.
+- **Localization stays native-grep territory**, and adding code-context
+  costs nothing there because native tools remain available.
 - Where file tools win, we say so. Single-run numbers per cell are
   indicative, not gospel - model tool choice varies run to run (the
   aggregation table shows the baseline varying 8x between identical runs).

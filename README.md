@@ -55,20 +55,25 @@ Runs on macOS and Linux (x64/arm64, glibc and musl); Windows via WSL.
 
 ## Evaluation
 
-Measured on real agent runs: same model (claude-opus-4-8), same turn
-budget, unsteered, stock file tools as the baseline
-([methodology & full tables](docs/benchmark.md), harness in
-[`bench/`](bench/) so you can run it on your own repo):
+Real agent runs over a codebase-Q&A suite: same model (claude-opus-4-8),
+same turn budget, unsteered, stock file tools (Glob/Grep/Read/LS) as the
+baseline. **55% fewer tokens and 71% fewer tool calls overall**, with the
+same answers and `path:line` citations on every one.
 
 ![Benchmark: tokens per question, code-context vs stock file tools](docs/benchmark-chart.png)
 
-| Question class | Result |
-|---|---|
-| Relevance aggregation: "which files have the most code about X", "break down the codebase" | **6.5x fewer tokens** (per-question 1.7-22x), answered by one SQL query with near-zero variance |
-| Comprehension: "how does X work" | **1.4x fewer tokens**, every answer with `path:line` citations |
-| Bug localization: SWE-bench_Verified protocol | **Better accuracy** (F1 0.69 vs 0.66) in fewer calls, at ~2x the tokens. Content-rich hits cost more than lean grep lines |
+| Metric | Stock file tools | With code-context | Improvement |
+|---|---|---|---|
+| Tokens per question | 63.2k | 28.3k | **-55%** |
+| Tool calls per question | 7.5 | 2.2 | **-71%** |
+| Cost per question | $0.174 | $0.102 | **-41%** |
+| Aggregation questions (tokens) | 51.1k | 7.9k | **-85%** |
+| Comprehension questions (tokens) | 81.3k | 59.0k | **-28%** |
 
-Where file tools win, the tables say so.
+Full methodology, per-question tables, and a SWE-bench_Verified
+localization study are in [docs/benchmark.md](docs/benchmark.md), with the
+harness in [`bench/`](bench/) so you can run the same lanes on your own
+repo. Where file tools win, the tables say so.
 
 ## What you get
 
