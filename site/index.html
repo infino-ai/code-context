@@ -1,0 +1,312 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Code Context: local code search for AI coding agents, by Infino</title>
+  <meta name="description" content="Local code search for AI coding agents: a CLI and MCP server with hybrid keyword + semantic search and SQL relevance-ranked aggregation over an index that lives in plain files. No accounts, no keys, no server." />
+  <link rel="canonical" href="https://infino-ai.github.io/code-context/" />
+
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://infino-ai.github.io/code-context/" />
+  <meta property="og:title" content="Code Context, by Infino" />
+  <meta property="og:description" content="Local code search for AI coding agents. Hybrid keyword + semantic search and SQL relevance-ranked aggregation over an index in plain files. No accounts, no keys, no server." />
+  <meta property="og:image" content="https://infino-ai.github.io/code-context/og.png" />
+  <meta property="og:image:width" content="1280" />
+  <meta property="og:image:height" content="640" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Code Context, by Infino" />
+  <meta name="twitter:description" content="Local code search for AI coding agents: hybrid search and SQL relevance-ranked aggregation over an index in plain files." />
+  <meta name="twitter:image" content="https://infino-ai.github.io/code-context/og.png" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:ital,wght@0,400;0,500;0,700;1,400&display=swap" rel="stylesheet" />
+  <link rel="icon" type="image/png" href="./favicon.png" />
+
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "Code Context",
+    "alternateName": "code-context",
+    "applicationCategory": "DeveloperApplication",
+    "operatingSystem": "macOS, Linux, Windows (WSL)",
+    "description": "Local code search for AI coding agents: a CLI and MCP server with hybrid keyword + semantic search and SQL relevance-ranked aggregation over an index that lives in plain files. No accounts, no keys, no server.",
+    "url": "https://infino-ai.github.io/code-context/",
+    "downloadUrl": "https://www.npmjs.com/package/@infino-ai/code-context",
+    "codeRepository": "https://github.com/infino-ai/code-context",
+    "softwareVersion": "0.1.0",
+    "license": "https://www.apache.org/licenses/LICENSE-2.0",
+    "programmingLanguage": "TypeScript",
+    "keywords": "code search, MCP server, AI coding agents, hybrid search, semantic search, BM25, SQL, local-first, Claude Code, Cursor, model context protocol",
+    "offers": {
+      "@type": "Offer",
+      "price": "0",
+      "priceCurrency": "USD"
+    },
+    "author": {
+      "@type": "Organization",
+      "name": "Infino",
+      "url": "https://infino.ai"
+    },
+    "publisher": {
+      "@type": "Organization",
+      "name": "Infino",
+      "url": "https://infino.ai"
+    }
+  }
+  </script>
+
+  <style>
+    :root {
+      --field: #131410;
+      --field-raised: #191b15;
+      --ink: #eceee6;
+      --ink-dim: #9a9d92;
+      --ink-faint: #5c5f55;
+      --hairline: #272921;
+      --signal: #d3ff4d;
+      --signal-dim: rgba(211, 255, 77, 0.14);
+      --mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+      --serif: "Instrument Serif", georgia, serif;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      background: var(--field);
+      color: var(--ink);
+      font-family: var(--mono);
+      font-size: 13.5px;
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+    }
+    a { color: inherit; }
+    ::selection { background: var(--signal); color: var(--field); }
+
+    .wrap { max-width: 940px; margin: 0 auto; padding: 0 24px; }
+
+    /* grid backdrop on the hero */
+    .hero {
+      border-bottom: 1px solid var(--hairline);
+      background:
+        linear-gradient(var(--hairline) 1px, transparent 1px) 0 0 / 100% 76px,
+        linear-gradient(90deg, var(--hairline) 1px, transparent 1px) 0 0 / 76px 100%,
+        radial-gradient(120% 80% at 15% -10%, var(--signal-dim), transparent 60%),
+        var(--field);
+    }
+    .hero-inner { padding: 72px 0 60px; }
+
+    .brand-mark {
+      display: inline-block;
+      background: var(--signal);
+      color: var(--field);
+      font-weight: 700;
+      font-size: 11px;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      padding: 5px 10px;
+    }
+    h1.title {
+      font-family: var(--serif);
+      font-weight: 400;
+      font-size: 64px;
+      line-height: 1.04;
+      letter-spacing: -0.01em;
+      margin: 26px 0 0;
+    }
+    h1.title em { color: var(--signal); font-style: italic; }
+    .lede {
+      color: var(--ink-dim);
+      max-width: 620px;
+      margin-top: 22px;
+      font-size: 14px;
+    }
+    .lede b { color: var(--ink); font-weight: 500; }
+
+    .cta-row { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 30px; }
+    .btn {
+      display: inline-flex; align-items: center; gap: 8px;
+      font-family: var(--mono); font-size: 12.5px; font-weight: 500;
+      letter-spacing: 0.02em; text-decoration: none;
+      padding: 10px 16px; border: 1px solid var(--hairline);
+      transition: all 0.14s ease;
+    }
+    .btn.primary { background: var(--signal); color: var(--field); border-color: var(--signal); font-weight: 700; }
+    .btn.primary:hover { filter: brightness(1.08); }
+    .btn.ghost:hover { border-color: var(--signal); color: var(--signal); }
+
+    .micro-label {
+      font-size: 10px; letter-spacing: 0.22em; text-transform: uppercase;
+      color: var(--ink-faint);
+    }
+
+    /* stat band */
+    .stat {
+      display: flex; align-items: baseline; gap: 20px; flex-wrap: wrap;
+      margin-top: 46px; padding-top: 26px; border-top: 1px solid var(--hairline);
+    }
+    .stat-num {
+      font-family: var(--serif); font-style: italic; color: var(--signal);
+      font-size: 60px; line-height: 0.9; letter-spacing: -0.02em;
+    }
+    .stat-body { max-width: 460px; }
+    .stat-body .micro-label { margin-bottom: 6px; }
+    .stat-body p { color: var(--ink-dim); font-size: 13px; }
+    .stat-body code { color: var(--ink); background: var(--field-raised); padding: 1px 5px; border: 1px solid var(--hairline); }
+
+    section.block { padding: 56px 0; border-bottom: 1px solid var(--hairline); }
+    .block > .micro-label { margin-bottom: 22px; }
+
+    /* install */
+    .code {
+      background: var(--field-raised); border: 1px solid var(--hairline);
+      padding: 16px 18px; font-size: 13px; overflow-x: auto; margin-bottom: 12px;
+    }
+    .code .c { color: var(--ink-faint); }
+    .code .p { color: var(--signal); }
+    .code-note { color: var(--ink-dim); font-size: 12px; margin-top: 4px; }
+
+    /* tool + why grids */
+    .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; background: var(--hairline); border: 1px solid var(--hairline); }
+    .cell { background: var(--field); padding: 22px 20px; }
+    .cell h3 { font-family: var(--mono); font-size: 13px; font-weight: 700; letter-spacing: 0.02em; }
+    .cell h3 .sig { color: var(--signal); }
+    .cell p { color: var(--ink-dim); font-size: 12.5px; margin-top: 8px; }
+
+    .why { display: grid; grid-template-columns: repeat(2, 1fr); gap: 1px; background: var(--hairline); border: 1px solid var(--hairline); }
+    .why .cell h3 { font-family: var(--serif); font-weight: 400; font-size: 19px; letter-spacing: 0; }
+
+    footer { padding: 40px 0 60px; }
+    .foot-row { display: flex; flex-wrap: wrap; gap: 18px; align-items: center; color: var(--ink-faint); font-size: 12px; }
+    .foot-row a { color: var(--ink-dim); text-decoration: none; border-bottom: 1px solid transparent; padding-bottom: 1px; }
+    .foot-row a:hover { color: var(--signal); border-color: var(--signal); }
+    .foot-sep { color: var(--hairline); }
+
+    @media (max-width: 640px) {
+      h1.title { font-size: 42px; }
+      .stat-num { font-size: 46px; }
+      .hero-inner { padding: 48px 0 40px; }
+      .grid, .why { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+
+  <header class="hero">
+    <div class="wrap hero-inner">
+      <span class="brand-mark">code context · by infino</span>
+      <h1 class="title">Let your coding agent<br />search, <em>not crawl.</em></h1>
+      <p class="lede">
+        Local code search for AI coding agents: a CLI and an MCP server over a
+        ranked index that lives in plain files inside your repo.
+        <b>Hybrid keyword and semantic search</b>, plus SQL relevance-ranked
+        aggregation, so your agent answers questions about the codebase without
+        reading it file by file. No accounts, no keys, no server.
+      </p>
+
+      <div class="cta-row">
+        <a class="btn primary" href="https://github.com/infino-ai/code-context">Get started on GitHub</a>
+        <a class="btn ghost" href="https://www.npmjs.com/package/@infino-ai/code-context">npm: @infino-ai/code-context</a>
+      </div>
+
+      <div class="stat">
+        <div class="stat-num">up to 22&times;</div>
+        <div class="stat-body">
+          <div class="micro-label">fewer tokens on whole-repo questions</div>
+          <p>One query, <code>break this repo down by language</code>, is about
+          6K tokens instead of about 140K reading files. Measured on real agent
+          runs, with a harness in the repo so you can reproduce it on your own.</p>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <section class="block">
+      <div class="wrap">
+        <div class="micro-label">Install</div>
+        <div class="code">
+          <span class="c"># global CLI</span><br />
+          npm install -g @infino-ai/code-context<br />
+          cx install &amp;&amp; cx index
+        </div>
+        <div class="code">
+          <span class="c"># or zero-install into Claude Code</span><br />
+          claude mcp add code-context <span class="p">--</span> npx -y @infino-ai/code-context mcp
+        </div>
+        <p class="code-note">Keyword search is live within seconds of indexing; semantic and hybrid ranking backfill in the background. Works in Claude Code, Cursor, and any MCP client.</p>
+      </div>
+    </section>
+
+    <section class="block">
+      <div class="wrap">
+        <div class="micro-label">Three tools, one index</div>
+        <div class="grid">
+          <div class="cell">
+            <h3><span class="sig">search</span></h3>
+            <p>Exact terms and meaning in one ranked pass. Hits carry the code with path:line ranges, so answers come straight from results.</p>
+          </div>
+          <div class="cell">
+            <h3><span class="sig">sql</span></h3>
+            <p>Read-only SQL over the index. Search composes with GROUP BY, so "which files have the most code about X" is one query.</p>
+          </div>
+          <div class="cell">
+            <h3><span class="sig">reindex</span></h3>
+            <p>Incremental sync: only changed files re-chunk and re-embed. The server also auto-syncs in the background as queries arrive.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="block">
+      <div class="wrap">
+        <div class="micro-label">Why it is different</div>
+        <div class="why">
+          <div class="cell">
+            <h3>Hybrid, not just vectors</h3>
+            <p>BM25 and vector rankings fuse in one pass, so a query works whether or not you know the exact identifier.</p>
+          </div>
+          <div class="cell">
+            <h3>SQL over your code</h3>
+            <p>Rank and aggregate across the whole repo in one query, the kind of question file tools cannot express at any budget.</p>
+          </div>
+          <div class="cell">
+            <h3>Local and private</h3>
+            <p>Embedding is a small local model, downloaded once. No accounts, no API keys, no server; code never leaves the machine.</p>
+          </div>
+          <div class="cell">
+            <h3>The index is just files</h3>
+            <p>Everything lives in .infino/ inside your repo: plain files you can copy, cache in CI, or gitignore. A live index, not a snapshot.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="block">
+      <div class="wrap">
+        <div class="micro-label">Read more</div>
+        <div class="cta-row">
+          <a class="btn ghost" href="https://github.com/infino-ai/code-context/blob/main/docs/benchmark.md">Benchmark &amp; harness</a>
+          <a class="btn ghost" href="https://github.com/infino-ai/code-context/blob/main/docs/concepts/code-search-for-coding-agents.md">How it works</a>
+          <a class="btn ghost" href="https://github.com/infino-ai/code-context/blob/main/docs/faq.md">FAQ</a>
+          <a class="btn ghost" href="https://github.com/infino-ai/code-context/blob/main/docs/tradeoffs.md">Tradeoffs</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="wrap foot-row">
+      <span>Built on the <a href="https://github.com/infino-ai/infino">Infino</a> engine.</span>
+      <span class="foot-sep">·</span>
+      <a href="https://github.com/infino-ai/code-context">GitHub</a>
+      <span class="foot-sep">·</span>
+      <a href="https://www.npmjs.com/package/@infino-ai/code-context">npm</a>
+      <span class="foot-sep">·</span>
+      <a href="https://infino.ai">infino.ai</a>
+    </div>
+  </footer>
+
+</body>
+</html>
