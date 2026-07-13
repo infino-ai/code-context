@@ -17,7 +17,7 @@ node run-questions.mjs both /path/to/repo    # lanes: cx | files | combo | both
 #    builds an index per instance - the vector stage takes a while):
 ./prep-swebench.sh
 node index-instances.mjs 3          # 3 concurrent indexers
-node run-swebench.mjs both          # lanes over every ready instance
+RUNS=3 node run-swebench.mjs both   # lanes over every ready instance, 3 runs each
 
 # Results land as JSONL in bench/.work/results/
 ```

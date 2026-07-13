@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { WORK, RESULTS, runLane, record } from "./lanes.mjs";
 
 const MAX_TURNS = 12;
+const RUNS = Number(process.env.RUNS ?? 1);
 const OUT = "swebench.jsonl";
 const instances = JSON.parse(readFileSync(join(WORK, "instances.json"), "utf8"));
 
@@ -61,7 +62,7 @@ const done = new Set(
   existsSync(outPath)
     ? readFileSync(outPath, "utf8").trim().split("\n").filter(Boolean).map((l) => {
         const r = JSON.parse(l);
-        return r.error ? null : `${r.lane}:${r.id}`;
+        return r.error ? null : `${r.lane}:${r.id}:${r.run ?? 0}`;
       })
     : [],
 );
@@ -69,18 +70,20 @@ const done = new Set(
 for (const inst of instances) {
   if (ids.length && !ids.includes(inst.id)) continue;
   if (!ids.length && !ready(inst)) continue;
-  for (const l of lane === "both" ? ["cx", "files"] : [lane]) {
-    if (done.has(`${l}:${inst.id}`)) continue;
-    const repoDir = join(WORK, "instances", inst.id, "repo");
-    const indexDir = join(WORK, "instances", inst.id, "index");
-    const prompt = `Repository: ${inst.repo}\n\nIssue:\n${inst.problem}\n\nFind the file(s) that must be modified to fix this issue.`;
-    const r = await runLane({ lane: l, prompt, system: SYSTEM, repoDir, indexDir, maxTurns: MAX_TURNS });
-    const predicted = extractPaths(r.answer);
-    const s = score(predicted, inst.gold);
-    record(OUT, { id: inst.id, repo: inst.repo, ...s, predicted, gold: inst.gold, ...r, answer: undefined, answerTail: r.answer.slice(-400) });
-    console.log(
-      `[${l}] ${inst.id} - F1 ${s.f1.toFixed(2)} (${s.tp}/${inst.gold.length}) · ${r.tokens.toLocaleString()} tok · $${(r.costUsd ?? 0).toFixed(3)} · ${r.calls} calls${r.error ? " · ERROR " + r.error : ""}`,
-    );
+  for (let run = 0; run < RUNS; run++) {
+    for (const l of lane === "both" ? ["cx", "files"] : [lane]) {
+      if (done.has(`${l}:${inst.id}:${run}`)) continue;
+      const repoDir = join(WORK, "instances", inst.id, "repo");
+      const indexDir = join(WORK, "instances", inst.id, "index");
+      const prompt = `Repository: ${inst.repo}\n\nIssue:\n${inst.problem}\n\nFind the file(s) that must be modified to fix this issue.`;
+      const r = await runLane({ lane: l, prompt, system: SYSTEM, repoDir, indexDir, maxTurns: MAX_TURNS });
+      const predicted = extractPaths(r.answer);
+      const s = score(predicted, inst.gold);
+      record(OUT, { id: inst.id, repo: inst.repo, run, ...s, predicted, gold: inst.gold, ...r, answer: undefined, answerTail: r.answer.slice(-400) });
+      console.log(
+        `[${l} r${run}] ${inst.id} - F1 ${s.f1.toFixed(2)} (${s.tp}/${inst.gold.length}) · ${r.tokens.toLocaleString()} tok · $${(r.costUsd ?? 0).toFixed(3)} · ${r.calls} calls${r.error ? " · ERROR " + r.error : ""}`,
+      );
+    }
   }
 }
 console.log("lane runs complete →", outPath);
