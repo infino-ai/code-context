@@ -113,11 +113,14 @@ export async function serveMcp(rootPath?: string): Promise<void> {
     { name: "code-context", version: "0.1.0" },
     {
       instructions:
-        "code-context is a local search index over this repository - ranked retrieval instead of " +
-        "crawling files into context. Three tools:\n" +
-        "- search - find code: exact identifiers AND meaning in one ranked pass. Start here.\n" +
+        "code-context is a local ranked index over this repository, for questions whose answer " +
+        "spans the codebase rather than sitting at one known location. The more a question spans " +
+        "the repo, the more this beats crawling files into context. Three tools:\n" +
+        "- search - find code by meaning or terms across files, and understand how something works " +
+        "in one ranked pass. For jumping to a single known identifier or string, a plain grep is fine.\n" +
         "- sql - counts, rankings, and aggregates over the whole repo in one query, including " +
-        "relevance-ranked aggregation ('which files have the most code about X').\n" +
+        "relevance-ranked aggregation ('which files have the most code about X') that file tools " +
+        "cannot express at any budget.\n" +
         "- reindex - sync the index after the working tree changes.\n" +
         "Every result cites path plus line range; read the cited file region only when the chunk " +
         "content is not already enough.",
@@ -129,14 +132,17 @@ export async function serveMcp(rootPath?: string): Promise<void> {
     {
       title: "Code search (exact terms + meaning)",
       description:
-        "THE way to find code here - one ranked pass fuses exact keyword matching (BM25: " +
-        "identifiers, error strings, function names - stemmed and scored) with semantic similarity " +
+        "Ranked search for questions whose answer spans more than one file: understanding how a " +
+        "subsystem works, finding code by meaning when you don't know the identifier, tracing where " +
+        "something is handled across the repo. One pass fuses exact keyword matching (BM25: " +
+        "identifiers, error strings, function names, stemmed and scored) with semantic similarity " +
         "(renamed symbols, paraphrases, 'where is X handled'), so it works whether or not you know " +
-        "the exact words. Each hit carries path, line range, and the chunk content with a relevance " +
-        "score - usually enough to answer without opening the file; if a hit is marked truncated, " +
-        "Read exactly its start-end range (offset/limit), not the whole file. Far cheaper than " +
-        "crawling files. (Until the index's vector stage finishes, results are keyword-ranked and " +
-        "say so.)",
+        "the words. Each hit carries path, line range, and the chunk content with a relevance " +
+        "score, usually enough to answer without opening the file; if a hit is marked truncated, " +
+        "Read exactly its start-end range (offset/limit), not the whole file. If you only need to " +
+        "jump to one known identifier or literal string, a plain file/grep search is fine; reach " +
+        "for this when the answer needs understanding or crosses files. (Until the index's vector " +
+        "stage finishes, results are keyword-ranked and say so.)",
       inputSchema: {
         query: z.string().describe("What you're looking for - terms, a phrase, or a description."),
         k: z.number().int().positive().max(50).default(6).describe("Maximum hits."),
@@ -161,7 +167,8 @@ export async function serveMcp(rootPath?: string): Promise<void> {
     {
       title: "SQL over the code index",
       description:
-        "Analytical questions over the whole repo in one query - counts, rankings, GROUP BY - " +
+        "Whole-repo analytical questions that file tools cannot express at any budget: counts, " +
+        "rankings, GROUP BY across the codebase in one query, " +
         `on table ${TABLE}(path, start_line, end_line, lang, content[, embedding]). ` +
         "Search functions are callable as table-valued relations, so one query can rank AND " +
         "aggregate: bm25_search('" + TABLE + "','content','terms', k) needs no embedding; " +

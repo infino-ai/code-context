@@ -10,9 +10,19 @@
 
 </div>
 
-**code-context** gives AI coding agents ranked search over your codebase
-instead of a grep-and-read crawl: a CLI and an MCP server over an index that
-lives in plain files inside your repo.
+**code-context** is the retrieval layer under your coding agent: one local
+index over the whole repo (keyword, semantic, hybrid, and SQL), reached
+through a CLI and an MCP server, with the index living in plain files inside
+your repo. Your agent answers questions about the codebase without reading it
+file by file.
+
+The rule of thumb: the more a question spans the repo, the more this saves,
+because the answer comes from a ranked index instead of pulling source into
+context one file at a time.
+
+**Up to 22× fewer tokens.** One query, "break this repo down by language,"
+is ~6K tokens with code-context versus ~140K reading files. The harness is
+in the repo, so you can reproduce it on your own codebase.
 
 - 🔎 **Find code by words or meaning.** One ranked pass fuses exact keyword
   matching with semantic similarity, and every hit carries the code with
@@ -60,9 +70,12 @@ but are not CI-covered.
 
 Real agent runs over a codebase-Q&A suite: same model (claude-opus-4-8),
 same turn budget, the same prompt for both lanes, stock file tools
-(Glob/Grep/Read/LS) as the baseline. **55% fewer tokens and 71% fewer tool
-calls overall**, at answer quality a blind pairwise judge could not tell
-apart (8 vs 12 of 20, within noise; details in the benchmark doc).
+(Glob/Grep/Read/LS) as the baseline. Its sharpest edge is whole-repo
+relevance aggregation, which file tools cannot express at any budget:
+**up to 22× fewer tokens** (that "break down by language" query is ~6K vs
+~140K), and 6.5× on aggregation questions overall. Across the whole suite:
+**55% fewer tokens and 71% fewer tool calls**, at answer quality a blind
+pairwise judge could not tell apart (8 vs 12 of 20, within noise).
 
 ![Benchmark: tokens per question, code-context vs stock file tools](docs/benchmark-chart.png)
 
@@ -74,10 +87,9 @@ apart (8 vs 12 of 20, within noise; details in the benchmark doc).
 | Aggregation questions (tokens) | 51.1k | 7.9k | **-85%** |
 | Comprehension questions (tokens) | 81.3k | 59.0k | **-28%** |
 
-Full methodology, per-question tables, and a SWE-bench_Verified
-localization study are in [docs/benchmark.md](docs/benchmark.md), with the
-harness in [`bench/`](bench/) so you can run the same lanes on your own
-repo. Where file tools win, the tables say so.
+Full methodology and per-question tables are in
+[docs/benchmark.md](docs/benchmark.md), with the harness in
+[`bench/`](bench/) so you can run the same lanes on your own repo.
 
 ## What you get
 
@@ -86,7 +98,7 @@ deliberately small tool surface for agents:
 
 | Tool | What it does | When agents use it |
 |---|---|---|
-| `search` | One ranked pass fusing exact keyword matching (BM25) with semantic similarity (reciprocal-rank fusion). Hits carry the chunk content, so answers come straight from results. | Finding code, always: exact identifiers AND paraphrases/renamed symbols in the same call. |
+| `search` | One ranked pass fusing exact keyword matching (BM25) with semantic similarity (reciprocal-rank fusion). Hits carry the chunk content, so answers come straight from results. | Understanding a subsystem or finding code by meaning across files; exact identifiers and paraphrases in the same call. (For one known symbol, a plain grep is fine.) |
 | `sql` | Read-only SQL over the index, including search functions as table-valued relations and `regexp_like` for regex. | Counts, rankings, aggregates over the whole repo in one query. |
 | `reindex` | Incremental sync (the server also auto-syncs in the background). | After significant edits. |
 

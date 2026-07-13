@@ -1,15 +1,17 @@
 ---
-description: Use the code-context MCP tools (search, sql, reindex) for codebase questions - ranked local index instead of crawling files.
+description: Use the code-context MCP tools (search, sql, reindex) for codebase questions that span more than one file - ranked local index instead of crawling files. For a single known symbol, native grep is fine.
 alwaysApply: true
 ---
 
 This repository has a local code-context search index (MCP server
-`code-context`). For any question about the codebase, prefer its tools over
+`code-context`). The more a question spans the repo, the more its tools beat
 reading files blindly:
 
-- `search` - finding code, always: exact identifiers and error strings AND
-  paraphrases / renamed symbols, one ranked pass. Hits include chunk
-  content - answer from it directly when it's enough.
+- `search` - understanding how something works, or finding code by meaning
+  across files: paraphrases and renamed symbols alongside exact identifiers
+  and error strings, one ranked pass. Hits include chunk content, answer from
+  it directly when it's enough. For jumping to one known identifier or string,
+  native grep is fine.
 - `sql` - counts and rankings over the whole repo in one query, on
   `chunks(path, start_line, end_line, lang, content)`. Ranked aggregation:
   `SELECT path, SUM(end_line - start_line + 1) AS lines FROM

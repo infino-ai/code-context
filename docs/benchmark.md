@@ -1,7 +1,20 @@
 # Benchmark
 
-How code-context changes what a coding agent spends, measured end-to-end on
+code-context gives a coding agent ranked retrieval over the whole repo
+instead of crawling files into context. This measures what that changes in
 real agent runs - same model, same turn budget, only the toolset differs.
+
+The short version, and the rule of thumb: the more a question spans the repo,
+the more retrieval saves. Up to 22× fewer tokens on the whole-repo questions
+(one "break this codebase down by language" query is ~6K tokens versus ~140K
+reading files), 6.5× on aggregation overall, 55% across the full suite. On
+the questions that actually burn an agent's context - understanding a
+subsystem, ranking or aggregating across the whole repo - it is far cheaper
+at equal answer quality, and it answers questions file tools cannot express
+at any budget. On pinpoint symbol lookup, where a single grep is already
+cheap, it matches file tools on accuracy rather than beating them on cost.
+Each class below says which case it is.
+
 Run 2026-07-12 on the frozen v0.1 surface.
 
 ## Setup
@@ -85,9 +98,12 @@ tools, none decisive - a 12/20 split is well within binomial noise
 claims against the repo, so this measures answer completeness and
 consistency, not ground truth.
 
-## 3. Localization study - SWE-bench_Verified
+## 3. Localization - naming the file to change
 
-A harder secondary test: 30 instances from
+The one class where file tools are already hard to beat: reading a bug
+report and naming the source files a fix must touch. This is a single
+grep's home turf, so it's the fair stress test - where does an index *not*
+help? 30 instances from
 [SWE-bench_Verified](https://huggingface.co/datasets/princeton-nlp/SWE-bench_Verified) -
 the complete yield of the filter (15-60-minute difficulty, exactly two
 modified files), no further selection, spanning django, sympy, astropy,
@@ -97,9 +113,9 @@ actually touched. **Three independent runs per instance per lane** (90
 runs per lane); a run that exhausts its 12-turn budget without an answer
 scores 0 and its spent tokens still count.
 
-Isolated lanes measure the substrate; the third lane is the real
-deployment. An MCP server adds tools and never removes the native ones,
-so an installed agent has both and picks per query.
+Isolated lanes measure the substrate; the third is the real deployment -
+an MCP server adds tools without removing the native ones, so an installed
+agent has both and picks per query.
 
 | Mean over 90 runs | code-context only | file tools only | both installed |
 |---|---|---|---|
@@ -110,23 +126,26 @@ so an installed agent has both and picks per query.
 | Tokens per instance | 57.3k | **25.9k** | 42.1k |
 | Runs completed in budget | 88/90 | 87/90 | **90/90** |
 
-The F1 ordering held in each of the three runs individually (code-context
-0.678 / 0.722 / 0.689 vs file tools 0.667 / 0.667 / 0.656), so the
-accuracy edge is consistent, if modest. Reading it honestly: literal
-known-symbol lookup is native grep's home turf. Lean grep output beats
-content-rich search hits on tokens for this question class, while
-code-context localizes more accurately in fewer calls. With both installed
-the agent mixes freely, lands between the isolated lanes on accuracy and
-tokens, and was the only configuration that completed every run within
-budget: installing code-context does not degrade localization accuracy,
-and it adds the question classes above.
+Read it straight: the index localizes at least as accurately, in fewer
+calls, and the F1 ordering held in each of the three runs individually
+(0.678 / 0.722 / 0.689 vs 0.667 / 0.667 / 0.656). What it does *not* do
+here is cut tokens - and that's the honest shape of the tool. A single
+well-aimed grep returns one matching line; ranked search returns chunks
+that carry their content. That content is dead weight when all you need is
+a path, which is why file tools spend fewer tokens on this class. It is
+also exactly the content that lets the comprehension answers above quote
+code without opening the file. Same mechanism, opposite sign, depending on
+whether the question is "where is it" or "how does it work."
 
-The same both-installed configuration re-run on the question suite
-confirms the routing goes the other way where the index wins: the agent
-chose `sql` first on every aggregation question unprompted (12.0k tokens
-per question vs 51.1k for file tools alone) and answered comprehension
-questions through ranked search (59.0k vs 81.3k), so the savings above
-survive real deployment.
+So the deployment result is the one that matters: with both toolsets
+installed the agent mixes them freely, lands between the isolated lanes,
+and was the only configuration to finish every run in budget. Installing
+code-context does not cost you localization accuracy, and it adds the
+question classes above. Re-run on the question suite, the same
+both-installed agent routed the other way unprompted - `sql` first on
+every aggregation question (12.0k tokens vs 51.1k for file tools alone),
+ranked search for comprehension (59.0k vs 81.3k) - so the wins survive
+real deployment too.
 
 ## Reading the results
 
@@ -134,10 +153,11 @@ survive real deployment.
   aggregation has no file-tools equivalent at any budget. Its cost grows
   with the index, not with how much source the model would otherwise read.
 - **Comprehension leans code-context**, with citations for free.
-- **Localization stays native-grep territory**: adding code-context does
-  not reduce accuracy there (native tools remain available and the agent
-  uses them), though runs that mix in content-rich hits spend more tokens
-  than lean grep output alone.
+- **Localization is a match, not a win**: naming a file from a bug report
+  is a single grep's job, and adding code-context does not cost accuracy
+  there (native tools stay available and the agent uses them). It spends
+  more tokens than a bare grep line only because its hits carry the content
+  that pays off on the questions above.
 - Where file tools win, we say so. These are small-n measurements -
   model tool choice varies run to run (the baseline swings more than 2x
   between identical runs on some questions, and 8x across questions).

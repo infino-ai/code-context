@@ -1,25 +1,29 @@
 ---
 name: code-context
-description: Use when answering questions about this codebase - finding code, explaining how something works, or counting/ranking anything across the repo. The code-context MCP tools (search, sql, reindex) query a local ranked index instead of crawling files into context.
+description: Use when a question about this codebase spans more than one file - explaining how a subsystem works, finding code by meaning, or counting/ranking anything across the repo. The code-context MCP tools (search, sql, reindex) query a local ranked index instead of crawling files into context. For jumping to one known identifier or string, native grep is fine.
 version: 0.1.0
 ---
 
 # code-context
 
 This repository has a local search index. The `code-context` MCP server
-exposes three tools over it. Prefer them over reading files blindly  - 
-results are ranked, cite `path:start-end` line ranges, and cost a fraction
-of the tokens of a grep-and-read crawl.
+exposes three tools over it. The rule of thumb: the more a question spans the
+repo, the more these beat crawling files. Results are ranked, cite
+`path:start-end` line ranges, and answer without pulling whole files into
+context.
 
 ## Which tool, when
 
-- **search** - finding code, always: exact identifiers, error strings, and
-  function names (matched precisely by the keyword half) AND paraphrases,
-  renamed symbols, "where is X handled" (the semantic half) - one ranked
-  pass covers both. Hits include the chunk content: answer from it directly
-  when it's enough.
+- **search** - understanding how a subsystem works, or finding code by
+  meaning across files: paraphrases, renamed symbols, "where is X handled"
+  (the semantic half) alongside exact identifiers and error strings (the
+  keyword half), one ranked pass covering both. Hits include the chunk
+  content: answer from it directly when it's enough. If you just need to jump
+  to one known identifier or literal string, native grep is fine, reach for
+  search when the answer needs understanding or crosses files.
 - **sql** - counts, rankings, and aggregates over the whole repo in one
-  query. The table is `chunks(path, start_line, end_line, lang, content)`.
+  query, the kind of question file tools cannot express at any budget. The
+  table is `chunks(path, start_line, end_line, lang, content)`.
 - **reindex** - sync after the working tree changes significantly (the
   server also auto-syncs in the background).
 
