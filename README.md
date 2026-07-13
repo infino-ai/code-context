@@ -272,6 +272,13 @@ stack, so run both.
   query), `cx index` is incremental by default (`--full` to rebuild), and
   `cx index --watch` syncs on file events.
 
+## Learn more
+
+- [Code search for coding agents](docs/concepts/code-search-for-coding-agents.md) - the crawl-vs-retrieve model and when an index saves tokens.
+- [FAQ](docs/faq.md) - what it is, when to use it, local-only guarantees, freshness.
+- [Tradeoffs](docs/tradeoffs.md) - the honest limits.
+- [Benchmark](docs/benchmark.md) - measured results, with a harness to reproduce them on your own repo.
+
 ## License
 
 Apache-2.0

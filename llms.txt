@@ -35,14 +35,27 @@ logs, docs, and agent memory.
 
 ## Evidence
 
-- [Benchmark](docs/benchmark.md): real agent runs vs stock file tools -
-  55% fewer tokens and 71% fewer tool calls across a codebase-Q&A suite,
-  85% fewer on relevance-aggregation questions; a SWE-bench_Verified
-  localization study; indexing-at-scale timings; blind-judged answer
-  quality. Where file tools win, the tables say so.
+- [Benchmark](docs/benchmark.md): real agent runs vs stock file tools. The
+  rule of thumb is that the more a question spans the repo, the more
+  retrieval saves: up to 22x fewer tokens on whole-repo questions, 55%
+  fewer tokens and 71% fewer tool calls across the codebase-Q&A suite, at
+  answer quality a blind pairwise judge could not tell apart. On pinpoint
+  symbol lookup, where a single grep is already cheap, it matches file
+  tools on accuracy rather than beating them on cost. Includes a
+  SWE-bench_Verified localization study and indexing-at-scale timings.
 - [Harness](bench/): reproduce every number on your own repo.
 - [Embedder eval](docs/embedder-eval.md): how the local embedding model
   was chosen.
+
+## Concepts, FAQ, limits
+
+- [Code search for coding agents](docs/concepts/code-search-for-coding-agents.md):
+  the crawl-vs-retrieve model, when an index saves tokens, and where a plain
+  grep is still the right tool.
+- [FAQ](docs/faq.md): what it is, when an agent should use it, local-only
+  guarantees, freshness, the three-tool MCP surface.
+- [Tradeoffs](docs/tradeoffs.md): honest limits (no structural code
+  intelligence; no token win on pinpoint lookups; one-time vector cost).
 
 ## Operational notes
 
