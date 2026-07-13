@@ -7,9 +7,10 @@ semantic and hybrid search unlock as vectors backfill, and SQL composes
 ranked search with `GROUP BY`, so "which files have the most code about X" is
 one query instead of a grep-and-read crawl.
 
-Built on [Infino](https://github.com/infino-ai/infino), an embedded retrieval
-engine. The same engine and index format also handle logs, docs, and agent
-memory.
+Built on [infino](https://github.com/infino-ai/infino), a fast retrieval
+engine that runs SQL, full-text search, and vector search over a single copy
+of your data. Text and numeric data is stored as spec-compliant Parquet, and
+the same engine handles logs, docs, and agent memory.
 
 ![cx demo: index, search, SQL aggregation, incremental sync](docs/demo.gif)
 
@@ -154,9 +155,9 @@ stack, so run both.
   boundaries for TypeScript/JS, Python, Rust, Go, Java, C/C++, Ruby, C#, PHP;
   Markdown splits at headings; everything else falls back to fixed windows.
   Every chunk carries `path, start_line, end_line, lang, content`.
-- **Index:** [Infino](https://github.com/infino-ai/infino) tables in
-  `.infino/`: BM25 (FTS) and IVF vector indexes over one copy of the data,
-  queried in-process through the Node binding. No server.
+- **Index:** [infino](https://github.com/infino-ai/infino) tables in
+  `.infino/`: BM25 (FTS) and IVF vector indexes over a single copy of the
+  data, queried in-process through the Node binding. No server.
 - **Embeddings:** always local. A small model (chosen by a
   [measured eval](docs/embedder-eval.md)) downloaded once; no key, no
   per-query network, code never leaves the machine. Queries embed with the
