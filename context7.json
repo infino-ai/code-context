@@ -2,6 +2,7 @@
   "projectTitle": "code-context",
   "description": "Local code search for AI coding agents: hybrid search and SQL relevance-ranked aggregation over an in-repo index in plain files. No keys, no server.",
   "url": "https://context7.com/infino-ai/code-context",
+  "public_key": "pk_XhkDeKtd3HaW5jgwWAFUa",
   "excludeFolders": [
     "node_modules",
     "**/node_modules",
