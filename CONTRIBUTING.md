@@ -36,4 +36,12 @@ npm test          # vitest - unit + engine-integration tests, no network needed
 
 ## Releases
 
-Versioned releases are published to npm from CI by the maintainers.
+Publishing is release-driven and automated. Maintainers:
+
+1. Bump `version` in `package.json` on `main`.
+2. Create a GitHub release with tag `vX.Y.Z` matching that version.
+3. CI publishes to npm (with provenance) and the MCP Registry. A tag that
+   does not match `package.json` fails fast.
+
+The publish workflow can also be dispatched manually as a dry run to
+validate the pipeline without publishing.
