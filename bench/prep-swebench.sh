@@ -23,7 +23,7 @@ def patch_files(p):
 cand = []
 for r in rows:
     files = patch_files(r['patch'])
-    if r['difficulty'] == '15 min - 1 hour' and len(files) == 2 and all(f.endswith('.py') for f in files):
+    if r['difficulty'] == '15 min - 1 hour' and len(files) == 2:
         cand.append({'id': r['instance_id'], 'repo': r['repo'], 'base': r['base_commit'],
                      'gold': files, 'problem': r['problem_statement']})
 json.dump(cand, open('.work/instances.json', 'w'), indent=1)
