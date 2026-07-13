@@ -74,8 +74,17 @@ jobs:
           VERSION=$(node -p "require('./package.json').version")
           if npm view "@infino-ai/code-context@$VERSION" version >/dev/null 2>&1; then
             echo "version $VERSION already published - skipping"
+          # npm's read API lags a brand-new scoped package by minutes, so the
+          # `npm view` check above can 404 even when the version already exists.
+          # Tolerate the resulting "cannot publish over" conflict so a re-run
+          # (e.g. to finish the MCP Registry stage) is not blocked on that lag.
+          elif npm publish --tag latest --access public 2>publish.err; then
+            cat publish.err >&2 || true
           else
-            npm publish --tag latest --access public
+            cat publish.err >&2
+            grep -q "cannot publish over" publish.err \
+              && echo "version $VERSION already published (read-API lag) - continuing" \
+              || exit 1
           fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
