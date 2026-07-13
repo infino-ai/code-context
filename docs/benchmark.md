@@ -97,6 +97,13 @@ accurately in fewer calls. With both installed the agent mixes freely
 baseline: installing code-context does not degrade localization, it adds
 the question classes above.
 
+The same both-installed configuration re-run on the question suite
+confirms the routing goes the other way where the index wins: the agent
+chose `sql` first on every aggregation question unprompted (12.0k tokens
+per question vs 51.1k for file tools alone) and answered comprehension
+questions through ranked search (59.0k vs 81.3k), so the savings above
+survive real deployment.
+
 ## Reading the results
 
 - **Aggregation is the structural win**: ranked search composed with SQL
