@@ -1,7 +1,7 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.infino-ai/code-context",
-  "description": "Local code search for AI coding agents: ranked hybrid search, SQL with relevance-ranked aggregation, and incremental auto-sync over an index in plain files. No accounts, no keys, no server.",
+  "description": "Local code search for AI agents: hybrid ranked search and SQL aggregation over an in-repo index.",
   "repository": {
     "url": "https://github.com/infino-ai/code-context",
     "source": "github"
