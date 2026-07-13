@@ -48,9 +48,7 @@ budget, unsteered, stock file tools as the baseline
 | Comprehension: "how does X work" | **1.4x fewer tokens**, every answer with `path:line` citations |
 | Bug localization: SWE-bench_Verified protocol | **Better accuracy** (F1 0.69 vs 0.66) in fewer calls, at ~2x the tokens. Content-rich hits cost more than lean grep lines |
 
-Where file tools win, the tables say so. The same engine under a steered
-embedded agent measures larger multiples; that one is live at
-[lantern.infino.ai](https://lantern.infino.ai).
+Where file tools win, the tables say so.
 
 ## What you get
 
