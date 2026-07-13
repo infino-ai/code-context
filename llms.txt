@@ -1,0 +1,58 @@
+# code-context
+
+> Local code search for AI coding agents: a CLI and an MCP server over an
+> index that lives in plain files inside the repo. Keyword (BM25) search is
+> live seconds after indexing starts, semantic and hybrid search unlock as
+> vectors backfill, and SQL composes ranked search with GROUP BY so "which
+> files have the most code about X" is one query. No accounts, no API keys,
+> no database server, no telemetry; embedding is a small local model and
+> code never leaves the machine.
+
+code-context is built on infino (https://github.com/infino-ai/infino), an
+embedded retrieval engine; the same engine and index format also serve
+logs, docs, and agent memory.
+
+## Start here
+
+- [README](README.md): what it is, quick start (npm install or one-command
+  Claude Code setup via npx), evaluation results, tool surface, CLI
+  reference, and configuration.
+
+## Using it
+
+- Install: `npm install -g @infino-ai/code-context` (bins `code-context`
+  and `cx`), then `cx install && cx index` in a repo.
+- Zero-install for Claude Code:
+  `claude mcp add code-context -- npx -y @infino-ai/code-context mcp`.
+- MCP tools (stdio): `search` (exact terms AND meaning, one ranked pass,
+  hits carry chunk content with path:line ranges), `sql` (read-only
+  SELECT/WITH over `chunks(path, start_line, end_line, lang, content)`,
+  search functions usable as table-valued relations, `regexp_like` for
+  regex), `reindex` (incremental sync; the server also auto-syncs in the
+  background).
+- CLI: `cx index` (incremental; `--full`, `--watch`), `cx search`,
+  `cx sql`, `cx status`, `cx mcp`, `cx install`.
+
+## Evidence
+
+- [Benchmark](docs/benchmark.md): real agent runs vs stock file tools -
+  55% fewer tokens and 71% fewer tool calls across a codebase-Q&A suite,
+  85% fewer on relevance-aggregation questions; a SWE-bench_Verified
+  localization study; indexing-at-scale timings; blind-judged answer
+  quality. Where file tools win, the tables say so.
+- [Harness](bench/): reproduce every number on your own repo.
+- [Embedder eval](docs/embedder-eval.md): how the local embedding model
+  was chosen.
+
+## Operational notes
+
+- The index lives in `.infino/` in the repo root (gitignored by
+  `cx install`): plain files you can copy or cache in CI.
+- Staged readiness: the keyword index commits before the embedding model
+  finishes downloading; a failed vector stage degrades to keyword-only
+  search instead of failing the index.
+- Incremental sync re-chunks and re-embeds only changed files (size/mtime
+  prefilter, then content hash); an unchanged tree is a fast no-op.
+- Config via env: `CX_ROOT`, `CX_INDEX_DIR`, `CX_AUTO_SYNC`,
+  `CX_SYNC_INTERVAL_SECS`, `CX_NO_EMBED`, `CX_MAX_FILES`,
+  `CX_MAX_FILE_BYTES`.
