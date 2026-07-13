@@ -2,7 +2,7 @@
 
 # code-context
 
-### The search engine under your coding agent
+### Let your coding agent search your codebase, not crawl it
 
 [![CI](https://github.com/infino-ai/code-context/actions/workflows/ci.yml/badge.svg)](https://github.com/infino-ai/code-context/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/@infino-ai/code-context?label=%40infino-ai%2Fcode-context&logo=npm)](https://www.npmjs.com/package/@infino-ai/code-context)
