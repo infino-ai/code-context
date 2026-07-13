@@ -129,7 +129,7 @@ describe("syncRepo", () => {
   });
 
   it("is idempotent when a file is re-added identically (no duplicate rows)", async () => {
-    // touch mtime without changing content — the hash check catches it
+    // touch mtime without changing content - the hash check catches it
     utimesSync(join(root, "src", "gamma.ts"), new Date(), new Date());
     const outcome = await syncRepo(opts());
     expect(outcome.action).toBe("noop");

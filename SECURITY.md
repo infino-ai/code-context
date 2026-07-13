@@ -2,7 +2,7 @@
 
 ## Reporting a vulnerability
 
-Please report security issues **privately** — do not open a public issue for a
+Please report security issues **privately** - do not open a public issue for a
 suspected vulnerability.
 
 Use GitHub's private vulnerability reporting: open the repository's **Security**
@@ -14,7 +14,7 @@ a few business days and will keep you updated on the fix.
 code-context is designed to keep your code on your machine:
 
 - Everything runs **locally**: indexing, storage (`.infino/` in your repo),
-  and search. The MCP server is a local subprocess over stdio — no network
+  and search. The MCP server is a local subprocess over stdio - no network
   listener, no remote service, no telemetry.
 - Embedding is **always local**: a small model downloaded once, then no
   network at all. Your code is never sent to any API, and there is no key

@@ -3,7 +3,7 @@
 //
 // Incremental-reindex state: a flat map of every indexed file's size, mtime,
 // and content hash, stored next to the manifest. A sync stat-walks the tree,
-// re-hashes only files whose size/mtime moved, and diffs against this map —
+// re-hashes only files whose size/mtime moved, and diffs against this map  - 
 // so an unchanged repo costs a stat walk (~100ms), and an edit costs
 // re-chunking (and re-embedding) only the files it touched. A flat map is
 // deliberate: tree-structured (Merkle) diffing pays off across a
@@ -68,7 +68,7 @@ export function emptyFileState(): FileState {
 /** Diff the walked candidates against the stored state. `candidates` are the
  * already-filtered indexable files; `readFile` loads content for hashing
  * (only called when size/mtime moved or the path is new). Returns undefined
- * hash entries pruned — a candidate that can't be read is treated as absent. */
+ * hash entries pruned - a candidate that can't be read is treated as absent. */
 export function diffFiles(
   candidates: Array<{ path: string; size: number; mtimeMs: number }>,
   prev: FileState,
@@ -89,10 +89,10 @@ export function diffFiles(
       continue;
     }
     const buf = readFile(c.path);
-    if (buf === undefined) continue; // racing delete — drops out of the index
+    if (buf === undefined) continue; // racing delete - drops out of the index
     const hash = hashContent(buf);
     if (before && before.hash === hash) {
-      // touched but identical — refresh the stat fingerprint only
+      // touched but identical - refresh the stat fingerprint only
       next.files[c.path] = { size: c.size, mtimeMs: c.mtimeMs, hash };
       unchanged++;
       continue;

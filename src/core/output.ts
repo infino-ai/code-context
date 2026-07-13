@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: Copyright The Infino Authors
 //
 // CLI output helpers: minimal ANSI styling (TTY only), aligned tables,
-// durations. No output dependencies — the CLI stays lean.
+// durations. No output dependencies - the CLI stays lean.
 
 const tty = process.stdout.isTTY === true;
 

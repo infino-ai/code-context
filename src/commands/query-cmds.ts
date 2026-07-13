@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: Copyright The Infino Authors
 //
-// `cx search` / `cx sql` / `cx status` — the query commands.
+// `cx search` / `cx sql` / `cx status` - the query commands.
 
 import { openIndex, NoIndexError } from "../core/context.js";
 import { createEmbedder, embedderInfo } from "../core/embedder.js";
@@ -96,7 +96,7 @@ export function statusCmd(opts: StatusCmdOptions): void {
     console.log(JSON.stringify(m, null, 2));
     return;
   }
-  console.log(`${bold("code-context")} — ${handle.root}`);
+  console.log(`${bold("code-context")} - ${handle.root}`);
   console.log(`  chunks     ${fmtCount(m.chunks)} from ${fmtCount(m.files)} files`);
   console.log(`  vectors    ${m.vectors}${m.embedder ? dim(`  (${m.embedder.provider} ${m.embedder.model}, ${m.embedder.dim}d)`) : ""}`);
   console.log(`  indexed    ${fmtAge(m.indexedAt)}${dim(` (keyword ${fmtMs(m.indexMs)}${m.embedMs ? `, vectors ${fmtMs(m.embedMs)}` : ""})`)}`);

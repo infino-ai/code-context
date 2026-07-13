@@ -1,6 +1,6 @@
 #!/bin/sh
 # Download SWE-bench_Verified, filter to the standard protocol subset
-# (15–60 min difficulty, exactly two modified .py files), clone the repos
+# (15-60 min difficulty, exactly two modified .py files), clone the repos
 # (bare, blob-filtered), and create a worktree per instance at its base
 # commit. Everything lands under bench/.work/.
 set -e

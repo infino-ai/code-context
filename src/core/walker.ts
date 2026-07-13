@@ -11,7 +11,7 @@ import ignoreFactory, { type Ignore } from "ignore";
 import { INDEX_DIR_NAME } from "./config.js";
 
 // Vendored/generated directories skipped wherever they appear, gitignored or
-// not — indexing them helps no one and bloats every search.
+// not - indexing them helps no one and bloats every search.
 const SKIP_DIRS = new Set([
   ".git", ".hg", ".svn", INDEX_DIR_NAME,
   "node_modules", "vendor", "dist", "build", "target", "out",
@@ -73,7 +73,7 @@ function walk(dir: string, rel: string, layers: IgnoreLayer[], acc: WalkedFile[]
   try {
     entries = readdirSync(dir, { withFileTypes: true });
   } catch {
-    return; // unreadable directory — skip, don't fail the walk
+    return; // unreadable directory - skip, don't fail the walk
   }
 
   for (const entry of entries) {

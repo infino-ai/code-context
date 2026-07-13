@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: Copyright The Infino Authors
 //
 // Embedding is local, always: a transformers.js model downloaded once on
-// first use — no API key, no per-query network, code never leaves the
+// first use - no API key, no per-query network, code never leaves the
 // machine. Chunks and queries embed with the SAME model so they align.
 //
 // Semantic search is optional by design: indexing commits the keyword index

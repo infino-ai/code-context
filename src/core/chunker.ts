@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: Copyright The Infino Authors
 //
 // File filtering and chunking. Code files are chunked at syntactic
-// boundaries (tree-sitter, WASM grammars — no native compiles): definition
+// boundaries (tree-sitter, WASM grammars - no native compiles): definition
 // starts become break points, and the segments between them are packed into
 // windows of a target size. Markdown splits at headings. Everything else
 // falls back to fixed line windows. Every chunk carries a 1-based line range
@@ -71,7 +71,7 @@ export function shouldIndexFile(path: string): boolean {
   if (/\.(map|snap|svg|lock)$/.test(base)) return false;
   if (KNOWN_BASENAMES.has(base)) return true;
   const dot = base.lastIndexOf(".");
-  if (dot <= 0) return false; // no extension (or dotfile) — not indexable
+  if (dot <= 0) return false; // no extension (or dotfile) - not indexable
   return base.slice(dot + 1) in EXT_LANG;
 }
 
@@ -160,7 +160,7 @@ const languages = new Map<string, Promise<unknown | null>>();
 let parser: TSParser | null = null;
 
 // Adversarial inputs (parser stress fixtures, generated code) can abort the
-// WASM runtime, and a post-abort runtime is undefined behavior — sometimes
+// WASM runtime, and a post-abort runtime is undefined behavior - sometimes
 // every later call throws fast, sometimes it busy-loops. Count failures and
 // permanently fall back to fixed windows once the runtime looks unhealthy;
 // losing syntactic cuts on the tail of a hostile corpus is fine, hanging
@@ -188,7 +188,7 @@ function getLanguage(grammar: string): Promise<unknown | null> {
         const wasmDir = dirname(require.resolve("@vscode/tree-sitter-wasm"));
         return await Language.load(join(wasmDir, `tree-sitter-${grammar}.wasm`));
       } catch {
-        return null; // grammar unavailable — callers fall back to fixed windows
+        return null; // grammar unavailable - callers fall back to fixed windows
       }
     })();
     languages.set(grammar, lang);

@@ -7,7 +7,7 @@ Thanks for your interest in code-context!
 ```
 npm ci
 npm run build     # tsc → dist/
-npm test          # vitest — unit + engine-integration tests, no network needed
+npm test          # vitest - unit + engine-integration tests, no network needed
 ```
 
 `node dist/cli.js --help` runs your local build; `npm link` puts local
@@ -17,7 +17,7 @@ npm test          # vitest — unit + engine-integration tests, no network neede
 
 - **Open an issue first** for anything beyond a small fix, so we can agree on
   the approach before you invest in it.
-- Add or update tests for what you change — the suite runs against a real
+- Add or update tests for what you change - the suite runs against a real
   engine catalog in a temp directory and is fast; there is no excuse to skip
   it.
 - Keep the surface small. New tools, flags, and options need to justify
@@ -28,11 +28,11 @@ npm test          # vitest — unit + engine-integration tests, no network neede
 
 ## What runs where
 
-- `src/core/` — indexing, chunking, file-state sync, search; shared by both
+- `src/core/` - indexing, chunking, file-state sync, search; shared by both
   surfaces. Pure logic lives here and is unit-tested directly.
-- `src/commands/` + `src/cli.ts` — the CLI surface.
-- `src/mcp/` — the MCP server surface.
-- `assets/` — agent-steering templates installed by `cx install`.
+- `src/commands/` + `src/cli.ts` - the CLI surface.
+- `src/mcp/` - the MCP server surface.
+- `assets/` - agent-steering templates installed by `cx install`.
 
 ## Releases
 

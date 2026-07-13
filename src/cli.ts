@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: Copyright The Infino Authors
 //
-// code-context / cx — local code search for AI coding agents.
+// code-context / cx - local code search for AI coding agents.
 
 import { Command } from "commander";
 import { indexCmd } from "./commands/index-cmd.js";
@@ -14,7 +14,7 @@ const program = new Command();
 program
   .name("cx")
   .description(
-    "Local code search for AI coding agents — an index in plain files under .infino/.\n" +
+    "Local code search for AI coding agents - an index in plain files under .infino/.\n" +
       "Keyword search seconds after `cx index`; semantic and hybrid search when vectors\n" +
       "finish backfilling; SQL with relevance-ranked aggregation over the whole repo.",
   )
@@ -39,7 +39,7 @@ program
   .argument("[path]", "repo root to index")
   .option("--full", "force a full rebuild instead of an incremental sync")
   .option("-w, --watch", "keep watching the tree and sync on changes")
-  .option("--no-embed", "keyword index only — skip the vector stage")
+  .option("--no-embed", "keyword index only - skip the vector stage")
   .option("--max-files <n>", "cap on files indexed (default 20000)")
   .option("--json", "machine-readable stats")
   .action(indexCmd);

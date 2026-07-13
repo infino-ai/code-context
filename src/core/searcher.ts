@@ -3,11 +3,11 @@
 //
 // The two retrieval doors, shared by the CLI and the MCP server:
 //
-//   search — the finding door: one ranked pass fuses exact keyword matching
+//   search - the finding door: one ranked pass fuses exact keyword matching
 //            (BM25) with semantic similarity (vectors, RRF) once vectors are
 //            ready; ranked keyword search until then. Hits carry chunk
 //            content, so answers come straight from results.
-//   sql    — the power door: read-only SQL over the index, including search
+//   sql    - the power door: read-only SQL over the index, including search
 //            table functions composed with GROUP BY, `regexp_like` for
 //            regex predicates, and {{name}} placeholders embedded
 //            server-side for the vector functions.
@@ -34,7 +34,7 @@ export interface SearchHit {
   lang: string;
   score: number;
   content: string;
-  /** Set when content was capped — Read path:startLine-endLine for the rest. */
+  /** Set when content was capped - Read path:startLine-endLine for the rest. */
   truncated?: boolean;
 }
 
@@ -65,7 +65,7 @@ export async function search(
     const indexed = handle.manifest.embedder;
     if (indexed && indexed.model !== embedder.model) {
       throw new Error(
-        `query embedder (${embedder.model}) does not match the index embedder (${indexed.model}) — ` +
+        `query embedder (${embedder.model}) does not match the index embedder (${indexed.model}) - ` +
           `set CX_EMBED_MODEL=${indexed.model} or re-run \`cx index\``,
       );
     }
@@ -92,7 +92,7 @@ export async function search(
       };
     }),
     ...(ranking === "keyword" && handle.manifest.vectors !== "ready"
-      ? { note: "vectors not ready yet — keyword-ranked only (re-run `cx index` or wait for the vector stage to finish)" }
+      ? { note: "vectors not ready yet - keyword-ranked only (re-run `cx index` or wait for the vector stage to finish)" }
       : {}),
   };
 }
@@ -102,7 +102,7 @@ export async function search(
 const PLACEHOLDER = /\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/g;
 
 /** Substitute `{{name}}` placeholders with embedded query vectors, inlined as
- * comma-separated float literals — this is what lets the vector_search /
+ * comma-separated float literals - this is what lets the vector_search /
  * hybrid_search table functions run from SQL (the engine itself never
  * embeds). The injected values are model floats, so there is no injection
  * surface; a referenced placeholder with no supplied text is a hard error. */
@@ -132,7 +132,7 @@ export async function applyEmbeds(
 }
 
 /** Read-only guard: one statement, must be SELECT/WITH. The index is a
- * derived artifact — mutating it through SQL is never useful; re-index instead. */
+ * derived artifact - mutating it through SQL is never useful; re-index instead. */
 export function guardSql(sql: string): string {
   const stripped = sql.trim().replace(/;\s*$/, "");
   if (stripped.includes(";")) throw new Error("only a single statement is allowed");

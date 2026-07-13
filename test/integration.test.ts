@@ -1,5 +1,5 @@
 // End-to-end over a real engine catalog in a temp dir: index a small fixture
-// repo (fake embedder — no model download in CI), then exercise every door.
+// repo (fake embedder - no model download in CI), then exercise every door.
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

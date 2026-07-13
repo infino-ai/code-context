@@ -13,7 +13,7 @@ export const INDEX_DIR_NAME = ".infino";
  * SQL written against `chunks` keeps working as vectors arrive. */
 export const TABLE = "chunks";
 
-/** Manifest file inside the index dir — the product's own record of what the
+/** Manifest file inside the index dir - the product's own record of what the
  * index holds (the engine ignores foreign files in its catalog root). */
 export const MANIFEST_NAME = "codecontext.json";
 
@@ -39,13 +39,13 @@ export const DEFAULT_CAPS: IndexCaps = {
   maxFileBytes: Number(process.env.CX_MAX_FILE_BYTES ?? 1024 * 1024),
 };
 
-/** Rows per engine append — each append is one atomic commit, so the table
+/** Rows per engine append - each append is one atomic commit, so the table
  * becomes searchable as soon as the first batch lands. */
 export const APPEND_BATCH = 512;
 
 /** Chunks embedded per model call. */
 export const EMBED_BATCH = 32;
 
-/** IVF centroid count for the vector index. 1 = exact scan — perfect recall,
+/** IVF centroid count for the vector index. 1 = exact scan - perfect recall,
  * and at local-repo scale (tens of thousands of chunks) still milliseconds. */
 export const N_CENT = 1;

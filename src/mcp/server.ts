@@ -3,14 +3,14 @@
 //
 // The dedicated MCP server: three tools over one code index.
 //
-//   search  — find code: exact terms AND meaning in one ranked pass
-//   sql     — the power door (relevance-ranked aggregation, regexp_like)
-//   reindex — sync from the working tree; replies the moment keyword
+//   search  - find code: exact terms AND meaning in one ranked pass
+//   sql     - the power door (relevance-ranked aggregation, regexp_like)
+//   reindex - sync from the working tree; replies the moment keyword
 //             search is live and backfills vectors in-process
 //
 // Three tools, deliberately: one way to find, one way to count, one way to
-// stay fresh — every additional near-duplicate retrieval tool worsens the
-// agent's tool selection. Results carry took_ms — local engine+process
+// stay fresh - every additional near-duplicate retrieval tool worsens the
+// agent's tool selection. Results carry took_ms - local engine+process
 // time, no model or transport latency in it.
 
 import { existsSync } from "node:fs";
@@ -96,7 +96,7 @@ export async function serveMcp(rootPath?: string): Promise<void> {
     isError: true,
   });
   const noIndex = () =>
-    fail(`no index for ${root} yet — call the reindex tool once (keyword search is live in seconds).`);
+    fail(`no index for ${root} yet - call the reindex tool once (keyword search is live in seconds).`);
 
   const timed = <T,>(fn: () => T): { value: T; tookMs: number } => {
     const t0 = performance.now();
@@ -108,12 +108,12 @@ export async function serveMcp(rootPath?: string): Promise<void> {
     { name: "code-context", version: "0.1.0" },
     {
       instructions:
-        "code-context is a local search index over this repository — ranked retrieval instead of " +
+        "code-context is a local search index over this repository - ranked retrieval instead of " +
         "crawling files into context. Three tools:\n" +
-        "- search — find code: exact identifiers AND meaning in one ranked pass. Start here.\n" +
-        "- sql — counts, rankings, and aggregates over the whole repo in one query, including " +
+        "- search - find code: exact identifiers AND meaning in one ranked pass. Start here.\n" +
+        "- sql - counts, rankings, and aggregates over the whole repo in one query, including " +
         "relevance-ranked aggregation ('which files have the most code about X').\n" +
-        "- reindex — sync the index after the working tree changes.\n" +
+        "- reindex - sync the index after the working tree changes.\n" +
         "Every result cites path plus line range; read the cited file region only when the chunk " +
         "content is not already enough.",
     },
@@ -124,16 +124,16 @@ export async function serveMcp(rootPath?: string): Promise<void> {
     {
       title: "Code search (exact terms + meaning)",
       description:
-        "THE way to find code here — one ranked pass fuses exact keyword matching (BM25: " +
-        "identifiers, error strings, function names — stemmed and scored) with semantic similarity " +
+        "THE way to find code here - one ranked pass fuses exact keyword matching (BM25: " +
+        "identifiers, error strings, function names - stemmed and scored) with semantic similarity " +
         "(renamed symbols, paraphrases, 'where is X handled'), so it works whether or not you know " +
         "the exact words. Each hit carries path, line range, and the chunk content with a relevance " +
-        "score — usually enough to answer without opening the file; if a hit is marked truncated, " +
+        "score - usually enough to answer without opening the file; if a hit is marked truncated, " +
         "Read exactly its start-end range (offset/limit), not the whole file. Far cheaper than " +
         "crawling files. (Until the index's vector stage finishes, results are keyword-ranked and " +
         "say so.)",
       inputSchema: {
-        query: z.string().describe("What you're looking for — terms, a phrase, or a description."),
+        query: z.string().describe("What you're looking for - terms, a phrase, or a description."),
         k: z.number().int().positive().max(50).default(6).describe("Maximum hits."),
       },
     },
@@ -156,13 +156,13 @@ export async function serveMcp(rootPath?: string): Promise<void> {
     {
       title: "SQL over the code index",
       description:
-        "Analytical questions over the whole repo in one query — counts, rankings, GROUP BY — " +
+        "Analytical questions over the whole repo in one query - counts, rankings, GROUP BY - " +
         `on table ${TABLE}(path, start_line, end_line, lang, content[, embedding]). ` +
         "Search functions are callable as table-valued relations, so one query can rank AND " +
         "aggregate: bm25_search('" + TABLE + "','content','terms', k) needs no embedding; " +
         "hybrid_search('" + TABLE + "','content','terms','embedding', {{q}}, k) and " +
         "vector_search('" + TABLE + "','embedding', {{q}}, k) take a {{name}} placeholder with an " +
-        'embed map: {"q":"query text"}. The canonical move — "which files have the most code about ' +
+        'embed map: {"q":"query text"}. The canonical move - "which files have the most code about ' +
         'X": SELECT path, SUM(end_line - start_line + 1) AS lines FROM ' +
         `bm25_search('${TABLE}','content','<terms>', 300) GROUP BY path ORDER BY lines DESC LIMIT 15. ` +
         "regexp_like(content, 'pattern') works in WHERE. Read-only, single statement.",
@@ -216,7 +216,7 @@ export async function serveMcp(rootPath?: string): Promise<void> {
             caps: DEFAULT_CAPS,
           });
           void run.completion; // backfills in-process; manifest flips to "ready"
-          return ok({ status: "rebuilt — keyword search live; vectors backfilling", ...run.text });
+          return ok({ status: "rebuilt - keyword search live; vectors backfilling", ...run.text });
         };
         const result = exclusive(async () => {
           if (full) return runFull();
@@ -229,7 +229,7 @@ export async function serveMcp(rootPath?: string): Promise<void> {
           });
           if (outcome.action === "rebuild-required") {
             if (outcome.reason === "vector backfill in progress") {
-              return ok({ status: "index build already in progress — search is available meanwhile" });
+              return ok({ status: "index build already in progress - search is available meanwhile" });
             }
             return runFull();
           }
@@ -238,7 +238,7 @@ export async function serveMcp(rootPath?: string): Promise<void> {
             ...outcome,
           });
         });
-        if (!result) return ok({ status: "a sync is already running — search is available meanwhile" });
+        if (!result) return ok({ status: "a sync is already running - search is available meanwhile" });
         return await result;
       } catch (err) {
         return fail(`reindex failed: ${(err as Error).message}`);

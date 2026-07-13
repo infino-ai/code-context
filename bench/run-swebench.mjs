@@ -79,7 +79,7 @@ for (const inst of instances) {
     const s = score(predicted, inst.gold);
     record(OUT, { id: inst.id, repo: inst.repo, ...s, predicted, gold: inst.gold, ...r, answer: undefined, answerTail: r.answer.slice(-400) });
     console.log(
-      `[${l}] ${inst.id} — F1 ${s.f1.toFixed(2)} (${s.tp}/${inst.gold.length}) · ${r.tokens.toLocaleString()} tok · $${(r.costUsd ?? 0).toFixed(3)} · ${r.calls} calls${r.error ? " · ERROR " + r.error : ""}`,
+      `[${l}] ${inst.id} - F1 ${s.f1.toFixed(2)} (${s.tp}/${inst.gold.length}) · ${r.tokens.toLocaleString()} tok · $${(r.costUsd ?? 0).toFixed(3)} · ${r.calls} calls${r.error ? " · ERROR " + r.error : ""}`,
     );
   }
 }

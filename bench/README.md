@@ -2,7 +2,7 @@
 
 Reproduces the numbers in [docs/benchmark.md](../docs/benchmark.md): real
 agent runs (Claude Agent SDK) comparing stock file tools against the
-code-context MCP tools — same model, same turn budget, hermetic lanes.
+code-context MCP tools - same model, same turn budget, hermetic lanes.
 
 Needs: Node ≥ 20, `git`, `python3`, and `ANTHROPIC_API_KEY` in the
 environment. Everything writes under `bench/.work/` (gitignored).
@@ -14,7 +14,7 @@ cd bench && npm install    # installs @anthropic-ai/claude-agent-sdk
 node run-questions.mjs both /path/to/repo
 
 # 2. SWE-bench_Verified localization (downloads dataset, clones repos,
-#    builds an index per instance — the vector stage takes a while):
+#    builds an index per instance - the vector stage takes a while):
 ./prep-swebench.sh
 node index-instances.mjs 3          # 3 concurrent indexers
 node run-swebench.mjs both          # lanes over every ready instance

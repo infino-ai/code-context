@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: Copyright The Infino Authors
 //
-// Staged indexing. Stage 1 commits a keyword (FTS) index — search works
+// Staged indexing. Stage 1 commits a keyword (FTS) index - search works
 // seconds after indexing starts, before any embedding model even exists on
 // the machine. Stage 2 embeds every chunk and rebuilds the same table with a
 // vector index; hybrid/semantic search unlocks when it lands. The table name
@@ -61,7 +61,7 @@ const TEXT_SCHEMA = {
 
 /** A staged run: `text` resolves when keyword search is live; `completion`
  * resolves when the vector stage lands (== `text` when there is no embedder).
- * `completion` never rejects — a vector-stage failure is recorded in the
+ * `completion` never rejects - a vector-stage failure is recorded in the
  * stats (embedError) and the manifest, with the keyword index still live. */
 export interface StagedIndexRun {
   text: IndexStats;
@@ -99,7 +99,7 @@ export async function indexRepoStaged(opts: IndexOptions): Promise<StagedIndexRu
     try {
       buf = readFileSync(join(root, taken[i].path));
     } catch {
-      continue; // racing deletes are fine — index what's readable
+      continue; // racing deletes are fine - index what's readable
     }
     // Every readable candidate is fingerprinted (binary ones too, so a later
     // sync's stat walk doesn't keep rediscovering them as "added").
@@ -142,7 +142,7 @@ export async function indexRepoStaged(opts: IndexOptions): Promise<StagedIndexRu
 
   // --- stage 2: embed + rebuild with a vector index ---------------------------
   // A failure here (model download, endpoint down) leaves the keyword index
-  // live and the manifest honest — search degrades, indexing never fails.
+  // live and the manifest honest - search degrades, indexing never fails.
   const completion = (async () => {
     try {
       onPhase?.("embed");
@@ -155,7 +155,7 @@ export async function indexRepoStaged(opts: IndexOptions): Promise<StagedIndexRu
         onProgress?.(Math.min(i + EMBED_BATCH, chunks.length), chunks.length);
       }
 
-      // The rebuild below is one synchronous block — drop, create, append —
+      // The rebuild below is one synchronous block - drop, create, append  - 
       // so concurrent readers in this process never observe a half-built table.
       onPhase?.("commit-vectors");
       db.dropTable(TABLE, true);
@@ -347,15 +347,15 @@ export async function syncRepo(opts: IndexOptions): Promise<SyncOutcome> {
 }
 
 /** Post-build compaction: batched appends leave many small superfiles behind
- * (measured 3–4× index-size bloat on large repos); merge them and sweep the
+ * (measured 3-4x index-size bloat on large repos); merge them and sweep the
  * orphans. The 60s gc grace protects any reader mid-query in another
- * process. Best-effort — a failed compaction never fails the build. */
+ * process. Best-effort - a failed compaction never fails the build. */
 function compact(table: { optimize(): void; gc(graceSecs: number): unknown }): void {
   try {
     table.optimize();
     table.gc(60);
   } catch {
-    /* e.g. non-durable storage — the index still works, just bigger */
+    /* e.g. non-durable storage - the index still works, just bigger */
   }
 }
 

@@ -40,7 +40,7 @@ for (let i = 0; i < questions.length; i++) {
     const r = await runLane({ lane: l, prompt: questions[i], system, repoDir, indexDir });
     record("questions.jsonl", { q: i + 1, question: questions[i], repo: repoDir, ...r, answer: r.answer.slice(0, 1500) });
     console.log(
-      `[${l}] Q${i + 1} — ${r.tokens.toLocaleString()} tok · $${(r.costUsd ?? 0).toFixed(3)} · ${r.toolCalls.join(" → ")}${r.error ? " · ERR " + r.error : ""}`,
+      `[${l}] Q${i + 1} - ${r.tokens.toLocaleString()} tok · $${(r.costUsd ?? 0).toFixed(3)} · ${r.toolCalls.join(" → ")}${r.error ? " · ERR " + r.error : ""}`,
     );
   }
 }

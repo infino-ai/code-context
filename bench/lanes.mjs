@@ -24,7 +24,7 @@ export function laneOptions(lane, repoDir, indexDir) {
           command: "node",
           args: [CX, "mcp"],
           // present in the turn-1 prompt (not deferred behind tool search),
-          // and startup blocks until connected — no race on the first call
+          // and startup blocks until connected - no race on the first call
           alwaysLoad: true,
           env: { ...process.env, CX_ROOT: repoDir, CX_INDEX_DIR: indexDir, CX_AUTO_SYNC: "0" },
         },

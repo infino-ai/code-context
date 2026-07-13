@@ -1,17 +1,17 @@
 name: Publish (npm + MCP Registry)
 
 # Publishes in two stages:
-#   1. npm — @infino-ai/code-context to the public npm registry.
-#   2. MCP Registry — the server metadata (server.json) to
+#   1. npm - @infino-ai/code-context to the public npm registry.
+#   2. MCP Registry - the server metadata (server.json) to
 #      registry.modelcontextprotocol.io, which propagates to downstream
 #      catalogs. The registry hosts only metadata and verifies ownership of
 #      the npm package via the "mcpName" field in package.json, so npm must
 #      publish first.
 #
 # npm auth is the classic NPM_TOKEN secret (publish rights under the infino-ai
-# org). Provenance — the "built from this repo at this commit" attestation on
-# npmjs.org — is emitted via NPM_CONFIG_PROVENANCE + the OIDC id-token
-# (requires a public source repo). MCP Registry auth is GitHub OIDC — no
+# org). Provenance - the "built from this repo at this commit" attestation on
+# npmjs.org - is emitted via NPM_CONFIG_PROVENANCE + the OIDC id-token
+# (requires a public source repo). MCP Registry auth is GitHub OIDC - no
 # secret; the id-token from this repo authorizes the io.github.infino-ai/*
 # namespace.
 #
@@ -22,7 +22,7 @@ on:
   workflow_dispatch:
     inputs:
       dry_run:
-        description: "Validate only — build + pack, publish nothing"
+        description: "Validate only - build + pack, publish nothing"
         type: boolean
         default: true
 
@@ -58,7 +58,7 @@ jobs:
         run: |
           VERSION=$(node -p "require('./package.json').version")
           if npm view "@infino-ai/code-context@$VERSION" version >/dev/null 2>&1; then
-            echo "version $VERSION already published — skipping"
+            echo "version $VERSION already published - skipping"
           else
             npm publish --tag latest --access public
           fi
@@ -93,7 +93,7 @@ jobs:
           CODE=$(curl -s -o /dev/null -w '%{http_code}' \
             "https://registry.modelcontextprotocol.io/v0.1/servers/${NAME_ENC}/versions/${VERSION}")
           if [ "$CODE" = "200" ]; then
-            echo "version $VERSION already in the registry — skipping"
+            echo "version $VERSION already in the registry - skipping"
           else
             ./mcp-publisher publish
           fi

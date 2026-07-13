@@ -56,7 +56,7 @@ function next() {
             note = "parse-fail";
           }
         }
-        console.log(`[${done}/${jobs.length}] ${job.id} — ${note} (elapsed ${((Date.now() - t0) / 60000).toFixed(0)}m)`);
+        console.log(`[${done}/${jobs.length}] ${job.id} - ${note} (elapsed ${((Date.now() - t0) / 60000).toFixed(0)}m)`);
         next();
       },
     );

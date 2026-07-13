@@ -18,7 +18,7 @@ export interface IndexHandle {
 export class NoIndexError extends Error {
   constructor(root: string) {
     super(
-      `no index found under ${root} — run \`cx index\` there first (keyword search is ready in seconds).`,
+      `no index found under ${root} - run \`cx index\` there first (keyword search is ready in seconds).`,
     );
     this.name = "NoIndexError";
   }

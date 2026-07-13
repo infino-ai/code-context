@@ -2,7 +2,7 @@
   "name": "@infino-ai/code-context",
   "version": "0.1.0",
   "mcpName": "io.github.infino-ai/code-context",
-  "description": "Local-first code search for AI coding agents — CLI + MCP server over an index that lives in plain files. Keyword search the moment indexing finishes; semantic and hybrid search when vectors backfill; SQL with relevance-ranked aggregation.",
+  "description": "Local-first code search for AI coding agents - CLI + MCP server over an index that lives in plain files. Keyword search the moment indexing finishes; semantic and hybrid search when vectors backfill; SQL with relevance-ranked aggregation.",
   "license": "Apache-2.0",
   "homepage": "https://github.com/infino-ai/code-context#readme",
   "repository": {

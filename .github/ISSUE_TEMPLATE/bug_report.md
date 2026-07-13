@@ -1,6 +1,6 @@
 ---
 name: Bug report
-about: Something misbehaves — wrong results, an error, a crash
+about: Something misbehaves - wrong results, an error, a crash
 labels: bug
 ---
 

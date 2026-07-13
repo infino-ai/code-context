@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: Copyright The Infino Authors
 //
-// `cx index [path]` — bring the index up to date. Incremental when prior
+// `cx index [path]` - bring the index up to date. Incremental when prior
 // state exists (only touched files re-chunk/re-embed), full staged build
 // otherwise or with --full. --watch keeps syncing on file changes. The
 // staged story prints as it happens: keyword search goes live first,
@@ -58,7 +58,7 @@ export async function indexCmd(path: string | undefined, opts: IndexCmdOptions):
   };
 
   if (!opts.json) {
-    console.log(`${bold("code-context")} — indexing ${root}`);
+    console.log(`${bold("code-context")} - indexing ${root}`);
     console.log(dim(`index: ${dir} · embedder: ${embedder ? embedderInfo() : "off (--no-embed)"}`));
   }
 
@@ -84,7 +84,7 @@ export async function indexCmd(path: string | undefined, opts: IndexCmdOptions):
       const t = run.text;
       console.log(
         green("✓") +
-          ` keyword search live — ${fmtCount(t.chunks)} chunks from ${fmtCount(t.files)} files in ${fmtMs(t.indexMs)}`,
+          ` keyword search live - ${fmtCount(t.chunks)} chunks from ${fmtCount(t.files)} files in ${fmtMs(t.indexMs)}`,
       );
       if (t.truncatedFiles) {
         console.log(yellow(`! ${fmtCount(t.truncatedFiles)} files over the ${fmtCount(caps.maxFiles)}-file cap were skipped (raise with --max-files)`));
@@ -97,9 +97,9 @@ export async function indexCmd(path: string | undefined, opts: IndexCmdOptions):
     }
     progressDone();
     if (final.vectors === "ready") {
-      console.log(green("✓") + ` semantic search ready — vectors built in ${fmtMs(final.embedMs ?? 0)}`);
+      console.log(green("✓") + ` semantic search ready - vectors built in ${fmtMs(final.embedMs ?? 0)}`);
     } else if (final.embedError) {
-      console.log(yellow(`! vector stage failed (${final.embedError}) — keyword search stays live; re-run \`cx index\` to retry`));
+      console.log(yellow(`! vector stage failed (${final.embedError}) - keyword search stays live; re-run \`cx index\` to retry`));
     }
     const langs = Object.entries(final.languages)
       .sort((a, b) => b[1] - a[1])
@@ -120,7 +120,7 @@ export async function indexCmd(path: string | undefined, opts: IndexCmdOptions):
   const kick = () => {
     if (timer) clearTimeout(timer);
     timer = setTimeout(async () => {
-      if (running) return kick(); // a sync is active — re-debounce
+      if (running) return kick(); // a sync is active - re-debounce
       running = true;
       try {
         const outcome = await syncRepo(baseOpts);
@@ -147,7 +147,7 @@ function printSync(outcome: SyncResult, json?: boolean): void {
     return;
   }
   if (outcome.action === "noop") {
-    console.log(green("✓") + ` index up to date — ${fmtCount(outcome.chunks)} chunks from ${fmtCount(outcome.files)} files ${dim(`(checked in ${fmtMs(outcome.tookMs)})`)}`);
+    console.log(green("✓") + ` index up to date - ${fmtCount(outcome.chunks)} chunks from ${fmtCount(outcome.files)} files ${dim(`(checked in ${fmtMs(outcome.tookMs)})`)}`);
     return;
   }
   const parts = [
@@ -157,7 +157,7 @@ function printSync(outcome: SyncResult, json?: boolean): void {
   ].filter(Boolean);
   console.log(
     green("✓") +
-      ` synced in ${fmtMs(outcome.tookMs)} — ${parts.join(", ")} ` +
+      ` synced in ${fmtMs(outcome.tookMs)} - ${parts.join(", ")} ` +
       dim(`(+${fmtCount(outcome.chunksAdded)}/-${fmtCount(outcome.chunksRemoved)} chunks, ${fmtCount(outcome.chunks)} total${outcome.vectors === "ready" ? ", vectors current" : ""})`),
   );
 }

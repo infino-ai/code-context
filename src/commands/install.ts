@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: Copyright The Infino Authors
 //
-// `cx install` — drop per-client steering into the repo so agents actually
+// `cx install` - drop per-client steering into the repo so agents actually
 // use the index: a Claude Code project skill + MCP registration + a
 // SessionStart status hook; Cursor rules + MCP config with --cursor; an
 // AGENTS.md section for everything else. Every write is idempotent and
-// merge-preserving — existing config is never clobbered.
+// merge-preserving - existing config is never clobbered.
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync, copyFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -55,7 +55,7 @@ export function installCmd(opts: InstallOptions): void {
     }
   }
 
-  console.log(`${bold("code-context")} — installed agent steering in ${root}\n`);
+  console.log(`${bold("code-context")} - installed agent steering in ${root}\n`);
   for (const line of wrote) console.log(`  ${line}`);
   console.log(
     `\n${dim("Next:")} run ${bold("cx index")} here${
@@ -129,6 +129,6 @@ function readJson(path: string): Record<string, unknown> {
   try {
     return JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
   } catch {
-    throw new Error(`${path} exists but is not valid JSON — fix or remove it, then re-run`);
+    throw new Error(`${path} exists but is not valid JSON - fix or remove it, then re-run`);
   }
 }
