@@ -1,6 +1,6 @@
 {
   "projectTitle": "code-context",
-  "description": "Local code search for AI coding agents - CLI + MCP server over an index in plain files inside the repo. Hybrid (keyword + semantic) search, SQL with relevance-ranked aggregation, incremental auto-sync. No accounts, no keys, no server.",
+  "description": "Local code search for AI coding agents: hybrid search and SQL relevance-ranked aggregation over an in-repo index in plain files. No keys, no server.",
   "url": "https://context7.com/infino-ai/code-context",
   "excludeFolders": [
     "node_modules",
