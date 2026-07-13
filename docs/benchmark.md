@@ -87,34 +87,39 @@ consistency, not ground truth.
 
 ## 3. Localization study - SWE-bench_Verified
 
-A harder secondary test: 29 instances from
+A harder secondary test: 30 instances from
 [SWE-bench_Verified](https://huggingface.co/datasets/princeton-nlp/SWE-bench_Verified) -
 the complete yield of the filter (15-60-minute difficulty, exactly two
-modified Python files), no further selection, spanning django, sympy,
-astropy, scikit-learn, matplotlib, sphinx, xarray, pytest, pylint, seaborn.
-The agent reads the real GitHub issue and must name the files the merged
-fix actually touched. One run per instance per lane, so treat small deltas
-(including the F1 gap below) as indicative, not significant.
+modified files), no further selection, spanning django, sympy, astropy,
+scikit-learn, matplotlib, sphinx, xarray, pytest, pylint, seaborn. The
+agent reads the real GitHub issue and must name the files the merged fix
+actually touched. **Three independent runs per instance per lane** (90
+runs per lane); a run that exhausts its 12-turn budget without an answer
+scores 0 and its spent tokens still count.
 
 Isolated lanes measure the substrate; the third lane is the real
 deployment. An MCP server adds tools and never removes the native ones,
-so an installed agent has both and picks per query. 27 of 29 instances
-completed in all three lanes (the rest hit turn budgets or transient API
-errors) and the table aggregates those 27.
+so an installed agent has both and picks per query.
 
-| | code-context only | file tools only | both installed |
+| Mean over 90 runs | code-context only | file tools only | both installed |
 |---|---|---|---|
-| F1 vs gold patch files | **0.691** | 0.654 | 0.654 |
-| Tool calls per instance | **2.7** | 3.6 | 3.4 |
-| Tokens per instance | 39.4k | **21.4k** | 35.2k |
+| F1 vs gold patch files | **0.696** | 0.663 | 0.678 |
+| Recall | **0.583** | 0.539 | 0.567 |
+| Precision | **0.931** | 0.911 | 0.906 |
+| Tool calls per instance | **3.4** | 4.2 | 3.8 |
+| Tokens per instance | 57.3k | **25.9k** | 42.1k |
+| Runs completed in budget | 88/90 | 87/90 | **90/90** |
 
-Reading it honestly: literal known-symbol lookup is native grep's home
-turf. Lean grep output beats content-rich search hits on tokens for this
-question class, while code-context alone localizes slightly more
-accurately in fewer calls. With both installed the agent mixes freely
-(roughly half its retrieval calls each way) and accuracy stays at
-baseline: installing code-context does not degrade localization, it adds
-the question classes above.
+The F1 ordering held in each of the three runs individually (code-context
+0.678 / 0.722 / 0.689 vs file tools 0.667 / 0.667 / 0.656), so the
+accuracy edge is consistent, if modest. Reading it honestly: literal
+known-symbol lookup is native grep's home turf. Lean grep output beats
+content-rich search hits on tokens for this question class, while
+code-context localizes more accurately in fewer calls. With both installed
+the agent mixes freely, lands between the isolated lanes on accuracy and
+tokens, and was the only configuration that completed every run within
+budget: installing code-context does not degrade localization accuracy,
+and it adds the question classes above.
 
 The same both-installed configuration re-run on the question suite
 confirms the routing goes the other way where the index wins: the agent
