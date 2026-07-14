@@ -47,9 +47,9 @@ engine that runs SQL, full-text search, and vector search over a single copy
 of your data. Text and numeric data is stored as spec-compliant Parquet, and
 the same engine handles logs, docs, and agent memory.
 
-<video src="https://github.com/infino-ai/code-context/raw/main/docs/demo.mp4" controls muted loop playsinline></video>
+[![Claude Code using code-context: index a repo, then ask in plain English, and it reaches for search and SQL on its own](docs/demo-poster.png)](docs/demo.mp4)
 
-<sub>Claude Code answering questions about a repo through code-context: index it, then ask in plain English, and it reaches for search and SQL on its own.</sub>
+<sub>▶ Watch the demo (46s): Claude Code indexes a repo, then answers questions through code-context, reaching for search and SQL on its own.</sub>
 
 ## Quick start
 
