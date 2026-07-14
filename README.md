@@ -24,6 +24,10 @@ context one file at a time.
 is ~6K tokens with code-context versus ~140K reading files. The harness is
 in the repo, so you can reproduce it on your own codebase.
 
+**Try it live (early preview):** ask questions about any public GitHub repo
+at [lantern.infino.ai](https://lantern.infino.ai), a demo agent that runs on
+code-context.
+
 - 🔎 **Find code by words or meaning.** One ranked pass fuses exact keyword
   matching with semantic similarity, and every hit carries the code with
   `path:line` citations.
