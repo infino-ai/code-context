@@ -21,7 +21,7 @@ logs, docs, and agent memory.
 ## Using it
 
 - Install: `npm install -g @infino-ai/code-context` (bins `code-context`
-  and `cx`), then `cx install && cx index` in a repo.
+  and `cx`), then `cx index` in a repo.
 - Zero-install for Claude Code:
   `claude mcp add code-context -- npx -y @infino-ai/code-context mcp`.
 - MCP tools (stdio): `search` (exact terms AND meaning, one ranked pass,
@@ -31,7 +31,7 @@ logs, docs, and agent memory.
   regex), `reindex` (incremental sync; the server also auto-syncs in the
   background).
 - CLI: `cx index` (incremental; `--full`, `--watch`), `cx search`,
-  `cx sql`, `cx status`, `cx mcp`, `cx install`.
+  `cx sql`, `cx status`, `cx mcp`.
 
 ## Evidence
 
@@ -59,8 +59,8 @@ logs, docs, and agent memory.
 
 ## Operational notes
 
-- The index lives in `.infino/` in the repo root (gitignored by
-  `cx install`): plain files you can copy or cache in CI.
+- The index lives in `.infino/` in the repo root (add it to your
+  `.gitignore`): plain files you can copy or cache in CI.
 - Staged readiness: the keyword index commits before the embedding model
   finishes downloading; a failed vector stage degrades to keyword-only
   search instead of failing the index.

@@ -7,7 +7,6 @@
 import { Command } from "commander";
 import { indexCmd } from "./commands/index-cmd.js";
 import { searchCmd, sqlCmd, statusCmd } from "./commands/query-cmds.js";
-import { installCmd } from "./commands/install.js";
 
 const program = new Command();
 
@@ -18,7 +17,7 @@ program
       "Keyword search seconds after `cx index`; semantic and hybrid search when vectors\n" +
       "finish backfilling; SQL with relevance-ranked aggregation over the whole repo.",
   )
-  .version("0.1.0")
+  .version("0.1.1")
   .addHelpText(
     "after",
     `
@@ -29,7 +28,6 @@ Examples:
   cx sql "SELECT path, SUM(end_line - start_line + 1) AS lines \\
           FROM bm25_search('chunks','content','vector index', 300) \\
           GROUP BY path ORDER BY lines DESC LIMIT 10"
-  cx install && cx index              set up agent steering (Claude Code, AGENTS.md), then index
   cx mcp                              serve the MCP tools (search/sql/reindex) over stdio`,
   );
 
@@ -83,14 +81,6 @@ program
     const { serveMcp } = await import("./mcp/server.js");
     await serveMcp(opts.path);
   });
-
-program
-  .command("install")
-  .description("set up agent steering: Claude Code skill + MCP + hook, AGENTS.md; --cursor for Cursor")
-  .option("--cursor", "also write Cursor rules and MCP config")
-  .option("--all", "write steering for every supported client")
-  .option("-C, --path <dir>", "repo root (default: current directory)")
-  .action(installCmd);
 
 program.parseAsync().catch((err: Error) => {
   console.error(`error: ${err.message}`);

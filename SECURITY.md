@@ -28,8 +28,8 @@ code-context is designed to keep your code on your machine:
 - Per-directory `.gitignore` files are respected at every level, so files
   ignored there (secrets, envs, build output) stay out of the index. Global
   git excludes and `.git/info/exclude` are NOT read - keep secrets ignored
-  in-repo if you rely on this. `cx install` also gitignores the index
-  itself.
+  in-repo if you rely on this. Add `.infino/` to your `.gitignore` to keep
+  the index out of commits.
 
 ## Supported versions
 

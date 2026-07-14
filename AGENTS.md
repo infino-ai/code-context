@@ -30,10 +30,7 @@ the honest limits in [docs/tradeoffs.md](docs/tradeoffs.md).
   `indexer` (build + staged readiness + incremental sync), `searcher`
   (hybrid search + SQL), `embedder` (local model), `filestate` (incremental
   sync state), `walker`, `manifest`, `config`, `context`, `output`.
-- `src/commands/`: CLI command implementations (`index-cmd`, `query-cmds`,
-  `install`).
-- `assets/`: agent steering dropped into a repo by `cx install` (Claude Code
-  skill, AGENTS.md snippet, Cursor rules).
+- `src/commands/`: CLI command implementations (`index-cmd`, `query-cmds`).
 - `test/`: vitest suites. `bench/`: the benchmark harness. `docs/`: docs.
 
 ## Build, test, gates

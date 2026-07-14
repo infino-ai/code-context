@@ -32,7 +32,6 @@ npm test          # vitest - unit + engine-integration tests, no network needed
   surfaces. Pure logic lives here and is unit-tested directly.
 - `src/commands/` + `src/cli.ts` - the CLI surface.
 - `src/mcp/` - the MCP server surface.
-- `assets/` - agent-steering templates installed by `cx install`.
 
 ## Releases
 

@@ -16,13 +16,12 @@
     "Index a repo with 'cx index' from the repo root. Keyword (BM25) search is live seconds after indexing starts; vectors backfill in the background and hybrid ranking unlocks automatically when they land.",
     "'cx index' is incremental by default: only files that changed since the last index re-chunk and re-embed. Use --full to rebuild from scratch and --watch to sync on file events.",
     "The MCP server ('cx mcp', stdio) exposes exactly three tools: search (exact terms AND meaning in one ranked pass, hits carry chunk content with path:line ranges), sql (read-only SELECT/WITH over the index), and reindex (incremental sync).",
-    "The index is one table named chunks(path, start_line, end_line, lang, content[, embedding]) living in .infino/ inside the repo - plain files you can copy, cache in CI, or gitignore (cx install gitignores it).",
+    "The index is one table named chunks(path, start_line, end_line, lang, content[, embedding]) living in .infino/ inside the repo - plain files you can copy, cache in CI, or gitignore (add .infino/ to your .gitignore).",
     "The engine's search functions are SQL table functions, so one query can rank AND aggregate: SELECT path, SUM(end_line - start_line + 1) AS lines FROM bm25_search('chunks','content','<terms>', 300) GROUP BY path ORDER BY lines DESC.",
     "vector_search and hybrid_search table functions take a query vector via a {{name}} placeholder: pass an embed map like {\"q\": \"query text\"} and the server embeds it locally and substitutes the vector.",
     "Regex matching goes through SQL: regexp_like(content, 'pattern') in a WHERE clause. There is no separate grep tool in the MCP surface.",
     "Embedding is always local (a small transformers.js model downloaded once from huggingface.co); code never leaves the machine and no API key exists.",
     "SQL is read-only: a single SELECT or WITH statement. The index is a derived artifact - rebuild it with cx index, never mutate it through queries.",
-    "'cx install' drops agent steering into the repo: a Claude Code project skill, MCP registration in .mcp.json, a SessionStart status hook, and an AGENTS.md section; add --cursor for Cursor rules and MCP config.",
     "Configuration is environment variables: CX_ROOT (repo root when not cwd), CX_INDEX_DIR (index location), CX_AUTO_SYNC=0 (disable background staleness sync), CX_NO_EMBED (keyword-only), CX_MAX_FILES / CX_MAX_FILE_BYTES (caps).",
     "code-context is built on the infino engine (github.com/infino-ai/infino); the same engine and index format also serve logs, docs, and agent memory."
   ]

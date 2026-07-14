@@ -32,7 +32,7 @@ reports that honestly rather than failing.
 
 ### Where does the index live, and can I share it?
 
-In `.infino/` in your repo root, as plain files (`cx install` gitignores it).
+In `.infino/` in your repo root, as plain files (add it to your `.gitignore`).
 You can copy it, cache it in CI, or put it on object storage. It is a live
 index the engine queries in place, not a snapshot you export.
 
@@ -68,9 +68,9 @@ indexable.
 
 ### Which MCP clients work?
 
-Any MCP client, over stdio. `cx install` sets up Claude Code (project skill,
-MCP registration, status hook, and an AGENTS.md section) and Cursor
-(`--cursor`); Codex, Gemini CLI, Windsurf, Cline, and others use the standard
+Any MCP client, over stdio. In Claude Code:
+`claude mcp add code-context -- npx -y @infino-ai/code-context mcp`. Codex,
+Gemini CLI, Windsurf, Cline, and others use the standard
 stdio config in the README.
 
 ### What is it built on?

@@ -12,7 +12,7 @@
 
 **code-context** is the retrieval layer under your coding agent: one local
 index over the whole repo (keyword, semantic, hybrid, and SQL), reached
-through a CLI and an MCP server, with the index living in plain files inside
+through an MCP server and a CLI, with the index living in plain files inside
 your repo. Your agent answers questions about the codebase without reading it
 file by file.
 
@@ -53,20 +53,14 @@ the same engine handles logs, docs, and agent memory.
 
 ## Quick start
 
-```
-npm install -g @infino-ai/code-context
-cd your-repo
-cx install && cx index      # keyword search live in seconds on typical repos
-```
-
-Or zero-install, straight into Claude Code with one command:
+Add it to Claude Code with one command, nothing to install:
 
 ```
 claude mcp add code-context -- npx -y @infino-ai/code-context mcp
 ```
 
-(ask the agent to "index this codebase": the `reindex` tool bootstraps an
-unindexed repo in-chat, and search works while indexing runs)
+Then ask the agent to "index this codebase": the `reindex` tool bootstraps an
+unindexed repo in-chat, and search works while indexing runs.
 
 CI-tested on Linux x64 (glibc) and macOS arm64; linux-arm64, musl, and
 Windows-via-WSL are expected to work through the engine's prebuilt bindings
@@ -99,8 +93,7 @@ Full methodology and per-question tables are in
 
 ## What you get
 
-One binary (`code-context`, or `cx` for short), one index, and a
-deliberately small tool surface for agents:
+One index and a deliberately small tool surface for agents:
 
 | Tool | What it does | When agents use it |
 |---|---|---|
@@ -142,21 +135,16 @@ The default model optimizes quality-per-minute. See
 
 ### Your index is just files
 
-Everything lives in `.infino/` in your repo root (gitignored by
-`cx install`): plain files you can copy, cache in CI, or put on object
+Everything lives in `.infino/` in your repo root (add it to your
+`.gitignore`): plain files you can copy, cache in CI, or put on object
 storage. It's a live index the engine queries in place, not a snapshot you
 export and pass around.
 
 ## Setup for agents
 
-`cx install` drops steering into the repo so agents actually use the index:
-
-```
-cx install            # Claude Code: project skill + MCP server + status hook; AGENTS.md section
-cx install --cursor   # + Cursor rules and MCP config
-```
-
-Any MCP client works; the server is stdio.
+code-context is an MCP server over stdio, so any MCP client works. Register
+it once and the tools (`search`, `sql`, `reindex`) become available to the
+agent.
 
 <details>
 <summary><strong>Claude Code</strong></summary>
@@ -165,16 +153,12 @@ Any MCP client works; the server is stdio.
 claude mcp add code-context -- npx -y @infino-ai/code-context mcp
 ```
 
-Or run `cx install` in the repo: it registers the server in `.mcp.json` and
-adds a project skill plus a session hook that surfaces index freshness.
-
 </details>
 
 <details>
 <summary><strong>Cursor</strong></summary>
 
-`cx install --cursor` writes `.cursor/mcp.json` and `.cursor/rules`, or add
-manually:
+Add to `.cursor/mcp.json`:
 
 ```json
 { "mcpServers": { "code-context": { "command": "npx", "args": ["-y", "@infino-ai/code-context", "mcp"] } } }
@@ -224,17 +208,6 @@ Tools: `search`, `sql`, `reindex` (incremental sync: an unchanged repo is
 a fast no-op, and the server also auto-syncs in the background as queries
 arrive, so results track your edits without anyone asking).
 
-## CLI
-
-```
-cx index [path]           sync the index (incremental; --full rebuilds, --watch follows edits)
-cx search <query>         exact terms + meaning, one ranked pass           (-k hits)
-cx sql <statement>        read-only SQL; --embed q="text" fills {{q}}
-cx status                 what the index holds, how fresh, vector readiness
-cx mcp                    serve the MCP tools over stdio
-cx install                drop agent steering into the repo
-```
-
 ## Configuration
 
 | Variable | Default | Purpose |
@@ -245,6 +218,24 @@ cx install                drop agent steering into the repo
 | `CX_AUTO_SYNC` | on | `0` disables the MCP server's background staleness sync |
 | `CX_SYNC_INTERVAL_SECS` | 30 | auto-sync debounce between staleness checks |
 | `CX_NO_EMBED` | off | keyword-only mode for the MCP server (skip the vector stage) |
+
+## CLI
+
+The same index is reachable from the terminal too, for scripting, CI, or
+inspecting results yourself. Install the binary, then run any command inside
+a repo:
+
+```
+npm install -g @infino-ai/code-context
+```
+
+```
+cx index [path]           sync the index (incremental; --full rebuilds, --watch follows edits)
+cx search <query>         exact terms + meaning, one ranked pass           (-k hits)
+cx sql <statement>        read-only SQL; --embed q="text" fills {{q}}
+cx status                 what the index holds, how fresh, vector readiness
+cx mcp                    serve the MCP tools over stdio
+```
 
 ## What it is, and what it isn't
 
