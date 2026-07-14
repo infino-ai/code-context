@@ -47,7 +47,9 @@ engine that runs SQL, full-text search, and vector search over a single copy
 of your data. Text and numeric data is stored as spec-compliant Parquet, and
 the same engine handles logs, docs, and agent memory.
 
-![cx demo: index, search, SQL aggregation, incremental sync](docs/demo.gif)
+<video src="https://github.com/infino-ai/code-context/raw/main/docs/demo.mp4" controls muted loop playsinline></video>
+
+<sub>Claude Code answering questions about a repo through code-context: index it, then ask in plain English, and it reaches for search and SQL on its own.</sub>
 
 ## Quick start
 
@@ -254,6 +256,8 @@ detection, type resolution). Tools that do are complementary: MCP servers
 stack, so run both.
 
 ## Architecture
+
+![How code-context fits together: your coding agent reaches code-context through a CLI and an MCP server, code-context runs the infino engine in-process, and the index lives as plain files in your repo](docs/architecture.png)
 
 - **Chunking:** tree-sitter (WASM, no native compiles) cuts at definition
   boundaries for TypeScript/JS, Python, Rust, Go, Java, C/C++, Ruby, C#, PHP;

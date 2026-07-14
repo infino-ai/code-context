@@ -1,0 +1,81 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1240" height="840" viewBox="0 0 1240 840" font-family="Helvetica Neue, Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#334155"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="1240" height="840" fill="#ffffff"/>
+
+  <!-- header -->
+  <text x="80" y="52" font-size="24" font-weight="700" fill="#111827">How code-context fits together</text>
+  <text x="80" y="78" font-size="15" fill="#6b7280">One local index over your repo, reached through a CLI and an MCP server.</text>
+
+  <!-- ============ Row A: agents ============ -->
+  <rect x="80" y="100" width="1080" height="100" rx="10" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.5"/>
+  <text x="100" y="126" font-size="14" font-weight="600" fill="#475569">Your coding agent</text>
+  <g>
+    <rect x="130" y="138" width="220" height="46" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="2"/>
+    <text x="240" y="166" font-size="15" text-anchor="middle" fill="#1e3a8a">Claude Code</text>
+    <rect x="380" y="138" width="220" height="46" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="2"/>
+    <text x="490" y="166" font-size="15" text-anchor="middle" fill="#1e3a8a">Cursor</text>
+    <rect x="630" y="138" width="220" height="46" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="2"/>
+    <text x="740" y="166" font-size="15" text-anchor="middle" fill="#1e3a8a">Codex</text>
+    <rect x="880" y="138" width="220" height="46" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="2"/>
+    <text x="990" y="166" font-size="15" text-anchor="middle" fill="#1e3a8a">any MCP client</text>
+  </g>
+
+  <!-- connector A -> B -->
+  <line x1="620" y1="200" x2="620" y2="258" stroke="#334155" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="640" y="226" font-size="13.5" fill="#475569" font-family="Menlo, monospace">CLI (cx)  +  MCP server</text>
+  <text x="640" y="246" font-size="13.5" fill="#94a3b8" font-family="Menlo, monospace">tools: search · sql · reindex</text>
+
+  <!-- ============ Row B: code-context ============ -->
+  <rect x="80" y="260" width="1080" height="354" rx="10" fill="#fafafa" stroke="#cbd5e1" stroke-width="1.5"/>
+  <text x="100" y="286" font-size="14" font-weight="600" fill="#475569">code-context — runs in-process, on your machine</text>
+
+  <!-- chunker + embedder -->
+  <rect x="275" y="312" width="300" height="54" rx="8" fill="#f1f5f9" stroke="#64748b" stroke-width="2"/>
+  <text x="425" y="338" font-size="15" text-anchor="middle" fill="#1f2937">tree-sitter chunker</text>
+  <text x="425" y="356" font-size="12" text-anchor="middle" fill="#94a3b8">WASM · cuts at definitions</text>
+
+  <rect x="615" y="312" width="360" height="54" rx="8" fill="#f1f5f9" stroke="#64748b" stroke-width="2"/>
+  <text x="795" y="338" font-size="15" text-anchor="middle" fill="#1f2937">local embedder · MiniLM</text>
+  <text x="795" y="356" font-size="12" text-anchor="middle" fill="#94a3b8">downloaded once · no API key</text>
+
+  <line x1="425" y1="366" x2="425" y2="400" stroke="#334155" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="795" y1="366" x2="795" y2="400" stroke="#334155" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- infino engine subgraph -->
+  <rect x="150" y="400" width="950" height="190" rx="10" fill="#f2f9ee" stroke="#3f9142" stroke-width="1.5"/>
+  <text x="170" y="424" font-size="14" font-weight="600" fill="#2f7d32">infino engine — embedded, no server</text>
+
+  <rect x="180" y="456" width="270" height="58" rx="8" fill="#ffffff" stroke="#3f9142" stroke-width="2"/>
+  <text x="315" y="484" font-size="15" text-anchor="middle" fill="#1f2937">BM25 keyword index</text>
+  <text x="315" y="502" font-size="12" text-anchor="middle" fill="#94a3b8">exact terms, identifiers</text>
+
+  <rect x="490" y="456" width="270" height="58" rx="8" fill="#ffffff" stroke="#3f9142" stroke-width="2"/>
+  <text x="625" y="484" font-size="15" text-anchor="middle" fill="#1f2937">vector index (IVF)</text>
+  <text x="625" y="502" font-size="12" text-anchor="middle" fill="#94a3b8">meaning, paraphrase</text>
+
+  <rect x="800" y="456" width="270" height="58" rx="8" fill="#ffffff" stroke="#3f9142" stroke-width="2"/>
+  <text x="935" y="484" font-size="15" text-anchor="middle" fill="#1f2937">read-only SQL</text>
+  <text x="935" y="502" font-size="12" text-anchor="middle" fill="#94a3b8">counts, rankings</text>
+
+  <text x="625" y="560" font-size="13.5" text-anchor="middle" fill="#475569">one copy of your data — keyword, vector, and SQL fuse in a single ranked pass</text>
+
+  <!-- connector B -> C -->
+  <path d="M620,614 L620,662" stroke="#334155" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="640" y="644" font-size="13" fill="#94a3b8">the index lives in your repo</text>
+
+  <!-- ============ Row C: storage ============ -->
+  <rect x="340" y="664" width="560" height="108" rx="10" fill="#fffbeb" stroke="#b45309" stroke-width="1.5"/>
+  <text x="360" y="690" font-size="14" font-weight="600" fill="#92400e">Your repo</text>
+  <rect x="372" y="700" width="496" height="46" rx="8" fill="#ffffff" stroke="#d97706" stroke-width="2"/>
+  <text x="620" y="722" font-size="15" text-anchor="middle" fill="#1f2937" font-family="Menlo, monospace">.infino/ — plain files</text>
+  <text x="620" y="762" font-size="12.5" text-anchor="middle" fill="#a16207">local disk · copy it, cache it in CI, put it on object storage</text>
+
+  <!-- footer callout -->
+  <rect x="300" y="796" width="640" height="34" rx="17" fill="#f2f9ee" stroke="#3f9142" stroke-width="1.5"/>
+  <text x="620" y="818" font-size="14.5" font-weight="600" text-anchor="middle" fill="#2f7d32">No accounts · no API keys · no server · nothing leaves your machine</text>
+</svg>
