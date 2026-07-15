@@ -10,7 +10,7 @@
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { IndexSpec, type Connection } from "@infino-ai/infino";
+import { IndexSpec, type Connection, type OptimizeOptions } from "@infino-ai/infino";
 import { APPEND_BATCH, EMBED_BATCH, N_CENT, TABLE, DEFAULT_CAPS, type IndexCaps } from "./config.js";
 import { walkRepo } from "./walker.js";
 import { shouldIndexFile, chunkFile, looksBinary, type Chunk } from "./chunker.js";
@@ -24,6 +24,9 @@ import {
   type FileState,
 } from "./filestate.js";
 import type { Embedder } from "./embedder.js";
+
+const COMPACTION_TARGET_MIB =
+  parseInt(process.env.CX_COMPACTION_TARGET_MIB ?? "", 10) || 10;
 
 export interface IndexOptions {
   root: string;
@@ -332,6 +335,9 @@ export async function syncRepo(opts: IndexOptions): Promise<SyncOutcome> {
   };
   writeManifest(indexDirPath, nextManifest);
 
+  // --- compact after deletes/appends to keep tombstones clean ---
+  compact(table);
+
   return {
     action: "synced",
     filesAdded: diff.added.length,
@@ -346,13 +352,16 @@ export async function syncRepo(opts: IndexOptions): Promise<SyncOutcome> {
   };
 }
 
-/** Post-build compaction: batched appends leave many small superfiles behind
+/** Post-build/sync compaction: batched appends leave many small superfiles behind
  * (measured 3-4x index-size bloat on large repos); merge them and sweep the
  * orphans. The 60s gc grace protects any reader mid-query in another
- * process. Best-effort - a failed compaction never fails the build. */
-function compact(table: { optimize(): void; gc(graceSecs: number): unknown }): void {
+ * process. Tuned for small-file workloads via CX_COMPACTION_TARGET_MIB env var
+ * (default 10 MiB, triggers compaction at ~8 MiB with 80% fill).
+ * Best-effort - a failed compaction never fails the operation. */
+function compact(table: { optimize(opts?: OptimizeOptions): void; gc(graceSecs: number): unknown }): void {
   try {
-    table.optimize();
+    const opts: OptimizeOptions = { targetSuperfileSizeMb: COMPACTION_TARGET_MIB };
+    table.optimize(opts);
     table.gc(60);
   } catch {
     /* e.g. non-durable storage - the index still works, just bigger */
