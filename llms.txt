@@ -29,7 +29,11 @@ logs, docs, and agent memory.
   SELECT/WITH over `chunks(path, start_line, end_line, lang, content)`,
   search functions usable as table-valued relations, `regexp_like` for
   regex), `reindex` (incremental sync; the server also auto-syncs in the
-  background).
+  background). A `search`/`sql` on a never-indexed repo builds the index
+  inline and answers on the same call (keyword live in seconds, vectors
+  backfilling); `CX_AUTO_INDEX=0` restores a strict "index it first" error.
+  Each tool takes an optional `path` (absolute repo root) so one server serves
+  multiple repos in a session; omit it for the startup root.
 - CLI: `cx index` (incremental; `--full`, `--watch`), `cx search`,
   `cx sql`, `cx status`, `cx mcp`.
 
@@ -59,13 +63,14 @@ logs, docs, and agent memory.
 
 ## Operational notes
 
-- The index lives in `.infino/` in the repo root (add it to your
-  `.gitignore`): plain files you can copy or cache in CI.
+- The index lives in `.infino/` in the repo root (added to your
+  `.gitignore` automatically on first index): plain files you can copy or
+  cache in CI.
 - Staged readiness: the keyword index commits before the embedding model
   finishes downloading; a failed vector stage degrades to keyword-only
   search instead of failing the index.
 - Incremental sync re-chunks and re-embeds only changed files (size/mtime
   prefilter, then content hash); an unchanged tree is a fast no-op.
-- Config via env: `CX_ROOT`, `CX_INDEX_DIR`, `CX_AUTO_SYNC`,
+- Config via env: `CX_ROOT`, `CX_INDEX_DIR`, `CX_AUTO_INDEX`, `CX_AUTO_SYNC`,
   `CX_SYNC_INTERVAL_SECS`, `CX_NO_EMBED`, `CX_MAX_FILES`,
   `CX_MAX_FILE_BYTES`.

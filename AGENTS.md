@@ -25,7 +25,13 @@ the honest limits in [docs/tradeoffs.md](docs/tradeoffs.md).
 
 - `src/cli.ts`: the `cx` / `code-context` command entry (commander).
 - `src/mcp/server.ts`: the MCP server, three tools (`search`, `sql`,
-  `reindex`) over one index.
+  `reindex`). Each takes an optional `path` (repo root) so one server serves
+  multiple repos in a session, defaulting to the startup root.
+- `src/mcp/repos.ts`: the per-repo registry - resolves and validates a
+  requested root, one engine connection per repo, LRU-capped.
+- `src/mcp/ensure.ts`: auto-index on first query - a `search`/`sql` on a
+  never-indexed repo builds the index inline, then answers on the same call
+  (`CX_AUTO_INDEX=0` restores the strict "index it first" error).
 - `src/core/`: the engine-facing core. `chunker` (tree-sitter chunking),
   `indexer` (build + staged readiness + incremental sync), `searcher`
   (hybrid search + SQL), `embedder` (local model), `filestate` (incremental

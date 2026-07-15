@@ -59,8 +59,10 @@ Add it to Claude Code with one command, nothing to install:
 claude mcp add code-context -- npx -y @infino-ai/code-context mcp
 ```
 
-Then ask the agent to "index this codebase": the `reindex` tool bootstraps an
-unindexed repo in-chat, and search works while indexing runs.
+Then just ask a question about the code. The first `search` or `sql` on an
+unindexed repo builds the index inline and answers on the same call: keyword
+search is live in seconds, and vectors backfill in the background. (Prefer to
+kick it off yourself? The `reindex` tool does the same build on demand.)
 
 CI-tested on Linux x64 (glibc) and macOS arm64; linux-arm64, musl, and
 Windows-via-WSL are expected to work through the engine's prebuilt bindings
@@ -135,9 +137,9 @@ The default model optimizes quality-per-minute. See
 
 ### Your index is just files
 
-Everything lives in `.infino/` in your repo root (add it to your
-`.gitignore`): plain files you can copy, cache in CI, or put on object
-storage. It's a live index the engine queries in place, not a snapshot you
+Everything lives in `.infino/` in your repo root (added to your
+`.gitignore` automatically on first index): plain files you can copy,
+cache in CI, or put on object storage. It's a live index the engine queries in place, not a snapshot you
 export and pass around.
 
 ## Setup for agents
@@ -208,13 +210,20 @@ Tools: `search`, `sql`, `reindex` (incremental sync: an unchanged repo is
 a fast no-op, and the server also auto-syncs in the background as queries
 arrive, so results track your edits without anyone asking).
 
+**Multiple repos in one session.** Each tool takes an optional `path` (an
+absolute repo root). Omit it and the server uses its startup root; set it to
+target a specific repo when a session spans more than one. One server
+instance serves them all, each with its own index in its own `.infino/` -
+no restart, no per-repo config.
+
 ## Configuration
 
 | Variable | Default | Purpose |
 |---|---|---|
 | `CX_INDEX_DIR` | `<repo>/.infino` | where the index lives |
-| `CX_MAX_FILES` / `CX_MAX_FILE_BYTES` | 20000 / 1MB | indexing caps |
-| `CX_ROOT` | current directory | repo root for the MCP server / CLI when not run from the repo |
+| `CX_MAX_FILES` / `CX_MAX_FILE_BYTES` | 20000 / 1MB | indexing caps (files over the file cap are left out; `search`/`sql` then flag the index as partial so an absence isn't read as proof) |
+| `CX_ROOT` | current directory | default repo root for the MCP server / CLI when not run from the repo (each tool call can override it with a `path` argument) |
+| `CX_AUTO_INDEX` | on | `0` makes a query on an unindexed repo error instead of building the index inline on the first `search`/`sql` |
 | `CX_AUTO_SYNC` | on | `0` disables the MCP server's background staleness sync |
 | `CX_SYNC_INTERVAL_SECS` | 30 | auto-sync debounce between staleness checks |
 | `CX_NO_EMBED` | off | keyword-only mode for the MCP server (skip the vector stage) |

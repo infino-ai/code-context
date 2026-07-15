@@ -30,11 +30,27 @@ background and semantic and hybrid ranking unlock automatically when they
 land. If the vector stage fails, keyword search stays live and the index
 reports that honestly rather than failing.
 
+### Do I have to index before I can search?
+
+No. The first `search` or `sql` on a repo that has never been indexed builds
+the index inline and answers on that same call - keyword search is live in
+seconds, vectors backfill behind it. Call `reindex` first if you'd rather
+kick the build off explicitly, or set `CX_AUTO_INDEX=0` to make an unindexed
+query return a "index it first" error instead of building.
+
+### Can one server handle more than one repo?
+
+Yes. Each tool takes an optional `path` (an absolute repo root); omit it to
+use the server's startup root, or pass it to target a specific repo when a
+session spans several. One server instance serves them all, each with its own
+index in its own `.infino/`.
+
 ### Where does the index live, and can I share it?
 
-In `.infino/` in your repo root, as plain files (add it to your `.gitignore`).
-You can copy it, cache it in CI, or put it on object storage. It is a live
-index the engine queries in place, not a snapshot you export.
+In `.infino/` in your repo root, as plain files (added to your `.gitignore`
+automatically the first time you index). You can copy it, cache it in CI, or
+put it on object storage. It is a live index the engine queries in place, not
+a snapshot you export.
 
 ### Does it stay fresh as I edit?
 
@@ -42,6 +58,16 @@ Yes. Sync is incremental: a per-file state map (size/mtime prefilter, then
 content hash) re-chunks and re-embeds only the files that changed, so a
 one-file edit syncs in a fraction of a second and an unchanged tree is a fast
 no-op. The MCP server also auto-syncs in the background as queries arrive.
+
+### What happens on a repo too big to index fully?
+
+Indexing caps how many files it takes (`CX_MAX_FILES`, default 20,000); files
+past the cap are left out. When that happens the index is marked partial:
+every `search` and `sql` result carries a `partial` note with how many files
+were skipped and the cap in effect, so an agent treats a missing match as
+"maybe not indexed" rather than "not in the repo." `cx status` shows the same,
+and `cx search` prints a warning. Raise `CX_MAX_FILES` (CLI: `--max-files`)
+and re-index for full coverage.
 
 ### What tools does the MCP server expose?
 

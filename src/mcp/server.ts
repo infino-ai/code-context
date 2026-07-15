@@ -17,64 +17,88 @@ import { existsSync } from "node:fs";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { connect, type Connection } from "@infino-ai/infino";
+import { connect } from "@infino-ai/infino";
 import { indexDir, resolveRoot, TABLE, DEFAULT_CAPS } from "../core/config.js";
 import { readManifest, type Manifest } from "../core/manifest.js";
 import type { IndexHandle } from "../core/context.js";
-import { search, runSql, jsonify } from "../core/searcher.js";
-import { indexRepoStaged, syncRepo, type SyncOutcome } from "../core/indexer.js";
+import { search, runSql, jsonify, partialIndex } from "../core/searcher.js";
+import { indexRepoStaged, syncRepo, type SyncOutcome, type IndexStats } from "../core/indexer.js";
 import { createEmbedder, embedderInfo, type Embedder } from "../core/embedder.js";
+import { RepoRegistry, type RepoCtx } from "./repos.js";
+import { ensureIndexed, type EnsureResult } from "./ensure.js";
 
 export async function serveMcp(rootPath?: string): Promise<void> {
-  const root = resolveRoot(rootPath);
-  const dir = indexDir(root);
-
-  // One connection for the server's lifetime; the manifest is re-read per
-  // call so staged vector readiness is noticed the moment it lands.
-  let db: Connection | null = null;
-  const getDb = () => (db ??= connect(dir));
-  const getHandle = (): IndexHandle | null => {
-    if (!existsSync(dir)) return null;
-    const manifest = readManifest(dir);
-    if (!manifest) return null;
-    return { root, dir, db: getDb(), manifest };
-  };
+  const defaultRoot = resolveRoot(rootPath);
 
   let embedder: Embedder | null = null;
   const getEmbedder = () => (embedder ??= createEmbedder());
 
-  // --- freshness: one index mutation at a time, auto-sync on queries ----------
-  // Queries are not queued behind syncs; they run against the current index and the
-  // next query sees the fresh one. CX_AUTO_SYNC=0 disables; the debounce keeps
-  // the stat walk off the hot path (~20ms to ~2s depending on repo size).
+  // --- per-repo state ---------------------------------------------------------
+  // One server serves every repo a session touches: the optional `path` tool
+  // arg targets one, defaulting to the startup root. Each repo keeps its own
+  // connection, auto-sync clock, and mutation lock, held in a small LRU so a
+  // session that roams across many repos doesn't accumulate connections.
+  const registry = new RepoRegistry(defaultRoot, { connect });
+  const repoFor = (requested?: string): RepoCtx => registry.get(requested);
+
+  // The manifest is re-read per call so staged vector readiness is noticed the
+  // moment it lands.
+  const getHandle = (ctx: RepoCtx): IndexHandle | null => {
+    if (!existsSync(ctx.dir)) return null;
+    const manifest = readManifest(ctx.dir);
+    if (!manifest) return null;
+    return { root: ctx.root, dir: ctx.dir, db: ctx.db, manifest };
+  };
+
+  // --- freshness: one index mutation at a time per repo, auto-sync on queries -
+  // Queries are not queued behind syncs; they run against the current index and
+  // the next query sees the fresh one. CX_AUTO_SYNC=0 disables; the debounce
+  // keeps the stat walk off the hot path (~20ms to ~2s depending on repo size).
   const autoSyncEnabled = !["0", "false", "no"].includes((process.env.CX_AUTO_SYNC ?? "").toLowerCase());
   const syncIntervalMs = Number(process.env.CX_SYNC_INTERVAL_SECS ?? 30) * 1000;
-  let lastSyncCheck = 0;
-  let mutation: Promise<unknown> | null = null;
+  // A search/sql on a never-indexed repo builds the index inline, then answers
+  // on the same call (staged: keyword search live in seconds). Off restores the
+  // strict "index it first" error.
+  const autoIndexEnabled = !["0", "false", "no"].includes((process.env.CX_AUTO_INDEX ?? "").toLowerCase());
 
-  /** Run an index mutation exclusively; returns null if one is in flight. */
-  const exclusive = <T,>(fn: () => Promise<T>): Promise<T> | null => {
-    if (mutation) return null;
+  /** Run an index mutation on a repo exclusively; null if one is in flight. */
+  const exclusive = <T,>(ctx: RepoCtx, fn: () => Promise<T>): Promise<T> | null => {
+    if (ctx.mutation) return null;
     const p = fn().finally(() => {
-      mutation = null;
+      ctx.mutation = null;
     });
-    mutation = p.catch(() => undefined); // guard must not reject
+    ctx.mutation = p.catch(() => undefined); // guard must not reject
     return p;
   };
 
-  const doSync = async (): Promise<SyncOutcome> => {
+  /** Acquire the repo's mutation lock and run a staged build; resolves at
+   * keyword-live with stage-1 stats, or null if a build is already in flight. */
+  const buildIndex = (ctx: RepoCtx): Promise<IndexStats> | null =>
+    exclusive(ctx, async () => {
+      const run = await indexRepoStaged({
+        root: ctx.root,
+        db: ctx.db,
+        indexDirPath: ctx.dir,
+        embedder: process.env.CX_NO_EMBED ? undefined : getEmbedder(),
+        caps: DEFAULT_CAPS,
+      });
+      void run.completion; // vectors backfill in-process; manifest flips to "ready"
+      return run.text;
+    });
+
+  const doSync = async (ctx: RepoCtx): Promise<SyncOutcome> => {
     const outcome = await syncRepo({
-      root,
-      db: getDb(),
-      indexDirPath: dir,
+      root: ctx.root,
+      db: ctx.db,
+      indexDirPath: ctx.dir,
       embedder: process.env.CX_NO_EMBED ? undefined : getEmbedder(),
       caps: DEFAULT_CAPS,
     });
     if (outcome.action === "rebuild-required" && outcome.reason !== "vector backfill in progress") {
       const run = await indexRepoStaged({
-        root,
-        db: getDb(),
-        indexDirPath: dir,
+        root: ctx.root,
+        db: ctx.db,
+        indexDirPath: ctx.dir,
         embedder: process.env.CX_NO_EMBED ? undefined : getEmbedder(),
         caps: DEFAULT_CAPS,
       });
@@ -83,14 +107,14 @@ export async function serveMcp(rootPath?: string): Promise<void> {
     return outcome;
   };
 
-  const maybeAutoSync = () => {
-    if (!autoSyncEnabled || performance.now() - lastSyncCheck < syncIntervalMs) return;
-    lastSyncCheck = performance.now();
+  const maybeAutoSync = (ctx: RepoCtx) => {
+    if (!autoSyncEnabled || performance.now() - ctx.lastSyncCheck < syncIntervalMs) return;
+    ctx.lastSyncCheck = performance.now();
     // Deferred so the triggering query's engine call runs first; the sync's
     // stat walk still shares the process, so on very large repos a
     // concurrent query can feel it. Queries are never queued behind syncs.
     setImmediate(() => {
-      const p = exclusive(doSync);
+      const p = exclusive(ctx, () => doSync(ctx));
       p?.catch((err) => console.error(`auto-sync failed: ${(err as Error).message}`));
     });
   };
@@ -100,8 +124,17 @@ export async function serveMcp(rootPath?: string): Promise<void> {
     content: [{ type: "text" as const, text: message }],
     isError: true,
   });
-  const noIndex = () =>
+  const noIndex = (root: string) =>
     fail(`no index for ${root} yet - call the reindex tool once (keyword search is live in seconds).`);
+
+  /** Marker attached to a query result when this call built the index. */
+  const autoIndexNote = (stats: IndexStats) => ({
+    files: stats.files,
+    chunks: stats.chunks,
+    note:
+      "no index existed - built one on this call; keyword search is live now" +
+      (stats.vectors === "building" ? " and vectors are backfilling in the background" : ""),
+  });
 
   const timed = <T,>(fn: () => T): { value: T; tookMs: number } => {
     const t0 = performance.now();
@@ -123,7 +156,13 @@ export async function serveMcp(rootPath?: string): Promise<void> {
         "cannot express at any budget.\n" +
         "- reindex - sync the index after the working tree changes.\n" +
         "Every result cites path plus line range; read the cited file region only when the chunk " +
-        "content is not already enough.",
+        "content is not already enough. For a question about how the code works, start with search " +
+        "and keep iterating with search rather than falling back to grep and whole-file reads: the " +
+        "ranked hits are already the relevant regions.\n" +
+        "Every tool takes an optional 'path' (an absolute repo root): omit it for the default repo, " +
+        "or set it to target a specific one when you're working across more than one repo in a session.\n" +
+        "If a result carries a 'partial' marker, the repo exceeded the index's file cap and some files " +
+        "were left out: treat a missing match as possibly-unindexed, not proof it's absent.",
     },
   );
 
@@ -138,24 +177,49 @@ export async function serveMcp(rootPath?: string): Promise<void> {
         "identifiers, error strings, function names, stemmed and scored) with semantic similarity " +
         "(renamed symbols, paraphrases, 'where is X handled'), so it works whether or not you know " +
         "the words. Each hit carries path, line range, and the chunk content with a relevance " +
-        "score, usually enough to answer without opening the file; if a hit is marked truncated, " +
-        "Read exactly its start-end range (offset/limit), not the whole file. If you only need to " +
-        "jump to one known identifier or literal string, a plain file/grep search is fine; reach " +
-        "for this when the answer needs understanding or crosses files. (Until the index's vector " +
-        "stage finishes, results are keyword-ranked and say so.)",
+        "score, usually enough to answer directly. When one search isn't enough, refine the query " +
+        "and search again: the index has already ranked the relevant regions, so iterating with " +
+        "search converges faster than switching to grep and reading whole files. Read a file only " +
+        "for a hit marked truncated, and only its cited start-end range (offset/limit). If you only " +
+        "need to jump to one known identifier or literal string, a plain file/grep search is fine; " +
+        "reach for this whenever the answer needs understanding or crosses files. (Until the index's " +
+        "vector stage finishes, results are keyword-ranked and say so.)",
       inputSchema: {
         query: z.string().describe("What you're looking for - terms, a phrase, or a description."),
         k: z.number().int().positive().max(50).default(6).describe("Maximum hits."),
+        path: z
+          .string()
+          .optional()
+          .describe(
+            "Absolute path to the repository root to search. Defaults to the server's configured root; " +
+              "set it to target a specific repo when a session spans more than one.",
+          ),
       },
     },
-    async ({ query, k }) => {
-      const handle = getHandle();
-      if (!handle) return noIndex();
-      maybeAutoSync();
+    async ({ query, k, path }) => {
+      let ctx: RepoCtx;
+      try {
+        ctx = repoFor(path);
+      } catch (err) {
+        return fail((err as Error).message);
+      }
+      let ensured: EnsureResult;
+      try {
+        ensured = await ensureIndexed(ctx, { autoIndexEnabled, getHandle, build: buildIndex });
+      } catch (err) {
+        return fail(`indexing failed: ${(err as Error).message}`);
+      }
+      if ("needsIndex" in ensured) return noIndex(ctx.root);
+      const { handle, autoIndexed } = ensured;
+      if (!autoIndexed) maybeAutoSync(ctx); // a fresh build is already current
       try {
         const t0 = performance.now();
         const result = await search(handle, getEmbedder(), query, k);
-        return ok({ ...result, took_ms: Math.round((performance.now() - t0) * 1000) / 1000 });
+        return ok({
+          ...result,
+          ...(autoIndexed ? { auto_indexed: autoIndexNote(autoIndexed) } : {}),
+          took_ms: Math.round((performance.now() - t0) * 1000) / 1000,
+        });
       } catch (err) {
         return fail(`search failed: ${(err as Error).message}`);
       }
@@ -186,16 +250,41 @@ export async function serveMcp(rootPath?: string): Promise<void> {
           .record(z.string())
           .optional()
           .describe('Map of placeholder name → query text, embedded server-side. E.g. {"q":"vector indexing"} fills {{q}}.'),
+        path: z
+          .string()
+          .optional()
+          .describe(
+            "Absolute path to the repository root to query. Defaults to the server's configured root; " +
+              "set it to target a specific repo when a session spans more than one.",
+          ),
       },
     },
-    async ({ query, embed }) => {
-      const handle = getHandle();
-      if (!handle) return noIndex();
-      maybeAutoSync();
+    async ({ query, embed, path }) => {
+      let ctx: RepoCtx;
+      try {
+        ctx = repoFor(path);
+      } catch (err) {
+        return fail((err as Error).message);
+      }
+      let ensured: EnsureResult;
+      try {
+        ensured = await ensureIndexed(ctx, { autoIndexEnabled, getHandle, build: buildIndex });
+      } catch (err) {
+        return fail(`indexing failed: ${(err as Error).message}`);
+      }
+      if ("needsIndex" in ensured) return noIndex(ctx.root);
+      const { handle, autoIndexed } = ensured;
+      if (!autoIndexed) maybeAutoSync(ctx); // a fresh build is already current
       try {
         const t0 = performance.now();
         const rows = await runSql(handle, getEmbedder(), query, embed as Record<string, string> | undefined);
-        return ok({ rows, took_ms: Math.round((performance.now() - t0) * 1000) / 1000 });
+        const partial = partialIndex(handle.manifest);
+        return ok({
+          rows,
+          ...(partial ? { partial } : {}),
+          ...(autoIndexed ? { auto_indexed: autoIndexNote(autoIndexed) } : {}),
+          took_ms: Math.round((performance.now() - t0) * 1000) / 1000,
+        });
       } catch (err) {
         return fail(`sql failed: ${(err as Error).message}`);
       }
@@ -215,27 +304,40 @@ export async function serveMcp(rootPath?: string): Promise<void> {
         "Pass full=true to force a rebuild from scratch. Returns what changed plus index status.",
       inputSchema: {
         full: z.boolean().optional().describe("Force a full rebuild instead of an incremental sync."),
+        path: z
+          .string()
+          .optional()
+          .describe(
+            "Absolute path to the repository root to index. Defaults to the server's configured root; " +
+              "set it to target a specific repo when a session spans more than one.",
+          ),
       },
     },
-    async ({ full }) => {
+    async ({ full, path }) => {
+      let ctx: RepoCtx;
+      try {
+        ctx = repoFor(path);
+      } catch (err) {
+        return fail((err as Error).message);
+      }
       try {
         const runFull = async () => {
           const run = await indexRepoStaged({
-            root,
-            db: getDb(),
-            indexDirPath: dir,
+            root: ctx.root,
+            db: ctx.db,
+            indexDirPath: ctx.dir,
             embedder: process.env.CX_NO_EMBED ? undefined : getEmbedder(),
             caps: DEFAULT_CAPS,
           });
           void run.completion; // backfills in-process; manifest flips to "ready"
           return ok({ status: "rebuilt - keyword search live; vectors backfilling", ...run.text });
         };
-        const result = exclusive(async () => {
+        const result = exclusive(ctx, async () => {
           if (full) return runFull();
           const outcome = await syncRepo({
-            root,
-            db: getDb(),
-            indexDirPath: dir,
+            root: ctx.root,
+            db: ctx.db,
+            indexDirPath: ctx.dir,
             embedder: process.env.CX_NO_EMBED ? undefined : getEmbedder(),
             caps: DEFAULT_CAPS,
           });
@@ -260,10 +362,10 @@ export async function serveMcp(rootPath?: string): Promise<void> {
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  const manifest: Manifest | undefined = readManifest(dir);
+  const manifest: Manifest | undefined = readManifest(indexDir(defaultRoot));
   console.error(
-    `code-context MCP server ready on stdio (root: ${root}, index: ${
+    `code-context MCP server ready on stdio (default root: ${defaultRoot}, index: ${
       manifest ? `${manifest.chunks} chunks, vectors ${manifest.vectors}` : "none yet"
-    }, embedder: ${embedderInfo()})`,
+    }, embedder: ${embedderInfo()}; tools accept an optional 'path' to target other repos)`,
   );
 }

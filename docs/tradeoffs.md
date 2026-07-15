@@ -53,3 +53,9 @@ stress fixtures, generated blobs) fall back to fixed-window chunking under a
 per-parse deadline so a single file cannot stall a run. Practical caps
 (`CX_MAX_FILES`, `CX_MAX_FILE_BYTES`) bound the work; see the
 [benchmark](benchmark.md) for indexing-at-scale timings.
+
+When a tree exceeds the file cap the index is partial, and it says so rather
+than pretending to be complete: `search` and `sql` results carry a `partial`
+marker (files skipped and the cap in effect), and `cx status` reports it. That
+turns "no match" into "no match in the indexed subset" - raise `CX_MAX_FILES`
+and re-index for full coverage.

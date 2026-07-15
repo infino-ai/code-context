@@ -29,6 +29,7 @@ export async function searchCmd(query: string, opts: SearchCmdOptions): Promise<
       return;
     }
     if (result.note) console.error(yellow(`note: ${result.note}`));
+    if (result.partial) console.error(yellow(`warning: ${result.partial.note}`));
     result.hits.forEach((h, i) => {
       console.log(
         `${bold(String(i + 1) + ".")} ${cyan(h.path)}${dim(`:${h.startLine}-${h.endLine}`)} ${dim(`(${result.ranking} ${h.score.toFixed(3)})`)}`,
@@ -98,6 +99,13 @@ export function statusCmd(opts: StatusCmdOptions): void {
   }
   console.log(`${bold("code-context")} - ${handle.root}`);
   console.log(`  chunks     ${fmtCount(m.chunks)} from ${fmtCount(m.files)} files`);
+  if (m.truncatedFiles) {
+    console.log(
+      yellow(
+        `  partial    ${fmtCount(m.truncatedFiles)} files over the ${fmtCount(m.maxFiles ?? 0)}-file cap were skipped (raise CX_MAX_FILES / --max-files)`,
+      ),
+    );
+  }
   console.log(`  vectors    ${m.vectors}${m.embedder ? dim(`  (${m.embedder.provider} ${m.embedder.model}, ${m.embedder.dim}d)`) : ""}`);
   console.log(`  indexed    ${fmtAge(m.indexedAt)}${dim(` (keyword ${fmtMs(m.indexMs)}${m.embedMs ? `, vectors ${fmtMs(m.embedMs)}` : ""})`)}`);
   const langs = Object.entries(m.languages)
