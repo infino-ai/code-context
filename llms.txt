@@ -40,14 +40,14 @@ logs, docs, and agent memory.
 
 ## Evidence
 
-- [Benchmark](docs/benchmark.md): real agent runs vs stock file tools. The
-  rule of thumb is that the more a question spans the repo, the more
-  retrieval saves: up to 22x fewer tokens on whole-repo questions, 55%
-  fewer tokens and 71% fewer tool calls across the codebase-Q&A suite, at
-  answer quality a blind pairwise judge could not tell apart. On pinpoint
-  symbol lookup, where a single grep is already cheap, it matches file
-  tools on accuracy rather than beating them on cost. Includes a
-  SWE-bench_Verified localization study and indexing-at-scale timings.
+- [Benchmark](docs/benchmark.md): real agent runs vs stock file tools
+  (claude-sonnet-4-6) on a repo the model has not memorized. The more a
+  question spans the repo, the more retrieval saves: across the suite ~32%
+  fewer tokens, ~53% fewer tool calls, ~32% less wall-clock time; on
+  aggregation questions ~43% fewer tokens and roughly 2x faster. Weaker
+  models tend to show larger savings. On pinpoint symbol lookup, where a
+  single grep is already cheap, it matches file tools rather than beating
+  them. Includes indexing-at-scale timings.
 - [Harness](bench/): reproduce every number on your own repo.
 - [Embedder eval](docs/embedder-eval.md): how the local embedding model
   was chosen.

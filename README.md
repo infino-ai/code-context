@@ -20,9 +20,9 @@ The rule of thumb: the more a question spans the repo, the more this saves,
 because the answer comes from a ranked index instead of pulling source into
 context one file at a time.
 
-**Up to 22× fewer tokens.** One query, "break this repo down by language,"
-is ~6K tokens with code-context versus ~140K reading files. The harness is
-in the repo, so you can reproduce it on your own codebase.
+**On your own codebase, ~30-40% fewer tokens and ~50% fewer tool calls**
+(so answers land faster too - aggregation questions run about 2× quicker).
+The harness is in the repo, so you can reproduce it on your own code.
 
 **Try it live (early preview):** ask questions about any public GitHub repo
 at [lantern.infino.ai](https://lantern.infino.ai), a demo agent that runs on
@@ -70,24 +70,27 @@ but are not CI-covered.
 
 ## Evaluation
 
-Real agent runs over a codebase-Q&A suite: same model (claude-opus-4-8),
-same turn budget, the same prompt for both lanes, stock file tools
-(Glob/Grep/Read/LS) as the baseline. Its sharpest edge is whole-repo
-relevance aggregation, which file tools cannot express at any budget:
-**up to 22× fewer tokens** (that "break down by language" query is ~6K vs
-~140K), and 6.5× on aggregation questions overall. Across the whole suite:
-**55% fewer tokens and 71% fewer tool calls**, at answer quality a blind
-pairwise judge could not tell apart (8 vs 12 of 20, within noise).
+Real agent runs over a codebase-Q&A suite (claude-sonnet-4-6, the same
+minimal prompt for both lanes), on a repo the model has not memorized -
+[infino](https://github.com/infino-ai/infino), the engine this is built on -
+because that is the realistic case for your private code. Baseline is stock
+file tools including Bash; the code-context lane is the same tools plus the
+MCP server. Measured on three axes:
 
-![Benchmark: tokens per question, code-context vs stock file tools](docs/benchmark-chart.png)
+![code-context vs stock file tools: reduction by metric](docs/benchmark-chart.png)
 
-| Metric | Stock file tools | With code-context | Improvement |
+| Category | Tokens | Tool calls | Wall time |
 |---|---|---|---|
-| Tokens per question | 63.2k | 28.3k | **-55%** |
-| Tool calls per question | 7.5 | 2.2 | **-71%** |
-| Cost per question | $0.174 | $0.102 | **-41%** |
-| Aggregation questions (tokens) | 51.1k | 7.9k | **-85%** |
-| Comprehension questions (tokens) | 81.3k | 59.0k | **-28%** |
+| Aggregation ("most code about X") | **-43%** | **-71%** | **-48%** |
+| Comprehension ("how does X work") | **-29%** | **-27%** | **-13%** |
+| Blended | **-32%** | **-53%** | **-32%** |
+
+Aggregation is the structural win - ranked search composed with `GROUP BY`,
+which file tools cannot express at any budget - and it roughly halves
+end-to-end time. These numbers are on a strong model; weaker, cheaper models
+explore less efficiently, so the savings tend to be **larger** there. On
+pinpoint symbol lookup, where a single grep is already cheap, an index
+matches file tools rather than beating them.
 
 Full methodology and per-question tables are in
 [docs/benchmark.md](docs/benchmark.md), with the harness in
