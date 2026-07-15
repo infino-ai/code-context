@@ -49,3 +49,7 @@ export const EMBED_BATCH = 32;
 /** IVF centroid count for the vector index. 1 = exact scan - perfect recall,
  * and at local-repo scale (tens of thousands of chunks) still milliseconds. */
 export const N_CENT = 1;
+
+/** Default number of search hits. Configurable per call (the `k` tool param /
+ * CLI `-k`) and via CX_SEARCH_K for config/CI-level defaults. */
+export const DEFAULT_SEARCH_K = Number(process.env.CX_SEARCH_K ?? 10);

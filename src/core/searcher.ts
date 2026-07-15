@@ -7,13 +7,13 @@
 //            (BM25) with semantic similarity (vectors, RRF) once vectors are
 //            ready; ranked keyword search until then. Hits carry chunk
 //            content, so answers come straight from results.
-//   sql    - the power door: read-only SQL over the index, including search
-//            table functions composed with GROUP BY, `regexp_like` for
-//            regex predicates, and {{name}} placeholders embedded
-//            server-side for the vector functions.
+//   sql    - the power door: read-only SQL over the index, built on the search
+//            table functions (bm25_search / hybrid_search) composed with
+//            GROUP BY, with {{name}} placeholders embedded server-side for the
+//            vector functions.
 
 import type { IndexHandle } from "./context.js";
-import { TABLE } from "./config.js";
+import { TABLE, DEFAULT_SEARCH_K } from "./config.js";
 import type { Embedder } from "./embedder.js";
 import type { Manifest } from "./manifest.js";
 
@@ -63,27 +63,9 @@ export interface SearchHit {
   truncated?: boolean;
 }
 
-/** Rank-adaptive content budget. The top hits carry full content so the
- * answer comes straight from them; lower-ranked hits are trimmed to a snippet
- * (their path:line + a `truncated` flag let the agent Read the rest only if a
- * top hit didn't already answer it). This keeps the ranked payload lean once an
- * agent leans on search, without starving the "answer without opening files"
- * behaviour that the top hits provide. All three are env-tunable for evaluation.
- *   CX_HIT_CONTENT_CAP - char cap for a full-content (top) hit
- *   CX_FULL_HITS       - how many hits get the full cap; the rest get the snippet
- *   CX_SNIPPET_CAP     - char cap for a trimmed (lower-ranked) hit */
-const HIT_CONTENT_CAP = Number(process.env.CX_HIT_CONTENT_CAP ?? 4000);
-const FULL_HITS = Number(process.env.CX_FULL_HITS ?? 2);
-const SNIPPET_CAP = Number(process.env.CX_SNIPPET_CAP ?? 1000);
-
-/** Trim to at most `cap` chars, preferring a line boundary so a snippet ends on
- * a whole line rather than mid-token. */
-function trimToCap(s: string, cap: number): string {
-  if (s.length <= cap) return s;
-  const slice = s.slice(0, cap);
-  const nl = slice.lastIndexOf("\n");
-  return nl > cap / 2 ? slice.slice(0, nl) : slice;
-}
+/** Per-hit content cap: enough to answer "how does X work" from the hit
+ * itself (a whole ~60-line chunk fits; only pathological chunks truncate). */
+const HIT_CONTENT_CAP = 4000;
 
 export interface SearchResult {
   query: string;
@@ -101,7 +83,7 @@ export async function search(
   handle: IndexHandle,
   embedder: Embedder,
   query: string,
-  k = 6,
+  k = DEFAULT_SEARCH_K,
 ): Promise<SearchResult> {
   const table = handle.db.openTable(TABLE);
   let rows: Array<Record<string, unknown>>;
@@ -124,18 +106,16 @@ export async function search(
   return {
     query,
     ranking,
-    hits: rows.map((r, i) => {
+    hits: rows.map((r) => {
       const full = String(r.content);
-      const cap = i < FULL_HITS ? HIT_CONTENT_CAP : SNIPPET_CAP;
-      const content = trimToCap(full, cap);
       return {
         path: String(r.path),
         startLine: Number(r.start_line),
         endLine: Number(r.end_line),
         lang: String(r.lang ?? ""),
         score: Number(r.score),
-        content,
-        ...(content.length < full.length ? { truncated: true } : {}),
+        content: full.slice(0, HIT_CONTENT_CAP),
+        ...(full.length > HIT_CONTENT_CAP ? { truncated: true } : {}),
       };
     }),
     ...(ranking === "keyword" && handle.manifest.vectors !== "ready"

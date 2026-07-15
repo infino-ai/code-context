@@ -19,7 +19,7 @@
     "The index is one table named chunks(path, start_line, end_line, lang, content[, embedding]) living in .infino/ inside the repo - plain files you can copy, cache in CI, or gitignore (add .infino/ to your .gitignore).",
     "The engine's search functions are SQL table functions, so one query can rank AND aggregate: SELECT path, SUM(end_line - start_line + 1) AS lines FROM bm25_search('chunks','content','<terms>', 300) GROUP BY path ORDER BY lines DESC.",
     "vector_search and hybrid_search table functions take a query vector via a {{name}} placeholder: pass an embed map like {\"q\": \"query text\"} and the server embeds it locally and substitutes the vector.",
-    "Regex matching goes through SQL: regexp_like(content, 'pattern') in a WHERE clause. There is no separate grep tool in the MCP surface.",
+    "The sql tool's power comes from the ranked search functions (bm25_search, hybrid_search) used as table-valued relations, so relevance-ranked search composes with GROUP BY aggregation in one query.",
     "Embedding is always local (a small transformers.js model downloaded once from huggingface.co); code never leaves the machine and no API key exists.",
     "SQL is read-only: a single SELECT or WITH statement. The index is a derived artifact - rebuild it with cx index, never mutate it through queries.",
     "Configuration is environment variables: CX_ROOT (repo root when not cwd), CX_INDEX_DIR (index location), CX_AUTO_SYNC=0 (disable background staleness sync), CX_NO_EMBED (keyword-only), CX_MAX_FILES / CX_MAX_FILE_BYTES (caps).",

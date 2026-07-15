@@ -27,8 +27,9 @@ logs, docs, and agent memory.
 - MCP tools (stdio): `search` (exact terms AND meaning, one ranked pass,
   hits carry chunk content with path:line ranges), `sql` (read-only
   SELECT/WITH over `chunks(path, start_line, end_line, lang, content)`,
-  search functions usable as table-valued relations, `regexp_like` for
-  regex), `reindex` (incremental sync; the server also auto-syncs in the
+  ranked search functions (bm25_search/hybrid_search) usable as table-valued
+  relations so search composes with GROUP BY), `reindex` (incremental sync;
+  the server also auto-syncs in the
   background). A `search`/`sql` on a never-indexed repo builds the index
   inline and answers on the same call (keyword live in seconds, vectors
   backfilling); `CX_AUTO_INDEX=0` restores a strict "index it first" error.

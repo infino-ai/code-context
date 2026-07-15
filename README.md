@@ -100,7 +100,7 @@ One index and a deliberately small tool surface for agents:
 | Tool | What it does | When agents use it |
 |---|---|---|
 | `search` | One ranked pass fusing exact keyword matching (BM25) with semantic similarity (reciprocal-rank fusion). Hits carry the chunk content, so answers come straight from results. | Understanding a subsystem or finding code by meaning across files; exact identifiers and paraphrases in the same call. (For one known symbol, a plain grep is fine.) |
-| `sql` | Read-only SQL over the index, including search functions as table-valued relations and `regexp_like` for regex. | Counts, rankings, aggregates over the whole repo in one query. |
+| `sql` | Read-only SQL over the index, with the ranked search functions (`bm25_search`/`hybrid_search`) usable as table-valued relations. | Counts, rankings, aggregates over the whole repo in one query. |
 | `reindex` | Incremental sync (the server also auto-syncs in the background). | After significant edits. |
 
 Three tools is a deliberate design: one way to find, one way to count, one

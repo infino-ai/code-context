@@ -4,7 +4,8 @@
 // The dedicated MCP server: three tools over one code index.
 //
 //   search  - find code: exact terms AND meaning in one ranked pass
-//   sql     - the power door (relevance-ranked aggregation, regexp_like)
+//   sql     - the power door: relevance-ranked aggregation over the search
+//             table functions (bm25_search / hybrid_search + GROUP BY)
 //   reindex - sync from the working tree; replies the moment keyword
 //             search is live and backfills vectors in-process
 //
@@ -18,7 +19,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { connect } from "@infino-ai/infino";
-import { indexDir, resolveRoot, TABLE, DEFAULT_CAPS } from "../core/config.js";
+import { indexDir, resolveRoot, TABLE, DEFAULT_CAPS, DEFAULT_SEARCH_K } from "../core/config.js";
 import { readManifest, type Manifest } from "../core/manifest.js";
 import type { IndexHandle } from "../core/context.js";
 import { search, runSql, jsonify, partialIndex } from "../core/searcher.js";
@@ -146,19 +147,24 @@ export async function serveMcp(rootPath?: string): Promise<void> {
     { name: "code-context", version: "0.1.1" },
     {
       instructions:
-        "code-context is a local ranked index over this repository, for questions whose answer " +
-        "spans the codebase rather than sitting at one known location. The more a question spans " +
-        "the repo, the more this beats crawling files into context. Three tools:\n" +
-        "- search - find code by meaning or terms across files, and understand how something works " +
-        "in one ranked pass. For jumping to a single known identifier or string, a plain grep is fine.\n" +
+        "code-context is a local ranked index over this repository - semantic + keyword search and " +
+        "SQL over the whole codebase. Reach for it whenever you need to understand or find code: " +
+        "understanding how a subsystem works, finding code by meaning or by exact term, gathering " +
+        "context before an edit, locating a bug or the code behind a behaviour, reviewing existing " +
+        "patterns, planning a refactor, understanding the architecture for feature work, or spotting " +
+        "similar/duplicate implementations. It is the primary tool for finding and understanding " +
+        "code here, for almost any question about this codebase. Three tools:\n" +
+        "- search - find code by meaning or terms across files and understand how something works, " +
+        "in one ranked pass.\n" +
         "- sql - counts, rankings, and aggregates over the whole repo in one query, including " +
         "relevance-ranked aggregation ('which files have the most code about X') that file tools " +
         "cannot express at any budget.\n" +
         "- reindex - sync the index after the working tree changes.\n" +
-        "Every result cites path plus line range; read the cited file region only when the chunk " +
-        "content is not already enough. For a question about how the code works, start with search " +
-        "and keep iterating with search rather than falling back to grep and whole-file reads: the " +
-        "ranked hits are already the relevant regions.\n" +
+        "Treat a hit's content as authoritative: when it answers the question, answer from it and " +
+        "cite path plus line range - you don't need to re-confirm with grep or by opening the file. " +
+        "Read a file only for a hit marked truncated (its cited range), or when the results genuinely " +
+        "don't cover the question. When one search isn't enough, refine the query and search again - " +
+        "the ranked hits are already the relevant regions.\n" +
         "Every tool takes an optional 'path' (an absolute repo root): omit it for the default repo, " +
         "or set it to target a specific one when you're working across more than one repo in a session.\n" +
         "If a result carries a 'partial' marker, the repo exceeded the index's file cap and some files " +
@@ -171,22 +177,24 @@ export async function serveMcp(rootPath?: string): Promise<void> {
     {
       title: "Code search (exact terms + meaning)",
       description:
-        "Ranked search for questions whose answer spans more than one file: understanding how a " +
-        "subsystem works, finding code by meaning when you don't know the identifier, tracing where " +
-        "something is handled across the repo. One pass fuses exact keyword matching (BM25: " +
-        "identifiers, error strings, function names, stemmed and scored) with semantic similarity " +
-        "(renamed symbols, paraphrases, 'where is X handled'), so it works whether or not you know " +
-        "the words. Each hit carries path, line range, and the chunk content with a relevance " +
-        "score, usually enough to answer directly. When one search isn't enough, refine the query " +
-        "and search again: the index has already ranked the relevant regions, so iterating with " +
-        "search converges faster than switching to grep and reading whole files. Read a file only " +
-        "for a hit marked truncated, and only its cited start-end range (offset/limit). If you only " +
-        "need to jump to one known identifier or literal string, a plain file/grep search is fine; " +
-        "reach for this whenever the answer needs understanding or crosses files. (Until the index's " +
-        "vector stage finishes, results are keyword-ranked and say so.)",
+        "Semantic + keyword code search over the indexed repository - a strong default for finding " +
+        "and understanding code. Use it to: understand how a subsystem or feature works, find code " +
+        "by meaning when you don't know the exact name, locate the code behind a behaviour or bug, " +
+        "gather context before making a change, review existing implementations and patterns, find " +
+        "everything a refactor would touch, understand the architecture for feature work, or spot " +
+        "similar/duplicate code. One pass fuses exact keyword matching (BM25: identifiers, error " +
+        "strings, function names, stemmed and scored) with semantic similarity (renamed symbols, " +
+        "paraphrases, 'where is X handled'), so it works whether or not you know the words. Each hit " +
+        "carries path, line range, and the chunk content with a relevance score - treat it as " +
+        "authoritative and answer directly from it, citing path plus line range; you don't need to " +
+        "re-confirm a hit with grep or by opening the file. When one search isn't enough, refine the " +
+        "query and search again - the index has already ranked the relevant regions. Read a file only " +
+        "for a hit marked truncated (its cited start-end range via offset/limit), or when results " +
+        "genuinely don't cover the question. (Until the index's vector stage finishes, results are " +
+        "keyword-ranked and say so.)",
       inputSchema: {
         query: z.string().describe("What you're looking for - terms, a phrase, or a description."),
-        k: z.number().int().positive().max(50).default(6).describe("Maximum hits."),
+        k: z.number().int().positive().max(50).default(DEFAULT_SEARCH_K).describe("Maximum hits."),
         path: z
           .string()
           .optional()
@@ -241,7 +249,8 @@ export async function serveMcp(rootPath?: string): Promise<void> {
         'embed map: {"q":"query text"}. The canonical move - "which files have the most code about ' +
         'X": SELECT path, SUM(end_line - start_line + 1) AS lines FROM ' +
         `bm25_search('${TABLE}','content','<terms>', 300) GROUP BY path ORDER BY lines DESC LIMIT 15. ` +
-        "regexp_like(content, 'pattern') works in WHERE. Read-only, single statement.",
+        "Build queries on bm25_search/hybrid_search so results are ranked by relevance to the topic, " +
+        "not on a raw scan of the whole table. Read-only, single statement.",
       inputSchema: {
         query: z
           .string()

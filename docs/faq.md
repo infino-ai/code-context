@@ -73,8 +73,8 @@ and re-index for full coverage.
 
 Three, by design: `search` (hybrid keyword + semantic retrieval, one ranked
 pass, hits carry chunk content with `path:line` ranges), `sql` (read-only
-`SELECT`/`WITH` over the index, with the engine's search functions usable as
-table-valued relations and `regexp_like` for regex), and `reindex`
+`SELECT`/`WITH` over the index, with the ranked search functions usable as
+table-valued relations so search composes with `GROUP BY`), and `reindex`
 (incremental sync). Every additional near-duplicate retrieval tool worsens an
 agent's tool selection, so the surface is kept deliberately small.
 

@@ -7,6 +7,7 @@
 import { Command } from "commander";
 import { indexCmd } from "./commands/index-cmd.js";
 import { searchCmd, sqlCmd, statusCmd } from "./commands/query-cmds.js";
+import { DEFAULT_SEARCH_K } from "./core/config.js";
 
 const program = new Command();
 
@@ -46,7 +47,7 @@ program
   .command("search")
   .description("find code: exact terms and meaning in one ranked pass")
   .argument("<query>", "what you're looking for")
-  .option("-k <n>", "maximum hits", "6")
+  .option("-k <n>", "maximum hits", String(DEFAULT_SEARCH_K))
   .option("--json", "machine-readable output")
   .option("-C, --path <dir>", "repo root (default: current directory)")
   .action(searchCmd);
