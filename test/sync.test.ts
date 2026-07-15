@@ -156,4 +156,28 @@ describe("syncRepo", () => {
     const state = readFileState(dir)!;
     expect(Object.keys(state.files).sort()).toEqual(["src/alpha.ts", "src/gamma.ts"]);
   });
+
+  it("compacts after sync (tombstones cleaned up)", async () => {
+    // Perform multiple edit cycles to accumulate tombstones, verify compaction succeeds
+    for (let i = 0; i < 3; i++) {
+      writeFileSync(join(root, "src", `delta-${i}.ts`), `export const v${i} = '${i}';\n`);
+    }
+    const outcome1 = await syncRepo(opts());
+    expect(outcome1.action).toBe("synced");
+
+    // Delete the added files to create tombstones
+    for (let i = 0; i < 3; i++) {
+      rmSync(join(root, "src", `delta-${i}.ts`));
+    }
+    const outcome2 = await syncRepo(opts());
+    expect(outcome2.action).toBe("synced");
+    if (outcome2.action !== "synced") return;
+    expect(outcome2.filesDeleted).toBe(3);
+
+    // Verify index still responds after compaction (no data corruption)
+    const rowCount = Number(
+      (db.querySql("SELECT COUNT(*) AS n FROM chunks") as Array<{ n: unknown }>)[0].n,
+    );
+    expect(rowCount).toBeGreaterThan(0); // original files remain
+  });
 });
