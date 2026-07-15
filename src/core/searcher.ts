@@ -15,6 +15,31 @@
 import type { IndexHandle } from "./context.js";
 import { TABLE } from "./config.js";
 import type { Embedder } from "./embedder.js";
+import type { Manifest } from "./manifest.js";
+
+/** Set when the index omitted files over the cap - the index is incomplete, so
+ * an absence in results is not proof of absence in the repo. */
+export interface PartialIndex {
+  filesSkipped: number;
+  fileCap: number;
+  note: string;
+}
+
+/** Build the partial-index marker from a manifest, or undefined when the whole
+ * tree was indexed. Shared by search (below) and the SQL path (server-side),
+ * so every query surfaces the same "results may be incomplete" signal. */
+export function partialIndex(manifest: Manifest): PartialIndex | undefined {
+  if (!manifest.truncatedFiles) return undefined;
+  const cap = manifest.maxFiles ?? 0;
+  return {
+    filesSkipped: manifest.truncatedFiles,
+    fileCap: cap,
+    note:
+      `${manifest.truncatedFiles} file(s) over the ${cap}-file cap were left out of the index, so ` +
+      "results may be incomplete - a missing match is not proof it's absent. Raise CX_MAX_FILES " +
+      "(CLI: --max-files) and re-index for full coverage.",
+  };
+}
 
 /** JSON.stringify that survives the engine's bigint row values. */
 export function jsonify(value: unknown, pretty = false): string {
@@ -38,9 +63,27 @@ export interface SearchHit {
   truncated?: boolean;
 }
 
-/** Per-hit content cap: enough to answer "how does X work" from the hit
- * itself (a whole ~60-line chunk fits; only pathological chunks truncate). */
-const HIT_CONTENT_CAP = 4000;
+/** Rank-adaptive content budget. The top hits carry full content so the
+ * answer comes straight from them; lower-ranked hits are trimmed to a snippet
+ * (their path:line + a `truncated` flag let the agent Read the rest only if a
+ * top hit didn't already answer it). This keeps the ranked payload lean once an
+ * agent leans on search, without starving the "answer without opening files"
+ * behaviour that the top hits provide. All three are env-tunable for evaluation.
+ *   CX_HIT_CONTENT_CAP - char cap for a full-content (top) hit
+ *   CX_FULL_HITS       - how many hits get the full cap; the rest get the snippet
+ *   CX_SNIPPET_CAP     - char cap for a trimmed (lower-ranked) hit */
+const HIT_CONTENT_CAP = Number(process.env.CX_HIT_CONTENT_CAP ?? 4000);
+const FULL_HITS = Number(process.env.CX_FULL_HITS ?? 2);
+const SNIPPET_CAP = Number(process.env.CX_SNIPPET_CAP ?? 1000);
+
+/** Trim to at most `cap` chars, preferring a line boundary so a snippet ends on
+ * a whole line rather than mid-token. */
+function trimToCap(s: string, cap: number): string {
+  if (s.length <= cap) return s;
+  const slice = s.slice(0, cap);
+  const nl = slice.lastIndexOf("\n");
+  return nl > cap / 2 ? slice.slice(0, nl) : slice;
+}
 
 export interface SearchResult {
   query: string;
@@ -48,6 +91,8 @@ export interface SearchResult {
   ranking: "hybrid" | "keyword";
   hits: SearchHit[];
   note?: string;
+  /** Present when the index omitted files over the cap - results may be incomplete. */
+  partial?: PartialIndex;
 }
 
 const PROJECTION = ["path", "start_line", "end_line", "lang", "content", "score"];
@@ -79,21 +124,27 @@ export async function search(
   return {
     query,
     ranking,
-    hits: rows.map((r) => {
+    hits: rows.map((r, i) => {
       const full = String(r.content);
+      const cap = i < FULL_HITS ? HIT_CONTENT_CAP : SNIPPET_CAP;
+      const content = trimToCap(full, cap);
       return {
         path: String(r.path),
         startLine: Number(r.start_line),
         endLine: Number(r.end_line),
         lang: String(r.lang ?? ""),
         score: Number(r.score),
-        content: full.slice(0, HIT_CONTENT_CAP),
-        ...(full.length > HIT_CONTENT_CAP ? { truncated: true } : {}),
+        content,
+        ...(content.length < full.length ? { truncated: true } : {}),
       };
     }),
     ...(ranking === "keyword" && handle.manifest.vectors !== "ready"
       ? { note: "vectors not ready yet - keyword-ranked only (re-run `cx index` or wait for the vector stage to finish)" }
       : {}),
+    ...(() => {
+      const partial = partialIndex(handle.manifest);
+      return partial ? { partial } : {};
+    })(),
   };
 }
 

@@ -8,8 +8,8 @@
 // never changes, so SQL written against `chunks` keeps working across stages;
 // the manifest records how far the index has progressed.
 
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { readFileSync, appendFileSync, existsSync } from "node:fs";
+import { join, relative, sep } from "node:path";
 import { IndexSpec, type Connection, type OptimizeOptions } from "@infino-ai/infino";
 import { APPEND_BATCH, EMBED_BATCH, N_CENT, TABLE, DEFAULT_CAPS, type IndexCaps } from "./config.js";
 import { walkRepo } from "./walker.js";
@@ -46,6 +46,8 @@ export interface IndexStats {
   chunks: number;
   /** Candidate files left out because the repo exceeded the file cap. */
   truncatedFiles?: number;
+  /** The file cap in effect for this build (context for `truncatedFiles`). */
+  maxFiles: number;
   languages: Record<string, number>;
   vectors: VectorState;
   indexMs: number;
@@ -83,6 +85,9 @@ export async function indexRepoStaged(opts: IndexOptions): Promise<StagedIndexRu
   const { root, db, indexDirPath, embedder, onPhase, onProgress } = opts;
   const caps = opts.caps ?? DEFAULT_CAPS;
   const t0 = performance.now();
+
+  // Keep the index out of the user's commits before we write a byte of it.
+  ensureIndexIgnored(root, indexDirPath);
 
   // --- scan + chunk ---------------------------------------------------------
   onPhase?.("scan");
@@ -135,6 +140,7 @@ export async function indexRepoStaged(opts: IndexOptions): Promise<StagedIndexRu
     files,
     chunks: chunks.length,
     ...(truncatedFiles > 0 ? { truncatedFiles } : {}),
+    maxFiles: caps.maxFiles,
     languages,
     vectors: embedder ? "building" : "none",
     indexMs,
@@ -209,6 +215,9 @@ export interface SyncResult {
   /** Post-sync totals. */
   files: number;
   chunks: number;
+  /** Files still left un-indexed because the tree exceeds the file cap (0 when
+   * the whole tree fits). Recomputed each sync so it tracks a growing repo. */
+  truncatedFiles: number;
   vectors: VectorState;
   tookMs: number;
 }
@@ -246,9 +255,9 @@ export async function syncRepo(opts: IndexOptions): Promise<SyncOutcome> {
 
   // --- diff -------------------------------------------------------------------
   onPhase?.("scan");
-  const candidates = walkRepo(root)
-    .filter((f) => shouldIndexFile(f.path) && f.size <= caps.maxFileBytes)
-    .slice(0, caps.maxFiles);
+  const walked = walkRepo(root).filter((f) => shouldIndexFile(f.path) && f.size <= caps.maxFileBytes);
+  const candidates = walked.slice(0, caps.maxFiles);
+  const truncatedFiles = walked.length - candidates.length;
   const buffers = new Map<string, Buffer>();
   const diff = diffFiles(candidates, prev, (path) => {
     try {
@@ -262,6 +271,21 @@ export async function syncRepo(opts: IndexOptions): Promise<SyncOutcome> {
 
   if (diff.added.length === 0 && diff.changed.length === 0 && diff.deleted.length === 0) {
     writeFileState(indexDirPath, diff.next); // refresh stat fingerprints
+    // Files added or removed *beyond* the cap never show up in the diff (the
+    // candidate list is already capped), so the truncation count can change
+    // while the indexed content doesn't. Reconcile the manifest when it drifts,
+    // otherwise the "index is partial" marker goes stale.
+    if (truncatedFiles !== (manifest.truncatedFiles ?? 0)) {
+      const reconciled: Manifest = { ...manifest };
+      if (truncatedFiles > 0) {
+        reconciled.truncatedFiles = truncatedFiles;
+        reconciled.maxFiles = caps.maxFiles;
+      } else {
+        delete reconciled.truncatedFiles;
+        delete reconciled.maxFiles;
+      }
+      writeManifest(indexDirPath, reconciled);
+    }
     return {
       action: "noop",
       filesAdded: 0,
@@ -271,6 +295,7 @@ export async function syncRepo(opts: IndexOptions): Promise<SyncOutcome> {
       chunksRemoved: 0,
       files: manifest.files,
       chunks: manifest.chunks,
+      truncatedFiles,
       vectors: manifest.vectors,
       tookMs: Math.round(performance.now() - t0),
     };
@@ -333,6 +358,16 @@ export async function syncRepo(opts: IndexOptions): Promise<SyncOutcome> {
     languages,
     indexedAt: new Date().toISOString(),
   };
+  // Track truncation as the tree grows or shrinks: set the fields when files
+  // are now over the cap, clear the stale ones (spread from `manifest`) when
+  // the tree has dropped back under it.
+  if (truncatedFiles > 0) {
+    nextManifest.truncatedFiles = truncatedFiles;
+    nextManifest.maxFiles = caps.maxFiles;
+  } else {
+    delete nextManifest.truncatedFiles;
+    delete nextManifest.maxFiles;
+  }
   writeManifest(indexDirPath, nextManifest);
 
   // --- compact after deletes/appends to keep tombstones clean ---
@@ -347,6 +382,7 @@ export async function syncRepo(opts: IndexOptions): Promise<SyncOutcome> {
     chunksRemoved,
     files: nextManifest.files,
     chunks: nextManifest.chunks,
+    truncatedFiles,
     vectors: nextManifest.vectors,
     tookMs: Math.round(performance.now() - t0),
   };
@@ -368,6 +404,40 @@ function compact(table: { optimize(opts?: OptimizeOptions): void; gc(graceSecs: 
   }
 }
 
+/** Keep the on-disk index out of version control. On a build, add the index
+ * directory to the repo-root `.gitignore` when the repo is a git checkout and
+ * the dir isn't already ignored. Best-effort and idempotent: it never fails a
+ * build, and does nothing when the index lives outside the repo (a custom
+ * CX_INDEX_DIR) since there's nothing in the tree to ignore. */
+function ensureIndexIgnored(root: string, indexDirPath: string): void {
+  try {
+    const rel = relative(root, indexDirPath);
+    // Index lives outside the repo tree (custom CX_INDEX_DIR) - nothing to ignore.
+    if (!rel || rel === "" || rel.startsWith("..")) return;
+    // Only manage a .gitignore inside an actual git checkout (dir or worktree file).
+    if (!existsSync(join(root, ".git"))) return;
+
+    const entry = rel.split(sep).join("/").replace(/\/+$/, "");
+    const gitignorePath = join(root, ".gitignore");
+    let current = "";
+    try {
+      current = readFileSync(gitignorePath, "utf8");
+    } catch {
+      /* no .gitignore yet - we'll create one */
+    }
+    const already = current
+      .split(/\r?\n/)
+      .map((l) => l.trim().replace(/^\/+/, "").replace(/\/+$/, ""))
+      .some((l) => l === entry);
+    if (already) return;
+
+    const prefix = current.length === 0 || current.endsWith("\n") ? "" : "\n";
+    appendFileSync(gitignorePath, `${prefix}${entry}/\n`);
+  } catch {
+    /* read-only tree, permissions, etc. - never fail indexing over .gitignore */
+  }
+}
+
 function toTextRow(c: Chunk) {
   return {
     path: c.path,
@@ -386,6 +456,7 @@ function toManifest(stats: IndexStats, embedder?: Manifest["embedder"]): Manifes
     ...(embedder ? { embedder } : {}),
     files: stats.files,
     chunks: stats.chunks,
+    ...(stats.truncatedFiles ? { truncatedFiles: stats.truncatedFiles, maxFiles: stats.maxFiles } : {}),
     languages: stats.languages,
     indexedAt: new Date().toISOString(),
     indexMs: stats.indexMs,

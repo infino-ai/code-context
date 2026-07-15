@@ -30,6 +30,13 @@ export interface Manifest {
   embedder?: EmbedderInfo;
   files: number;
   chunks: number;
+  /** Files left un-indexed because the repo exceeded the file cap. Absent when
+   * the whole tree fit (the common case) - its presence means the index is
+   * partial and query results may be incomplete. */
+  truncatedFiles?: number;
+  /** The file cap in effect when `truncatedFiles` was recorded, for context in
+   * the "index is partial" warning. Only meaningful alongside `truncatedFiles`. */
+  maxFiles?: number;
   /** Chunk count per language tag. */
   languages: Record<string, number>;
   indexedAt: string;
