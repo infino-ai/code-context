@@ -1,0 +1,18 @@
+[
+  { "cat": "aggregation", "q": "Which files have the most code related to the core write path (append, commit, flush, seal)? Ranked list with a short reason each." },
+  { "cat": "aggregation", "q": "Which files have the most code about search and indexing (bm25, vector, query execution)? Ranked." },
+  { "cat": "aggregation", "q": "Which files have the most code about compaction? Ranked list." },
+  { "cat": "aggregation", "q": "Which files have the most code about the write-ahead log (WAL)? Ranked." },
+  { "cat": "aggregation", "q": "Which files have the most code about the vector index? Ranked list with reasons." },
+  { "cat": "aggregation", "q": "Which files have the most code about SQL query execution and planning? Ranked." },
+  { "cat": "aggregation", "q": "Which files have the most code about the manifest and catalog? Ranked." },
+  { "cat": "aggregation", "q": "Which files have the most code about the full-text-search (FTS) index? Ranked list." },
+  { "cat": "aggregation", "q": "What are the 10 largest Rust source files by lines of code?" },
+  { "cat": "aggregation", "q": "Break down the crate by top-level module: which directories under src/ have the most code?" },
+  { "cat": "comprehension", "q": "How does the write-ahead log (WAL) work in this codebase, from append to replay?" },
+  { "cat": "comprehension", "q": "How does compaction decide which superfiles to merge, and how does it run?" },
+  { "cat": "comprehension", "q": "How does hybrid search combine BM25 and vector results into one ranked list?" },
+  { "cat": "comprehension", "q": "Where is the atomic commit implemented and how does it keep readers consistent?" },
+  { "cat": "comprehension", "q": "How is the vector (IVF) index built and queried?" },
+  { "cat": "comprehension", "q": "How does incremental indexing work end to end when a file changes?" }
+]
