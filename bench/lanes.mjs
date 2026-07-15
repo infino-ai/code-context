@@ -9,7 +9,7 @@ export const BENCH = dirname(fileURLToPath(import.meta.url));
 export const WORK = join(BENCH, ".work");
 export const RESULTS = join(WORK, "results");
 export const CX = resolve(BENCH, "..", "dist", "cli.js");
-export const MODEL = process.env.BENCH_MODEL ?? "claude-opus-4-8";
+export const MODEL = process.env.BENCH_MODEL ?? "claude-sonnet-4-6";
 
 /** Lane options: identical hermetic base, only the toolset differs.
  *   cx    - the MCP tools plus Read (retrieval via the index)
@@ -21,7 +21,7 @@ export function laneOptions(lane, repoDir, indexDir) {
   if (lane === "cx" || lane === "combo") {
     return {
       ...hermetic,
-      tools: lane === "combo" ? ["Glob", "Grep", "Read", "LS"] : ["Read"],
+      tools: lane === "combo" ? ["Glob", "Grep", "Read", "LS", "Bash"] : ["Read"],
       mcpServers: {
         "code-context": {
           command: "node",
@@ -34,12 +34,12 @@ export function laneOptions(lane, repoDir, indexDir) {
       },
     };
   }
-  // stock file-tool lane
-  return { ...hermetic, tools: ["Glob", "Grep", "Read", "LS"] };
+  // stock file-tool lane (Bash included: real Claude Code has it)
+  return { ...hermetic, tools: ["Glob", "Grep", "Read", "LS", "Bash"] };
 }
 
 /** Run one agent conversation; returns the measured record. */
-export async function runLane({ lane, prompt, system, repoDir, indexDir, maxTurns = 10 }) {
+export async function runLane({ lane, prompt, system, repoDir, indexDir, maxTurns = 50 }) {
   const t0 = performance.now();
   const toolCalls = [];
   let usage = null;

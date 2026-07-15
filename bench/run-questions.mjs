@@ -9,7 +9,6 @@ import { runLane, record } from "./lanes.mjs";
 const DEFAULT_QUESTIONS = [
   "Which files have the most code?",
   "Break down the codebase by language.",
-  "How many indexed chunks are there per language? Give the counts.",
   "What are the 10 largest source files by lines of code?",
   "Which files have the most code related to the project's core write path?",
   "Which files have the most code about search or indexing?",
