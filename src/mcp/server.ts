@@ -144,7 +144,7 @@ export async function serveMcp(rootPath?: string): Promise<void> {
   };
 
   const server = new McpServer(
-    { name: "code-context", version: "0.1.1" },
+    { name: "code-context", version: "0.1.2" },
     {
       instructions:
         "code-context is a local ranked index over this repository - semantic + keyword search and " +

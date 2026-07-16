@@ -18,7 +18,7 @@ program
       "Keyword search seconds after `cx index`; semantic and hybrid search when vectors\n" +
       "finish backfilling; SQL with relevance-ranked aggregation over the whole repo.",
   )
-  .version("0.1.1")
+  .version("0.1.2")
   .addHelpText(
     "after",
     `
