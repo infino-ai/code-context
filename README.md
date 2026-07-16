@@ -77,7 +77,7 @@ because that is the realistic case for your private code. Baseline is stock
 file tools including Bash; the code-context lane is the same tools plus the
 MCP server. Measured on three axes:
 
-![code-context vs stock file tools: reduction by metric](docs/benchmark-chart.png)
+![code-context vs stock file tools: tool calls, wall time, and tokens](docs/benchmark-chart.png)
 
 | Category | Tokens | Tool calls | Wall time |
 |---|---|---|---|
@@ -102,7 +102,7 @@ One index and a deliberately small tool surface for agents:
 
 | Tool | What it does | When agents use it |
 |---|---|---|
-| `search` | One ranked pass fusing exact keyword matching (BM25) with semantic similarity (reciprocal-rank fusion). Hits carry the chunk content, so answers come straight from results. | Understanding a subsystem or finding code by meaning across files; exact identifiers and paraphrases in the same call. (For one known symbol, a plain grep is fine.) |
+| `search` | One ranked pass fusing exact keyword matching (BM25) with semantic similarity (reciprocal-rank fusion). Hits carry the chunk content, so answers come straight from results. | A strong default for finding and understanding code: how a subsystem works, code by meaning or exact term, context before a change, similar implementations - exact identifiers and paraphrases in the same call. |
 | `sql` | Read-only SQL over the index, with the ranked search functions (`bm25_search`/`hybrid_search`) usable as table-valued relations. | Counts, rankings, aggregates over the whole repo in one query. |
 | `reindex` | Incremental sync (the server also auto-syncs in the background). | After significant edits. |
 
@@ -224,6 +224,7 @@ no restart, no per-repo config.
 | Variable | Default | Purpose |
 |---|---|---|
 | `CX_INDEX_DIR` | `<repo>/.infino` | where the index lives |
+| `CX_SEARCH_K` | 10 | default number of hits `search` returns (also settable per call and via the CLI `-k` flag) |
 | `CX_MAX_FILES` / `CX_MAX_FILE_BYTES` | 20000 / 1MB | indexing caps (files over the file cap are left out; `search`/`sql` then flag the index as partial so an absence isn't read as proof) |
 | `CX_ROOT` | current directory | default repo root for the MCP server / CLI when not run from the repo (each tool call can override it with a `path` argument) |
 | `CX_AUTO_INDEX` | on | `0` makes a query on an unindexed repo error instead of building the index inline on the first `search`/`sql` |
