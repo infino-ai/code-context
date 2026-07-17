@@ -231,6 +231,13 @@ no restart, no per-repo config.
 | `CX_AUTO_SYNC` | on | `0` disables the MCP server's background staleness sync |
 | `CX_SYNC_INTERVAL_SECS` | 30 | auto-sync debounce between staleness checks |
 | `CX_NO_EMBED` | off | keyword-only mode for the MCP server (skip the vector stage) |
+| `CX_NO_RECEIPT` | off | `1` turns off usage accounting - the per-call receipt on results and the `cx usage` ledger |
+
+Every `search` / `sql` result carries a **usage receipt** - a terse, local line
+showing the tokens it returned, the files it spanned, and a running session
+total (e.g. `returned ~1.2k tokens | 4 chunks / 3 files | session ~8.4k over 7
+queries`). Every figure is a `~` estimate, computed in-process - nothing about
+your queries or code leaves the machine.
 
 ## CLI
 
@@ -247,8 +254,43 @@ cx index [path]           sync the index (incremental; --full rebuilds, --watch 
 cx search <query>         exact terms + meaning, one ranked pass           (-k hits)
 cx sql <statement>        read-only SQL; --embed q="text" fills {{q}}
 cx status                 what the index holds, how fresh, vector readiness
+cx usage                  ledger of queries run and what each returned  (-n, --all, --clear, --json)
 cx mcp                    serve the MCP tools over stdio
 ```
+
+`cx usage` reads the local ledger at `.infino/usage.jsonl` - every `search` /
+`sql` (from the CLI or the MCP server) appends one line recording the query and
+a compact summary of what came back (paths and line ranges for search, row
+count for sql), plus the token figures from the receipt. It's a deterministic,
+model-independent view of what went through the index - no running server or
+agent needed to read it back. `CX_NO_RECEIPT=1` turns off both the inline
+receipt and this ledger.
+
+### How often does the agent actually reach for it?
+
+`cx usage` can also show, per session, in how many of your prompts code-context
+was used - e.g. `code-context used in 2 of 3 prompts (2 calls)`. The MCP server
+can only count its own calls, not your prompts, so this ratio comes from two
+Claude Code hooks that keep a local tally (nothing is sent anywhere). Add them
+to your Claude Code settings (`~/.claude/settings.json` or a project
+`.claude/settings.json`):
+
+```json
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      { "hooks": [{ "type": "command", "command": "cx usage --hook" }] }
+    ],
+    "PostToolUse": [
+      { "matcher": "mcp__code-context.*", "hooks": [{ "type": "command", "command": "cx usage --hook" }] }
+    ]
+  }
+}
+```
+
+`cx usage --hook` reads the event on stdin, updates `.infino/prompt-stats.json`,
+and prints nothing. If you run code-context via `npx`, use
+`npx -y @infino-ai/code-context usage --hook` as the command.
 
 ## What it is, and what it isn't
 
