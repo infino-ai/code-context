@@ -6,7 +6,7 @@
 
 import { Command } from "commander";
 import { indexCmd } from "./commands/index-cmd.js";
-import { searchCmd, sqlCmd, statusCmd } from "./commands/query-cmds.js";
+import { searchCmd, sqlCmd, statusCmd, usageCmd } from "./commands/query-cmds.js";
 import { DEFAULT_SEARCH_K } from "./core/config.js";
 
 const program = new Command();
@@ -73,6 +73,17 @@ program
   .option("--hook", "one-line output for a SessionStart hook (silent when unindexed)")
   .option("-C, --path <dir>", "repo root (default: current directory)")
   .action(statusCmd);
+
+program
+  .command("usage")
+  .description("show the local ledger of queries run and what each returned (from .infino/usage.jsonl)")
+  .option("-n <count>", "how many recent queries to list", "20")
+  .option("--all", "list every recorded query, not just the most recent")
+  .option("--clear", "delete the usage log")
+  .option("--hook", "internal: consume a Claude Code hook event on stdin and update the prompt/invocation counters")
+  .option("--json", "machine-readable output")
+  .option("-C, --path <dir>", "repo root (default: current directory)")
+  .action(usageCmd);
 
 program
   .command("mcp")

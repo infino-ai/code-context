@@ -39,6 +39,12 @@
           "description": "Set (1/true/yes) for keyword-only mode - skip the vector stage entirely.",
           "isRequired": false,
           "format": "string"
+        },
+        {
+          "name": "CX_NO_RECEIPT",
+          "description": "Set (1/true/yes) to turn off local usage accounting: the per-call receipt on results and the cx usage ledger. Optional - on by default, computed locally, nothing leaves the machine.",
+          "isRequired": false,
+          "format": "string"
         }
       ]
     }

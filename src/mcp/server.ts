@@ -23,6 +23,7 @@ import { indexDir, resolveRoot, TABLE, DEFAULT_CAPS, DEFAULT_SEARCH_K } from "..
 import { readManifest, type Manifest } from "../core/manifest.js";
 import type { IndexHandle } from "../core/context.js";
 import { search, runSql, jsonify, partialIndex } from "../core/searcher.js";
+import { newSession, receiptEnabled, searchEntry, sqlEntry, formatReceipt, recordUsage } from "../core/usage.js";
 import { indexRepoStaged, syncRepo, type SyncOutcome, type IndexStats } from "../core/indexer.js";
 import { createEmbedder, embedderInfo, type Embedder } from "../core/embedder.js";
 import { RepoRegistry, type RepoCtx } from "./repos.js";
@@ -61,6 +62,13 @@ export async function serveMcp(rootPath?: string): Promise<void> {
   // on the same call (staged: keyword search live in seconds). Off restores the
   // strict "index it first" error.
   const autoIndexEnabled = !["0", "false", "no"].includes((process.env.CX_AUTO_INDEX ?? "").toLowerCase());
+
+  // A terse, local, factual receipt appended to each query result (tokens
+  // returned, files touched, whole-file size it stood in for, session running
+  // total). Default on - the trust signal only works when it's there; silence
+  // it with CX_NO_RECEIPT. One accumulator per session (this long-lived process).
+  const receiptOn = receiptEnabled();
+  const session = newSession();
 
   /** Run an index mutation on a repo exclusively; null if one is in flight. */
   const exclusive = <T,>(ctx: RepoCtx, fn: () => Promise<T>): Promise<T> | null => {
@@ -168,7 +176,10 @@ export async function serveMcp(rootPath?: string): Promise<void> {
         "Every tool takes an optional 'path' (an absolute repo root): omit it for the default repo, " +
         "or set it to target a specific one when you're working across more than one repo in a session.\n" +
         "If a result carries a 'partial' marker, the repo exceeded the index's file cap and some files " +
-        "were left out: treat a missing match as possibly-unindexed, not proof it's absent.",
+        "were left out: treat a missing match as possibly-unindexed, not proof it's absent.\n" +
+        "Each result carries a 'usage' receipt (tokens returned, chunks/files, and a session running " +
+        "total) - computed locally, nothing leaves the machine. Surface it to the user so they can see " +
+        "how much context the ranked results put into the conversation.",
     },
   );
 
@@ -191,7 +202,9 @@ export async function serveMcp(rootPath?: string): Promise<void> {
         "query and search again - the index has already ranked the relevant regions. Read a file only " +
         "for a hit marked truncated (its cited start-end range via offset/limit), or when results " +
         "genuinely don't cover the question. (Until the index's vector stage finishes, results are " +
-        "keyword-ranked and say so.)",
+        "keyword-ranked and say so.) The result includes a 'usage' field - a one-line receipt " +
+        "(tokens returned, chunks/files, session total). After you " +
+        "answer, end your reply by showing that 'usage' line to the user verbatim.",
       inputSchema: {
         query: z.string().describe("What you're looking for - terms, a phrase, or a description."),
         k: z.number().int().positive().max(50).default(DEFAULT_SEARCH_K).describe("Maximum hits."),
@@ -223,10 +236,17 @@ export async function serveMcp(rootPath?: string): Promise<void> {
       try {
         const t0 = performance.now();
         const result = await search(handle, getEmbedder(), query, k);
+        let usage: string | undefined;
+        if (receiptOn) {
+          const entry = searchEntry(result, ctx.root);
+          recordUsage(ctx.dir, entry);
+          usage = formatReceipt(entry, session);
+        }
         return ok({
           ...result,
           ...(autoIndexed ? { auto_indexed: autoIndexNote(autoIndexed) } : {}),
           took_ms: Math.round((performance.now() - t0) * 1000) / 1000,
+          ...(usage ? { usage } : {}),
         });
       } catch (err) {
         return fail(`search failed: ${(err as Error).message}`);
@@ -250,7 +270,9 @@ export async function serveMcp(rootPath?: string): Promise<void> {
         'X": SELECT path, SUM(end_line - start_line + 1) AS lines FROM ' +
         `bm25_search('${TABLE}','content','<terms>', 300) GROUP BY path ORDER BY lines DESC LIMIT 15. ` +
         "Build queries on bm25_search/hybrid_search so results are ranked by relevance to the topic, " +
-        "not on a raw scan of the whole table. Read-only, single statement.",
+        "not on a raw scan of the whole table. Read-only, single statement. The result includes a " +
+        "'usage' field - a one-line receipt (tokens returned, rows, session total). After " +
+        "you answer, end your reply by showing that 'usage' line to the user verbatim.",
       inputSchema: {
         query: z
           .string()
@@ -288,11 +310,18 @@ export async function serveMcp(rootPath?: string): Promise<void> {
         const t0 = performance.now();
         const rows = await runSql(handle, getEmbedder(), query, embed as Record<string, string> | undefined);
         const partial = partialIndex(handle.manifest);
+        let usage: string | undefined;
+        if (receiptOn) {
+          const entry = sqlEntry(query, rows);
+          recordUsage(ctx.dir, entry);
+          usage = formatReceipt(entry, session);
+        }
         return ok({
           rows,
           ...(partial ? { partial } : {}),
           ...(autoIndexed ? { auto_indexed: autoIndexNote(autoIndexed) } : {}),
           took_ms: Math.round((performance.now() - t0) * 1000) / 1000,
+          ...(usage ? { usage } : {}),
         });
       } catch (err) {
         return fail(`sql failed: ${(err as Error).message}`);
