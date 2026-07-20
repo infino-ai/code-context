@@ -1,0 +1,15 @@
+{
+  "description": "One continuous developer session (shared context via resume) that mimics a real morning: comms/planning drift, git chores, a docs lookup, and a concept refresher interleaved between the actual codebase questions. Tests whether code-context still gets auto-invoked on the codebase turns AFTER context has drifted through other MCP servers and tools, and correctly stays out of the non-repo turns. `expect`: fire = code-context should be used; nofire = it should not; ambiguous = either.",
+  "turns": [
+    { "id": "slack-catchup",   "expect": "nofire",    "topic": "comms drift",    "q": "Morning. Anything urgent I missed overnight in our team Slack?" },
+    { "id": "calendar",        "expect": "nofire",    "topic": "planning drift",  "q": "What meetings do I have on my calendar today?" },
+    { "id": "git-status",      "expect": "nofire",    "topic": "git chore",       "q": "I'm working in the infino repo. What branch am I on and is anything uncommitted?" },
+    { "id": "vitest-docs",     "expect": "nofire",    "topic": "library docs",    "q": "Quick one - how do I make Vitest run only the tests affected by changed files?" },
+    { "id": "hybrid-scoring",  "expect": "fire",      "topic": "codebase",        "q": "Ok, back to the code. How does hybrid search here fuse the BM25 and vector scores?" },
+    { "id": "segment-merge",   "expect": "fire",      "topic": "codebase",        "q": "And where does the segment merge logic actually live?" },
+    { "id": "hnsw-concept",    "expect": "nofire",    "topic": "concept drift",   "q": "Remind me - what's the practical difference between HNSW and IVF for vector indexes?" },
+    { "id": "sql-param-parse", "expect": "fire",      "topic": "codebase",        "q": "Is there already code in this repo that parses SQL query parameters, or would I be writing it from scratch?" },
+    { "id": "tokenization-agg","expect": "fire",      "topic": "codebase",        "q": "Which files carry the most of the tokenization logic?" },
+    { "id": "slack-writeup",   "expect": "nofire",    "topic": "comms drift",     "q": "Nice. Draft a two-line summary of what we just found that I could drop in Slack." }
+  ]
+}

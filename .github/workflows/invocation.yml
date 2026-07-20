@@ -1,0 +1,40 @@
+name: Invocation bench (manual)
+
+# Manual-only: runs real Claude agent sessions (costs Anthropic tokens), so it
+# never runs on a schedule or per PR - trigger it from the Actions tab when you
+# want fresh tool-invocation numbers. Report-only; it prints recall/specificity
+# to the log and does not gate anything.
+#
+# Requires the ANTHROPIC_API_KEY repo secret. Note: this is a partial-fidelity
+# run - a CI runner has no ~/.claude config, so code-context is injected via
+# INJECT_LOCAL_CX and competes only against the built-in file tools, not your
+# real MCP set. The faithful "all my MCPs loaded" run is `node bench/run-session.mjs`
+# on your own machine.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  invocation:
+    name: Session-drift invocation (report-only)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install + build code-context
+        run: |
+          npm ci
+          npm run build
+      - name: Clone + index the infino corpus
+        run: |
+          git clone --depth 1 https://github.com/infino-ai/infino /tmp/infino
+          node dist/cli.js index /tmp/infino
+      - name: Install bench deps
+        run: npm install --prefix bench
+      - name: Run realistic-session invocation
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          INJECT_LOCAL_CX: "1"
+        run: node bench/run-session.mjs /tmp/infino
