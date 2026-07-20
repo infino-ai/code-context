@@ -94,10 +94,11 @@ indexable.
 
 ### Which MCP clients work?
 
-Any MCP client, over stdio. In Claude Code:
-`claude mcp add code-context -- npx -y @infino-ai/code-context mcp`. Codex,
-Gemini CLI, Windsurf, Cline, and others use the standard
-stdio config in the README.
+Any MCP client, over stdio. In Claude Code (recommended form, since `alwaysLoad`
+keeps the tools in view when many MCP servers are configured):
+`claude mcp add-json code-context -s user '{"command":"npx","args":["-y","@infino-ai/code-context","mcp"],"alwaysLoad":true}'`
+(or install the plugin; see the README). Codex, Gemini CLI, Windsurf, Cline,
+and others use the standard stdio config in the README.
 
 ### What is it built on?
 

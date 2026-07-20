@@ -1,6 +1,6 @@
 {
   "name": "@infino-ai/code-context",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "mcpName": "io.github.infino-ai/code-context",
   "description": "Local code search for AI coding agents: a CLI and MCP server with hybrid keyword + semantic search and SQL relevance-ranked aggregation over an index that lives in plain files. No accounts, no keys, no server.",
   "license": "Apache-2.0",

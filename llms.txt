@@ -22,8 +22,10 @@ logs, docs, and agent memory.
 
 - Install: `npm install -g @infino-ai/code-context` (bins `code-context`
   and `cx`), then `cx index` in a repo.
-- Zero-install for Claude Code:
-  `claude mcp add code-context -- npx -y @infino-ai/code-context mcp`.
+- Zero-install for Claude Code (recommended; `alwaysLoad` keeps the tools in
+  view when many MCP servers are configured):
+  `claude mcp add-json code-context -s user '{"command":"npx","args":["-y","@infino-ai/code-context","mcp"],"alwaysLoad":true}'`.
+  A Claude Code plugin (`/plugin marketplace add infino-ai/code-context`) bakes the same config in.
 - MCP tools (stdio): `search` (exact terms AND meaning, one ranked pass,
   hits carry chunk content with path:line ranges), `sql` (read-only
   SELECT/WITH over `chunks(path, start_line, end_line, lang, content)`,

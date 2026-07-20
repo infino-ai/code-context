@@ -1,0 +1,14 @@
+{
+  "name": "infino-ai",
+  "owner": { "name": "Infino AI" },
+  "metadata": {
+    "description": "Infino AI's marketplace of Claude Code plugins. Currently code-context (local codebase search for coding agents), with more to come."
+  },
+  "plugins": [
+    {
+      "name": "code-context",
+      "source": "./",
+      "description": "Local hybrid keyword + semantic search and SQL over your codebase, for coding agents."
+    }
+  ]
+}
