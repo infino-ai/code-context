@@ -56,8 +56,16 @@ the same engine handles logs, docs, and agent memory.
 Add it to Claude Code with one command, nothing to install:
 
 ```
-claude mcp add code-context -- npx -y @infino-ai/code-context mcp
+claude mcp add-json code-context -s user '{"command":"npx","args":["-y","@infino-ai/code-context","mcp"],"alwaysLoad":true}'
 ```
+
+The `alwaysLoad` flag keeps code-context's three tools in the agent's view. In
+a setup with many MCP servers, clients defer tool definitions behind a
+tool-search step, and the agent can miss the index and fall back to plain file
+search; `alwaysLoad` pins this small tool set so it reaches for the index
+directly. Prefer the shorter form and don't need that? `claude mcp add
+code-context -- npx -y @infino-ai/code-context mcp` works too (tools stay
+deferred). There's also a [plugin](#setup-for-agents) that bakes this in.
 
 Then just ask a question about the code. The first `search` or `sql` on an
 unindexed repo builds the index inline and answers on the same call: keyword
@@ -155,7 +163,33 @@ agent.
 <summary><strong>Claude Code</strong></summary>
 
 ```bash
-claude mcp add code-context -- npx -y @infino-ai/code-context mcp
+claude mcp add-json code-context -s user '{"command":"npx","args":["-y","@infino-ai/code-context","mcp"],"alwaysLoad":true}'
+```
+
+`alwaysLoad: true` pins code-context's tools into context so the agent reaches
+for the index directly. In sessions with many MCP servers Claude Code defers
+tool definitions behind a tool-search step; without `alwaysLoad` the agent can
+miss code-context and fall back to grep/read. It's a small, always-loaded set
+(three tools), so this is the recommended setup. Omit it (or use the shorter
+`claude mcp add code-context -- npx -y @infino-ai/code-context mcp`) if you'd
+rather leave the tools deferred.
+
+**Or install as a plugin** for the same effect with `alwaysLoad` already set,
+nothing to paste into a config:
+
+```
+/plugin marketplace add infino-ai/code-context
+/plugin install code-context@infino-ai
+```
+
+Use *either* the plugin or the `add-json` command, not both. They register the
+same `code-context` server, so running both just collides.
+
+**For a team,** commit a project-scoped `.mcp.json` at the repo root so
+everyone gets it (after the one-time project-server approval):
+
+```json
+{ "mcpServers": { "code-context": { "command": "npx", "args": ["-y", "@infino-ai/code-context", "mcp"], "alwaysLoad": true } } }
 ```
 
 </details>
