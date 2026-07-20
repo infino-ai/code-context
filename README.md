@@ -53,19 +53,27 @@ the same engine handles logs, docs, and agent memory.
 
 ## Quick start
 
-Add it to Claude Code with one command, nothing to install:
+Install the Claude Code plugin - nothing to paste into a config:
+
+```
+/plugin marketplace add infino-ai/code-context
+/plugin install code-context@infino-ai
+```
+
+It registers code-context's three tools with `alwaysLoad` already set, so the
+agent keeps them in view and reaches for the index directly instead of falling
+back to plain file search.
+
+Not on Claude Code, or prefer a one-line command? Add it as an MCP server:
 
 ```
 claude mcp add-json code-context -s user '{"command":"npx","args":["-y","@infino-ai/code-context","mcp"],"alwaysLoad":true}'
 ```
 
-The `alwaysLoad` flag keeps code-context's three tools in the agent's view. In
-a setup with many MCP servers, clients defer tool definitions behind a
-tool-search step, and the agent can miss the index and fall back to plain file
-search; `alwaysLoad` pins this small tool set so it reaches for the index
-directly. Prefer the shorter form and don't need that? `claude mcp add
-code-context -- npx -y @infino-ai/code-context mcp` works too (tools stay
-deferred). There's also a [plugin](#setup-for-agents) that bakes this in.
+The `alwaysLoad` flag pins this small tool set so that in a setup with many MCP
+servers - where clients defer tool definitions behind a tool-search step - the
+agent doesn't miss the index and fall back to plain file search. (Use *either*
+the plugin or this command, not both.)
 
 Then just ask a question about the code. The first `search` or `sql` on an
 unindexed repo builds the index inline and answers on the same call: keyword
@@ -162,6 +170,16 @@ agent.
 <details>
 <summary><strong>Claude Code</strong></summary>
 
+**Install as a plugin** - `alwaysLoad` already set, nothing to paste into a
+config:
+
+```
+/plugin marketplace add infino-ai/code-context
+/plugin install code-context@infino-ai
+```
+
+**Or register it as an MCP server** directly:
+
 ```bash
 claude mcp add-json code-context -s user '{"command":"npx","args":["-y","@infino-ai/code-context","mcp"],"alwaysLoad":true}'
 ```
@@ -170,17 +188,8 @@ claude mcp add-json code-context -s user '{"command":"npx","args":["-y","@infino
 for the index directly. In sessions with many MCP servers Claude Code defers
 tool definitions behind a tool-search step; without `alwaysLoad` the agent can
 miss code-context and fall back to grep/read. It's a small, always-loaded set
-(three tools), so this is the recommended setup. Omit it (or use the shorter
-`claude mcp add code-context -- npx -y @infino-ai/code-context mcp`) if you'd
-rather leave the tools deferred.
-
-**Or install as a plugin** for the same effect with `alwaysLoad` already set,
-nothing to paste into a config:
-
-```
-/plugin marketplace add infino-ai/code-context
-/plugin install code-context@infino-ai
-```
+(three tools). Omit it (or use the shorter `claude mcp add code-context -- npx
+-y @infino-ai/code-context mcp`) if you'd rather leave the tools deferred.
 
 Use *either* the plugin or the `add-json` command, not both. They register the
 same `code-context` server, so running both just collides.
