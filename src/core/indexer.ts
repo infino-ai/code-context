@@ -13,8 +13,8 @@ import { join, relative, sep } from "node:path";
 import { IndexSpec, type Connection, type OptimizeOptions } from "@infino-ai/infino";
 import { APPEND_BATCH, EMBED_BATCH, N_CENT, TABLE, DEFAULT_CAPS, type IndexCaps } from "./config.js";
 import { walkRepo } from "./walker.js";
-import { shouldIndexFile, chunkFile, looksBinary, type Chunk } from "./chunker.js";
-import { readManifest, writeManifest, type Manifest, type VectorState } from "./manifest.js";
+import { shouldIndexFile, chunkFile, looksBinary, embedText, type Chunk } from "./chunker.js";
+import { readManifest, writeManifest, INDEX_FORMAT_VERSION, type Manifest, type VectorState } from "./manifest.js";
 import {
   diffFiles,
   emptyFileState,
@@ -61,6 +61,7 @@ const TEXT_SCHEMA = {
   start_line: "int32",
   end_line: "int32",
   lang: "large_utf8",
+  symbol: "large_utf8",
   content: "large_utf8",
 } as const;
 
@@ -160,7 +161,7 @@ export async function indexRepoStaged(opts: IndexOptions): Promise<StagedIndexRu
       const vectors: number[][] = [];
       for (let i = 0; i < chunks.length; i += EMBED_BATCH) {
         const batch = chunks.slice(i, i + EMBED_BATCH);
-        vectors.push(...(await embedder.embed(batch.map((c) => c.content))));
+        vectors.push(...(await embedder.embed(batch.map(embedText))));
         onProgress?.(Math.min(i + EMBED_BATCH, chunks.length), chunks.length);
       }
 
@@ -316,7 +317,7 @@ export async function syncRepo(opts: IndexOptions): Promise<SyncOutcome> {
     vectors = [];
     for (let i = 0; i < freshChunks.length; i += EMBED_BATCH) {
       const batch = freshChunks.slice(i, i + EMBED_BATCH);
-      vectors.push(...(await embedder.embed(batch.map((c) => c.content))));
+      vectors.push(...(await embedder.embed(batch.map(embedText))));
       opts.onProgress?.(Math.min(i + EMBED_BATCH, freshChunks.length), freshChunks.length);
     }
   }
@@ -444,13 +445,14 @@ function toTextRow(c: Chunk) {
     start_line: c.startLine,
     end_line: c.endLine,
     lang: c.lang,
+    symbol: c.symbol ?? "",
     content: c.content,
   };
 }
 
 function toManifest(stats: IndexStats, embedder?: Manifest["embedder"]): Manifest {
   return {
-    version: 1,
+    version: INDEX_FORMAT_VERSION,
     table: TABLE,
     vectors: stats.vectors,
     ...(embedder ? { embedder } : {}),
