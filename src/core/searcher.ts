@@ -59,6 +59,8 @@ export interface SearchHit {
   lang: string;
   score: number;
   content: string;
+  /** Definition name(s) in this chunk (e.g. "parseConfig"), when known. */
+  symbol?: string;
   /** Set when content was capped - Read path:startLine-endLine for the rest. */
   truncated?: boolean;
 }
@@ -77,7 +79,7 @@ export interface SearchResult {
   partial?: PartialIndex;
 }
 
-const PROJECTION = ["path", "start_line", "end_line", "lang", "content", "score"];
+const PROJECTION = ["path", "start_line", "end_line", "lang", "symbol", "content", "score"];
 
 export async function search(
   handle: IndexHandle,
@@ -114,6 +116,7 @@ export async function search(
         endLine: Number(r.end_line),
         lang: String(r.lang ?? ""),
         score: Number(r.score),
+        ...(r.symbol ? { symbol: String(r.symbol) } : {}),
         content: full.slice(0, HIT_CONTENT_CAP),
         ...(full.length > HIT_CONTENT_CAP ? { truncated: true } : {}),
       };

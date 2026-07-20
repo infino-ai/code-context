@@ -16,7 +16,43 @@ export interface Chunk {
   startLine: number;
   endLine: number;
   lang: string;
+  /** Raw file bytes for this line range - what results return, cited as
+   * path:start-end. Never enriched, so the citation stays exact. */
   content: string;
+  /** Definition name(s) starting in this chunk (e.g. "parseConfig"); for
+   * markdown, the heading text. Absent for fixed-window / unparsed chunks. */
+  symbol?: string;
+  /** Coarse kind of the primary definition: function/class/method/... */
+  kind?: string;
+  /** Enclosing breadcrumb of the primary definition (e.g. "ConfigLoader"). */
+  scope?: string;
+}
+
+/** A definition site found in the AST: where it starts and how to name it. */
+interface DefSite {
+  row: number; // 0-based
+  name: string;
+  kind: string;
+  scope: string;
+}
+
+/** The text we embed / index for a chunk: a compact, deterministic context
+ * header (path + breadcrumb + symbol) prepended to the raw content. The header
+ * is never returned - it only sharpens the vector, the way Anthropic's
+ * contextual retrieval does, but built from the AST instead of an LLM. */
+// CX_EMBED_RAW=1 embeds raw content only (no path/symbol header) - an eval lever
+// for A/B-ing enrichment, in the spirit of CX_EMBED_MODEL.
+const RAW_EMBED = ["1", "true", "yes"].includes((process.env.CX_EMBED_RAW ?? "").toLowerCase());
+
+/** The text we embed / index for a chunk: a compact, deterministic context
+ * header (path + breadcrumb + symbol) prepended to the raw content, which
+ * sharpens the vector - Anthropic-style contextual retrieval, built from the
+ * AST rather than an LLM. The header is never returned; results keep the raw
+ * content, so citations stay exact. */
+export function embedText(c: Chunk): string {
+  if (RAW_EMBED) return c.content;
+  const crumb = [c.scope, c.symbol].filter(Boolean).join(" › ");
+  return crumb ? `${c.path}\n${crumb}\n${c.content}` : `${c.path}\n${c.content}`;
 }
 
 // Window tuning: target is the preferred chunk size; a single syntactic unit
@@ -96,6 +132,7 @@ const TS_GRAMMAR: Record<string, string> = {
   ts: "typescript", tsx: "tsx", js: "javascript",
   py: "python", rs: "rust", go: "go", java: "java",
   c: "cpp", cpp: "cpp", rb: "ruby", cs: "c-sharp", php: "php",
+  sh: "bash", css: "css", ps1: "powershell",
 };
 
 // Node types whose start lines become chunk break points, per grammar.
@@ -133,6 +170,17 @@ const DEF_TYPES: Record<string, Set<string>> = {
     "function_definition", "method_declaration", "class_declaration",
     "interface_declaration", "trait_declaration",
   ]),
+  // Shell: break at function definitions (scripts are otherwise flat).
+  bash: new Set(["function_definition"]),
+  // CSS: break at each rule set and at-rule block; packSegments coalesces
+  // small rules into windows, so this doesn't over-fragment.
+  css: new Set([
+    "rule_set", "media_statement", "keyframes_statement",
+    "supports_statement", "at_rule", "import_statement",
+  ]),
+  // PowerShell: functions (nested under statement_list, found by the recursive
+  // collect); class_statement is harmless when the grammar lacks it.
+  powershell: new Set(["function_statement", "class_statement"]),
 };
 DEF_TYPES.tsx = DEF_TYPES.typescript;
 
@@ -150,9 +198,11 @@ type TSParser = {
 };
 type TSNode = {
   type: string;
+  text: string;
   startPosition: { row: number };
   endPosition: { row: number };
   namedChildren: TSNode[];
+  childForFieldName(name: string): TSNode | null;
 };
 
 let runtime: Promise<{ Parser: new () => TSParser; Language: { load(path: string): Promise<unknown> } }> | null = null;
@@ -196,9 +246,10 @@ function getLanguage(grammar: string): Promise<unknown | null> {
   return lang;
 }
 
-/** Break points (0-based rows) at definition starts, or undefined when the
- * language has no grammar or parsing fails. */
-async function syntacticBreaks(lang: string, content: string): Promise<number[] | undefined> {
+/** Definition sites (0-based start row + name/kind/scope), or undefined when
+ * the language has no grammar or parsing fails. The rows drive chunk break
+ * points; the names/scope enrich the embed text. */
+async function syntacticDefs(lang: string, content: string): Promise<DefSite[] | undefined> {
   const grammar = TS_GRAMMAR[lang];
   if (!grammar || content.length > PARSE_CAP_BYTES) return undefined;
   if (parseFailures >= MAX_PARSE_FAILURES) return undefined;
@@ -218,9 +269,9 @@ async function syntacticBreaks(lang: string, content: string): Promise<number[] 
     });
     if (!tree) return undefined;
     const defs = DEF_TYPES[grammar];
-    const rows = new Set<number>();
-    collect(tree.rootNode, defs, rows, 0);
-    return [...rows].sort((a, b) => a - b);
+    const sites: DefSite[] = [];
+    collectDefs(tree.rootNode, defs, [], sites, 0);
+    return sites.sort((a, b) => a.row - b.row);
   } catch {
     parseFailures++;
     parser = null; // a failed parser instance is not trusted again
@@ -231,12 +282,45 @@ async function syntacticBreaks(lang: string, content: string): Promise<number[] 
 // Depth cap keeps this to module/class/method level, not local closures.
 const MAX_DEPTH = 6;
 
-function collect(node: TSNode, defs: Set<string>, rows: Set<number>, depth: number): void {
+function collectDefs(node: TSNode, defs: Set<string>, scope: string[], sites: DefSite[], depth: number): void {
   if (depth > MAX_DEPTH) return;
   for (const child of node.namedChildren) {
-    if (defs.has(child.type)) rows.add(child.startPosition.row);
-    collect(child, defs, rows, depth + 1);
+    if (defs.has(child.type)) {
+      const name = nameOf(child);
+      sites.push({ row: child.startPosition.row, name, kind: kindOf(child.type), scope: scope.join(" › ") });
+      collectDefs(child, defs, name ? [...scope, name] : scope, sites, depth + 1);
+    } else {
+      collectDefs(child, defs, scope, sites, depth + 1);
+    }
   }
+}
+
+/** Best-effort definition name: the grammar's `name` field, else the first
+ * identifier-ish named child (covers declarator-wrapped names like C++). */
+function nameOf(node: TSNode): string {
+  const clip = (s: string) => s.split("\n")[0].trim().slice(0, 80);
+  const named = node.childForFieldName?.("name");
+  if (named?.text) return clip(named.text);
+  for (const c of node.namedChildren) {
+    if (/identifier|name|selectors/.test(c.type)) return clip(c.text);
+  }
+  return "";
+}
+
+/** Coarse kind from a grammar node type - only used to flavour the embed
+ * header, so a loose match is fine. */
+function kindOf(type: string): string {
+  if (/class/.test(type)) return "class";
+  if (/interface/.test(type)) return "interface";
+  if (/struct/.test(type)) return "struct";
+  if (/enum/.test(type)) return "enum";
+  if (/trait/.test(type)) return "trait";
+  if (/impl/.test(type)) return "impl";
+  if (/namespace|module|mod_item/.test(type)) return "module";
+  if (/method/.test(type)) return "method";
+  if (/function/.test(type)) return "function";
+  if (/rule_set|keyframes|media/.test(type)) return "rule";
+  return "def";
 }
 
 // --- chunk assembly ----------------------------------------------------------
@@ -287,15 +371,41 @@ function packSegments(lines: string[], breakRows: number[]): Array<[number, numb
   return spans;
 }
 
-/** Markdown: break at #/##/### headings, then pack like code segments. */
-function markdownBreaks(lines: string[]): number[] {
-  const rows: number[] = [];
+/** Markdown: break at #/##/### headings; each heading becomes a def site whose
+ * name is the heading text and scope is the ancestor-heading breadcrumb. */
+function markdownDefs(lines: string[]): DefSite[] {
+  const sites: DefSite[] = [];
+  const stack: Array<{ level: number; name: string }> = [];
   let inFence = false;
   for (let i = 0; i < lines.length; i++) {
-    if (/^\s*(```|~~~)/.test(lines[i])) inFence = !inFence;
-    else if (!inFence && /^#{1,3}\s/.test(lines[i])) rows.push(i);
+    if (/^\s*(```|~~~)/.test(lines[i])) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) continue;
+    const m = lines[i].match(/^(#{1,3})\s+(.*)/);
+    if (!m) continue;
+    const level = m[1].length;
+    const name = m[2].trim().slice(0, 80);
+    while (stack.length && stack[stack.length - 1].level >= level) stack.pop();
+    sites.push({ row: i, name, kind: "section", scope: stack.map((s) => s.name).join(" › ") });
+    stack.push({ level, name });
   }
-  return rows;
+  return sites;
+}
+
+/** The primary symbol/kind/scope for a chunk: the definition sites that *start*
+ * within the chunk's line range. A continuation window of a large definition
+ * has none, and that's fine - it just carries no symbol. */
+function spanMeta(defs: DefSite[], startLine: number, endLine: number): Partial<Chunk> | undefined {
+  const inSpan = defs.filter((d) => d.row + 1 >= startLine && d.row + 1 <= endLine);
+  if (inSpan.length === 0) return undefined;
+  const names = [...new Set(inSpan.map((d) => d.name).filter(Boolean))];
+  return {
+    symbol: names.join(", ").slice(0, 120) || undefined,
+    kind: inSpan[0].kind,
+    scope: inSpan[0].scope || undefined,
+  };
 }
 
 export async function chunkFile(path: string, content: string): Promise<Chunk[]> {
@@ -303,21 +413,22 @@ export async function chunkFile(path: string, content: string): Promise<Chunk[]>
   const lang = langFor(path);
   const lines = content.split("\n");
 
+  let defs: DefSite[] | undefined;
   let spans: Array<[number, number]>;
   if (lang === "md") {
-    spans = packSegments(lines, markdownBreaks(lines));
+    defs = markdownDefs(lines);
+    spans = packSegments(lines, defs.map((d) => d.row));
   } else {
-    const breaks = await syntacticBreaks(lang, content);
-    spans = breaks !== undefined && breaks.length > 0
-      ? packSegments(lines, breaks)
-      : fixedWindows(lines, 1);
+    defs = await syntacticDefs(lang, content);
+    spans = defs && defs.length > 0 ? packSegments(lines, defs.map((d) => d.row)) : fixedWindows(lines, 1);
   }
 
   const chunks: Chunk[] = [];
   for (const [startLine, endLine] of spans) {
     const text = lines.slice(startLine - 1, endLine).join("\n");
     if (!text.trim()) continue;
-    chunks.push({ path, startLine, endLine, lang, content: text });
+    const meta = defs ? spanMeta(defs, startLine, endLine) : undefined;
+    chunks.push({ path, startLine, endLine, lang, content: text, ...meta });
   }
   return chunks;
 }

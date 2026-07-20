@@ -11,6 +11,11 @@ import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { MANIFEST_NAME, TABLE } from "./config.js";
 
+/** On-disk index format. Bump when the table schema or the embedded text
+ * changes so old indexes are treated as absent and rebuilt, never mixed:
+ *   1 -> 2: added the `symbol` column and enriched (contextual) embed text. */
+export const INDEX_FORMAT_VERSION = 2;
+
 /** How far the vector half of the index has progressed. */
 export type VectorState = "none" | "building" | "ready";
 
@@ -23,7 +28,7 @@ export interface EmbedderInfo {
 }
 
 export interface Manifest {
-  version: 1;
+  version: number;
   /** Table name the index lives in (always `chunks` today). */
   table: string;
   vectors: VectorState;
@@ -54,7 +59,9 @@ export function readManifest(indexDirPath: string): Manifest | undefined {
   try {
     const raw = readFileSync(manifestPath(indexDirPath), "utf8");
     const parsed = JSON.parse(raw) as Manifest;
-    if (parsed.version !== 1 || typeof parsed.table !== "string") return undefined;
+    // A manifest from an older format reads as absent, so the index rebuilds
+    // rather than being queried with a stale schema / raw-embedded vectors.
+    if (parsed.version !== INDEX_FORMAT_VERSION || typeof parsed.table !== "string") return undefined;
     return parsed;
   } catch {
     return undefined;
@@ -68,7 +75,7 @@ export function writeManifest(indexDirPath: string, manifest: Manifest): void {
 
 export function emptyManifest(): Manifest {
   return {
-    version: 1,
+    version: INDEX_FORMAT_VERSION,
     table: TABLE,
     vectors: "none",
     files: 0,
