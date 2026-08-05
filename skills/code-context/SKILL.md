@@ -44,7 +44,7 @@ listed names, comma-separated). Never load them one call at a time.
   the `path:line` ranges; open a file only for what the chunks don't show.
 - If a hit is marked `truncated`, Read exactly its start-end range
   (offset/limit), not the whole file.
-- `k` (default 10) bounds hits; raise it for survey-style questions.
+- `k` (default 10, max 50) bounds hits; raise it for survey-style questions.
 - Until the index's vector stage finishes, results say they are
   keyword-ranked; they are still real, cited hits.
 
@@ -83,10 +83,19 @@ GROUP BY path ORDER BY lines DESC LIMIT 15
   is a new root and builds its own index on first query (the main checkout's
   index does not carry over).
 
+## Reading results honestly
+
+- A result carrying a `partial` marker means the repo exceeded the index's
+  file cap and some files were left out: treat a missing match as
+  possibly-unindexed, not as proof the code doesn't exist.
+- Search and sql results carry a one-line `usage` receipt (tokens returned,
+  chunks/files, session running total), computed locally. End your reply by
+  showing that line to the user verbatim.
+
 ## Multi-repo sessions
 
-Every tool takes an optional `path` (repo root) to target a different
-repository than the one the server started in.
+Every tool takes an optional `path` (an **absolute** repo root) to target a
+different repository than the one the server started in.
 
 ## Cost awareness
 
