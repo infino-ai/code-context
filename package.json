@@ -63,5 +63,11 @@
     "@types/node": "^20",
     "typescript": "^5",
     "vitest": "^3"
+  },
+  "overrides": {
+    "sharp": "^0.35.3",
+    "onnxruntime-node": {
+      "adm-zip": "0.6.0"
+    }
   }
 }
