@@ -37,7 +37,9 @@ npm test          # vitest - unit + engine-integration tests, no network needed
 
 Publishing is release-driven and automated. Maintainers:
 
-1. Bump `version` in `package.json` on `main`.
+1. Bump the version on `main` in `package.json`, `.claude-plugin/plugin.json`,
+   and the `npx` pin in `.mcp.json` (`test/plugin.test.ts` keeps the three in
+   lockstep).
 2. Create a GitHub release with tag `vX.Y.Z` matching that version.
 3. CI publishes to npm (with provenance) and the MCP Registry. A tag that
    does not match `package.json` fails fast.
