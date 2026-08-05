@@ -46,6 +46,14 @@ export const APPEND_BATCH = 512;
 /** Chunks embedded per model call. */
 export const EMBED_BATCH = 32;
 
+/** Character cap on the text handed to the embedding model per chunk. The
+ * model truncates to its token window anyway (256 tokens for the default
+ * MiniLM), so anything past a few thousand characters never influences the
+ * vector - but it DOES size the tokenizer/ONNX arenas. Capping here bounds
+ * arena growth on pathological inputs (minified bundles, single-line data
+ * files) without changing retrieval. */
+export const EMBED_MAX_CHARS = Number(process.env.CX_EMBED_MAX_CHARS ?? 8000);
+
 /** IVF centroid count for the vector index. 1 = exact scan - perfect recall,
  * and at local-repo scale (tens of thousands of chunks) still milliseconds. */
 export const N_CENT = 1;
