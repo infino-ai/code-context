@@ -591,6 +591,12 @@ export async function syncRepo(opts: IndexOptions): Promise<SyncOutcome> {
     };
   }
 
+  // Sweep crash leftovers on every sync, INCLUDING ones about to no-op: on an
+  // unchanging repo the no-op path is the only code that ever runs again, and
+  // a crashed build's spill would otherwise sit in the index dir forever.
+  // One readdir, throttled upstream by the auto-sync interval.
+  sweepStaleSpills(indexDirPath);
+
   // --- diff -------------------------------------------------------------------
   onPhase?.("scan");
   const walked = walkRepo(root).filter((f) => shouldIndexFile(f.path) && f.size <= caps.maxFileBytes);
@@ -641,7 +647,6 @@ export async function syncRepo(opts: IndexOptions): Promise<SyncOutcome> {
 
   // --- chunk the touched files into a spill --------------------------------------
   onPhase?.("chunk");
-  sweepStaleSpills(indexDirPath);
   const spill = newSpill(indexDirPath);
   try {
     let chunksAdded = 0;

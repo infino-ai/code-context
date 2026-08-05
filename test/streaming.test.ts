@@ -6,7 +6,7 @@
 // the on-disk spills - and the spills must vanish when the vector stage
 // settles, success or failure. Fixtures are sized past APPEND_BATCH so the
 // multi-wave paths actually run; fake embedders keep CI off the network.
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -270,6 +270,28 @@ describe("review-confirmed regressions", () => {
     expect(outcome.action).toBe("synced");
     expect(phases).toEqual(["scan", "chunk", "embed", "commit-text"]);
     expect(progressed).toBeGreaterThan(0);
+  });
+});
+
+describe("crash-leftover spills on a quiet repo", () => {
+  it("a no-op sync sweeps stale foreign spills but spares young ones", async () => {
+    await indexRepo({ root, db, indexDirPath: dir, embedder: float32Fake });
+
+    // Leftovers from a "crashed" foreign process: same layout, alien pid-token.
+    const stale = join(dir, "spill.99999-deadbe.1.chunks.ndjson");
+    const young = join(dir, "spill.99999-deadbe.2.chunks.ndjson");
+    writeFileSync(stale, '{"fake":1}\n');
+    writeFileSync(young, '{"fake":1}\n');
+    const dayAgo = new Date(Date.now() - 25 * 60 * 60 * 1000);
+    utimesSync(stale, dayAgo, dayAgo);
+
+    const outcome = await syncRepo({ root, db, indexDirPath: dir, embedder: float32Fake });
+    expect(outcome.action).toBe("noop");
+    // The >24h leftover is reclaimed even though nothing changed in the tree;
+    // the young file survives - it may be another process's live backfill.
+    expect(existsSync(stale)).toBe(false);
+    expect(existsSync(young)).toBe(true);
+    rmSync(young, { force: true });
   });
 });
 
