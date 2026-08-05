@@ -37,9 +37,11 @@ listed names, comma-separated). Never load them one call at a time.
 - Pass terms, a phrase, or a plain-language description; one pass fuses BM25
   keyword matching with semantic similarity, so it works whether or not you
   know the exact words.
+- One good search beats several narrow ones - put both the identifiers you
+  know and the intent into a single query.
 - Every hit carries `path`, `startLine`-`endLine`, and the chunk content with
-  a relevance score - usually enough to answer without opening the file.
-  Cite results as `path:line`.
+  a relevance score. Answer from the chunk content when it suffices, citing
+  the `path:line` ranges; open a file only for what the chunks don't show.
 - If a hit is marked `truncated`, Read exactly its start-end range
   (offset/limit), not the whole file.
 - `k` (default 10) bounds hits; raise it for survey-style questions.
@@ -63,7 +65,7 @@ rank AND aggregate:
 The canonical move - "which files have the most code about X":
 
 ```sql
-SELECT path, SUM(end_line - start_line + 1) AS lines
+SELECT path, SUM(end_line - start_line + 1) AS lines, COUNT(*) AS chunks
 FROM bm25_search('chunks','content','<terms>', 300)
 GROUP BY path ORDER BY lines DESC LIMIT 15
 ```
