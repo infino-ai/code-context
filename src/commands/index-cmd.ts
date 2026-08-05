@@ -10,7 +10,7 @@
 import { watch } from "node:fs";
 import { openForIndexing } from "../core/context.js";
 import { indexRepoStaged, syncRepo, type IndexOptions, type SyncResult } from "../core/indexer.js";
-import { createEmbedder, embedderInfo } from "../core/embedder.js";
+import { createEmbedder, createIndexingEmbedder, embedderInfo } from "../core/embedder.js";
 import { DEFAULT_CAPS, INDEX_DIR_NAME } from "../core/config.js";
 import { bold, dim, green, yellow, fmtMs, fmtCount, progressLine, progressDone } from "../core/output.js";
 
@@ -78,7 +78,10 @@ export async function indexCmd(path: string | undefined, opts: IndexCmdOptions):
   };
 
   const full = async (): Promise<void> => {
-    const run = await indexRepoStaged(baseOpts);
+    // Full builds embed in a child process (bulk arenas leave with it);
+    // sync keeps the in-process embedder for its small warm batches.
+    const buildEmb = opts.embed === false ? undefined : createIndexingEmbedder();
+    const run = await indexRepoStaged({ ...baseOpts, embedder: buildEmb });
     if (!opts.json) {
       progressDone();
       const t = run.text;
@@ -91,6 +94,7 @@ export async function indexCmd(path: string | undefined, opts: IndexCmdOptions):
       }
     }
     const final = await run.completion;
+    await buildEmb?.dispose?.()?.catch(() => undefined);
     if (opts.json) {
       console.log(JSON.stringify(final, null, 2));
       return;

@@ -10,6 +10,7 @@
 
 import { createRequire } from "node:module";
 import { join, dirname } from "node:path";
+import { EMBED_MAX_CHARS } from "./config.js";
 
 export interface Chunk {
   path: string;
@@ -50,9 +51,15 @@ const RAW_EMBED = ["1", "true", "yes"].includes((process.env.CX_EMBED_RAW ?? "")
  * AST rather than an LLM. The header is never returned; results keep the raw
  * content, so citations stay exact. */
 export function embedText(c: Chunk): string {
-  if (RAW_EMBED) return c.content;
-  const crumb = [c.scope, c.symbol].filter(Boolean).join(" › ");
-  return crumb ? `${c.path}\n${crumb}\n${c.content}` : `${c.path}\n${c.content}`;
+  const text = RAW_EMBED
+    ? c.content
+    : (() => {
+        const crumb = [c.scope, c.symbol].filter(Boolean).join(" › ");
+        return crumb ? `${c.path}\n${crumb}\n${c.content}` : `${c.path}\n${c.content}`;
+      })();
+  // Cap what reaches the tokenizer: past the model's token window the extra
+  // characters never influence the vector, but they do grow the ONNX arenas.
+  return text.length > EMBED_MAX_CHARS ? text.slice(0, EMBED_MAX_CHARS) : text;
 }
 
 // Window tuning: target is the preferred chunk size; a single syntactic unit

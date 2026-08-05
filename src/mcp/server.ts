@@ -24,8 +24,14 @@ import { readManifest, type Manifest } from "../core/manifest.js";
 import type { IndexHandle } from "../core/context.js";
 import { search, runSql, jsonify, partialIndex } from "../core/searcher.js";
 import { newSession, receiptEnabled, searchEntry, sqlEntry, formatReceipt, recordUsage } from "../core/usage.js";
-import { indexRepoStaged, syncRepo, type SyncOutcome, type IndexStats } from "../core/indexer.js";
-import { createEmbedder, embedderInfo, type Embedder } from "../core/embedder.js";
+import {
+  indexRepoStaged,
+  syncRepo,
+  type SyncOutcome,
+  type IndexStats,
+  type StagedIndexRun,
+} from "../core/indexer.js";
+import { createEmbedder, createIndexingEmbedder, embedderInfo, type Embedder } from "../core/embedder.js";
 import { RepoRegistry, type RepoCtx } from "./repos.js";
 import { ensureIndexed, type EnsureResult } from "./ensure.js";
 
@@ -80,18 +86,34 @@ export async function serveMcp(rootPath?: string): Promise<void> {
     return p;
   };
 
+  /** Fresh build-scoped embedder: full builds embed in a child process so the
+   * bulk pipeline's memory leaves with it (issue #9). Query and sync
+   * embedding keep the warm in-process singleton via getEmbedder(). */
+  const buildEmbedder = () => (process.env.CX_NO_EMBED ? undefined : createIndexingEmbedder());
+
+  /** Let vectors backfill in-process (the manifest flips to "ready"), then
+   * release the build's embedder. `completion` never rejects by contract, but
+   * nothing on this chain may take that on faith - an unhandled rejection
+   * here would kill the whole server. */
+  const backfill = (run: StagedIndexRun, emb: Embedder | undefined) => {
+    void run.completion
+      .catch(() => undefined)
+      .finally(() => void emb?.dispose?.()?.catch(() => undefined));
+  };
+
   /** Acquire the repo's mutation lock and run a staged build; resolves at
    * keyword-live with stage-1 stats, or null if a build is already in flight. */
   const buildIndex = (ctx: RepoCtx): Promise<IndexStats> | null =>
     exclusive(ctx, async () => {
+      const emb = buildEmbedder();
       const run = await indexRepoStaged({
         root: ctx.root,
         db: ctx.db,
         indexDirPath: ctx.dir,
-        embedder: process.env.CX_NO_EMBED ? undefined : getEmbedder(),
+        embedder: emb,
         caps: DEFAULT_CAPS,
       });
-      void run.completion; // vectors backfill in-process; manifest flips to "ready"
+      backfill(run, emb);
       return run.text;
     });
 
@@ -104,14 +126,15 @@ export async function serveMcp(rootPath?: string): Promise<void> {
       caps: DEFAULT_CAPS,
     });
     if (outcome.action === "rebuild-required" && outcome.reason !== "vector backfill in progress") {
+      const emb = buildEmbedder();
       const run = await indexRepoStaged({
         root: ctx.root,
         db: ctx.db,
         indexDirPath: ctx.dir,
-        embedder: process.env.CX_NO_EMBED ? undefined : getEmbedder(),
+        embedder: emb,
         caps: DEFAULT_CAPS,
       });
-      void run.completion;
+      backfill(run, emb);
     }
     return outcome;
   };
@@ -360,14 +383,15 @@ export async function serveMcp(rootPath?: string): Promise<void> {
       }
       try {
         const runFull = async () => {
+          const emb = buildEmbedder();
           const run = await indexRepoStaged({
             root: ctx.root,
             db: ctx.db,
             indexDirPath: ctx.dir,
-            embedder: process.env.CX_NO_EMBED ? undefined : getEmbedder(),
+            embedder: emb,
             caps: DEFAULT_CAPS,
           });
-          void run.completion; // backfills in-process; manifest flips to "ready"
+          backfill(run, emb);
           return ok({ status: "rebuilt - keyword search live; vectors backfilling", ...run.text });
         };
         const result = exclusive(ctx, async () => {
