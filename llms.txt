@@ -29,9 +29,9 @@ logs, docs, and agent memory.
   A Claude Code plugin (`/plugin marketplace add infino-ai/code-context`) bakes the same config in.
 - MCP tools (stdio): `sql` (the search surface: read-only SELECT/WITH over
   `chunks(path, start_line, end_line, lang, symbol, content[, embedding])`,
-  with hybrid_search/bm25_search as table-valued relations - ranked
-  retrieval and GROUP BY aggregation in one query; vector_search is not
-  exposed) and `reindex` (incremental sync; the server also auto-syncs in
+  with hybrid_search/bm25_search/vector_search as table-valued relations -
+  ranked retrieval and GROUP BY aggregation in one query) and `reindex`
+  (incremental sync; the server also auto-syncs in
   the background). The server builds the index eagerly at startup, and a
   query that beats the build still triggers it inline; `CX_AUTO_INDEX=0`
   restores a strict "index it first" error. Each tool takes an optional

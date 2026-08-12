@@ -145,9 +145,9 @@ FROM bm25_search('chunks', 'content', 'vector index quantization', 300)
 GROUP BY path ORDER BY lines DESC LIMIT 15
 ```
 
+`vector_search(...)` works the same way when you want meaning-only ranking.
 The CLI and MCP server embed `{{name}}` placeholders server-side, so agents
-never handle raw vectors. (`vector_search` is deliberately not exposed: raw
-vector ranking drops the keyword arm for no benefit.)
+never handle raw vectors.
 
 ### Staged readiness
 

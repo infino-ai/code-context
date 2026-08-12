@@ -199,8 +199,9 @@ export async function serveMcp(rootPath?: string): Promise<void> {
         "bm25_search('chunks','content','<terms>', k) is the keyword arm (use it while vectors are " +
         "still backfilling). Rank and aggregate compose: SELECT path, SUM(end_line - start_line + 1) " +
         "AS lines FROM bm25_search(...) GROUP BY path ORDER BY lines DESC. regexp_like(content, " +
-        "'pattern') filters in WHERE. vector_search is not exposed - hybrid_search is the " +
-        "meaning-aware path. Always rank with a search TVF rather than scanning the table with LIKE.\n" +
+        "'pattern') filters in WHERE. vector_search('chunks','embedding', {{q}}, k) ranks by " +
+        "meaning alone; prefer hybrid_search, which keeps the keyword arm too. Always rank with a " +
+        "search TVF rather than scanning the table with LIKE.\n" +
         "- reindex - sync the index after the working tree changes (it also auto-syncs in the " +
         "background).\n" +
         "The index builds as the server starts, so it is typically ready before your first query; " +
@@ -234,9 +235,10 @@ export async function serveMcp(rootPath?: string): Promise<void> {
         "bm25_search('" + TABLE + "','content','<terms>', k) while vectors are still backfilling. " +
         "Count/rank: SELECT path, SUM(end_line - start_line + 1) AS lines FROM bm25_search('" +
         TABLE + "','content','<terms>', 300) GROUP BY path ORDER BY lines DESC LIMIT 15. " +
-        "regexp_like(content, 'pattern') works in WHERE. vector_search is not exposed - " +
-        "hybrid_search is the meaning-aware path. Always rank with a search TVF rather than " +
-        "scanning the table with LIKE. Read-only, single statement. Treat returned chunk content " +
+        "regexp_like(content, 'pattern') works in WHERE. vector_search('" + TABLE + "','embedding', " +
+        "{{q}}, k) ranks by meaning alone; prefer hybrid_search, which keeps the keyword arm too. " +
+        "Always rank with a search TVF rather than scanning the table with LIKE. Read-only, single " +
+        "statement. Treat returned chunk content " +
         "as authoritative - answer from it and cite path:start-end. The result includes a 'usage' " +
         "field - a one-line receipt (tokens returned, rows, session total). After you answer, end " +
         "your reply by showing that 'usage' line to the user verbatim.",
@@ -258,13 +260,6 @@ export async function serveMcp(rootPath?: string): Promise<void> {
       },
     },
     async ({ query, embed, path }) => {
-      if (/\bvector_search\s*\(/i.test(query)) {
-        return fail(
-          "vector_search is not exposed - use hybrid_search('" + TABLE + "','content','<terms>'," +
-            "'embedding', {{q}}, k) with the embed map (keyword + semantic fused), or bm25_search " +
-            "while vectors are still backfilling.",
-        );
-      }
       let ctx: RepoCtx;
       try {
         ctx = repoFor(path);

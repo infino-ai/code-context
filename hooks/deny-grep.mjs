@@ -67,8 +67,7 @@ process.stdin.on("end", () => {
   }
 
   // Policy: sql-with-TVFs is the only search surface. The search tool (still
-  // registered by older server builds) and raw vector_search are both denied
-  // with a redirect; bm25_search/hybrid_search are the sanctioned TVFs.
+  // registered by older server builds) is denied with a redirect to sql.
   const toolName = input.tool_name ?? "";
   if (/code[-_]context.*__search$/.test(toolName)) {
     console.log(
@@ -78,19 +77,6 @@ process.stdin.on("end", () => {
           permissionDecision: "deny",
           permissionDecisionReason:
             'code-context: search goes through the sql tool. Ranked retrieval: SELECT path, start_line, end_line, symbol, content FROM hybrid_search(\'chunks\',\'content\',\'<terms>\',\'embedding\', {{q}}, 10) with embed {"q":"<your question>"} - or bm25_search(\'chunks\',\'content\',\'<terms>\', 10) before vectors are ready. Rank + aggregate composes via GROUP BY.',
-        },
-      }),
-    );
-    return;
-  }
-  if (/code[-_]context.*__sql$/.test(toolName) && /\bvector_search\s*\(/i.test(input.tool_input?.query ?? "")) {
-    console.log(
-      JSON.stringify({
-        hookSpecificOutput: {
-          hookEventName: "PreToolUse",
-          permissionDecision: "deny",
-          permissionDecisionReason:
-            "code-context: vector_search is not exposed - use hybrid_search('chunks','content','<terms>','embedding', {{q}}, k) with the embed map (keyword + semantic fused), or bm25_search before vectors are ready.",
         },
       }),
     );

@@ -59,7 +59,7 @@ before opening a PR.
 - The MCP surface is deliberately two tools: one way to query (`sql`, with
   ranked retrieval as table-valued functions), one way to stay fresh
   (`reindex`). Adding near-duplicate retrieval tools worsens an agent's tool
-  selection; resist it - vector_search stays unexposed for the same reason.
+  selection; resist it.
 - Query results carry chunk content plus `path`/`start_line`/`end_line` so
   answers cite code; keep that contract when touching `searcher` or the tool
   descriptions.

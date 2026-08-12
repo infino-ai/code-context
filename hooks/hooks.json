@@ -12,7 +12,7 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "Grep|Bash|mcp__.*code[-_]context.*__(sql|search)",
+        "matcher": "Grep|Bash|mcp__.*code[-_]context.*__search",
         "hooks": [
           {
             "type": "command",
