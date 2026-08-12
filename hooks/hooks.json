@@ -5,23 +5,14 @@
         "hooks": [
           {
             "type": "command",
-            "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":\"code-context is active: code search goes through its MCP tools. Use search to find or understand code and sql for counts/rankings; the Grep tool and standalone grep/rg commands are disabled (grep as a pipe filter on other command output still works).\"}}'"
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/deny-grep.mjs\""
           }
         ]
       }
     ],
     "PreToolUse": [
       {
-        "matcher": "Grep",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"code-context: Grep is disabled here. Use the search MCP tool to find or understand code, or sql for counts and rankings across the repo.\"}}'"
-          }
-        ]
-      },
-      {
-        "matcher": "Bash",
+        "matcher": "Grep|Bash|mcp__.*code[-_]context.*__(sql|search)",
         "hooks": [
           {
             "type": "command",
