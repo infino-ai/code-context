@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: Copyright The Infino Authors
 //
-// Auto-index on first query. A search/sql against a repo that has never been
+// Auto-index safety net. A sql query against a repo that has never been
 // indexed builds the index inline and then answers on the same call, instead
 // of erroring with "index it first". Staged readiness makes this cheap: the
 // build resolves the moment keyword search is live (seconds), with vectors

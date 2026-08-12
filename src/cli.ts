@@ -6,17 +6,17 @@
 
 import { Command } from "commander";
 import { indexCmd } from "./commands/index-cmd.js";
-import { searchCmd, sqlCmd, statusCmd, usageCmd } from "./commands/query-cmds.js";
-import { DEFAULT_SEARCH_K } from "./core/config.js";
+import { sqlCmd, statusCmd, usageCmd } from "./commands/query-cmds.js";
 
 const program = new Command();
 
 program
   .name("cx")
   .description(
-    "Local code search for AI coding agents - an index in plain files under .infino/.\n" +
-      "Keyword search seconds after `cx index`; semantic and hybrid search when vectors\n" +
-      "finish backfilling; SQL with relevance-ranked aggregation over the whole repo.",
+    "Local code search for AI coding agents - an index in plain files under .infino/,\n" +
+      "queried through one door: read-only SQL with ranked search table functions.\n" +
+      "hybrid_search fuses keyword + semantic ranking, bm25_search covers the window\n" +
+      "before vectors finish backfilling, and GROUP BY turns either into aggregation.",
   )
   .version("0.1.4")
   .addHelpText(
@@ -24,12 +24,13 @@ program
     `
 Examples:
   cx index                            index the current repo (keyword search is live in seconds)
-  cx search "parse_config"            exact terms and meaning, one ranked pass
-  cx search "where is auth handled"   works when you don't know the words
+  cx sql "SELECT path, start_line, end_line, symbol, content \\
+          FROM hybrid_search('chunks','content','auth handling','embedding', {{q}}, 10)" \\
+        --embed "q=where is auth handled"
   cx sql "SELECT path, SUM(end_line - start_line + 1) AS lines \\
           FROM bm25_search('chunks','content','vector index', 300) \\
           GROUP BY path ORDER BY lines DESC LIMIT 10"
-  cx mcp                              serve the MCP tools (search/sql/reindex) over stdio`,
+  cx mcp                              serve the MCP tools (sql/reindex) over stdio`,
   );
 
 program
@@ -42,15 +43,6 @@ program
   .option("--max-files <n>", "cap on files indexed (default 20000)")
   .option("--json", "machine-readable stats")
   .action(indexCmd);
-
-program
-  .command("search")
-  .description("find code: exact terms and meaning in one ranked pass")
-  .argument("<query>", "what you're looking for")
-  .option("-k <n>", "maximum hits", String(DEFAULT_SEARCH_K))
-  .option("--json", "machine-readable output")
-  .option("-C, --path <dir>", "repo root (default: current directory)")
-  .action(searchCmd);
 
 program
   .command("sql")
@@ -87,7 +79,7 @@ program
 
 program
   .command("mcp")
-  .description("serve the MCP tools (search / sql / reindex) over stdio")
+  .description("serve the MCP tools (sql / reindex) over stdio")
   .option("-C, --path <dir>", "repo root (default: current directory)")
   .action(async (opts: { path?: string }) => {
     const { serveMcp } = await import("./mcp/server.js");

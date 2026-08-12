@@ -60,7 +60,7 @@ Install the Claude Code plugin - nothing to paste into a config:
 /plugin install code-context@infino-ai
 ```
 
-It registers code-context's three tools with `alwaysLoad` already set, so the
+It registers code-context's two tools with `alwaysLoad` already set, so the
 agent keeps them in view and reaches for the index directly instead of falling
 back to plain file search.
 
@@ -75,10 +75,11 @@ servers - where clients defer tool definitions behind a tool-search step - the
 agent doesn't miss the index and fall back to plain file search. (Use *either*
 the plugin or this command, not both.)
 
-Then just ask a question about the code. The first `search` or `sql` on an
-unindexed repo builds the index inline and answers on the same call: keyword
-search is live in seconds, and vectors backfill in the background. (Prefer to
-kick it off yourself? The `reindex` tool does the same build on demand.)
+Then just ask a question about the code. The server builds the index as it
+starts, so keyword search is live within seconds of the session opening and
+vectors backfill in the background - the first `sql` query typically finds the
+index already waiting. (A query that beats the build still triggers it inline;
+`reindex` syncs after big edits.)
 
 CI-tested on Linux x64 (glibc) and macOS arm64; linux-arm64, musl, and
 Windows-via-WSL are expected to work through the engine's prebuilt bindings
@@ -118,19 +119,25 @@ One index and a deliberately small tool surface for agents:
 
 | Tool | What it does | When agents use it |
 |---|---|---|
-| `search` | One ranked pass fusing exact keyword matching (BM25) with semantic similarity (reciprocal-rank fusion). Hits carry the chunk content, so answers come straight from results. | A strong default for finding and understanding code: how a subsystem works, code by meaning or exact term, context before a change, similar implementations - exact identifiers and paraphrases in the same call. |
-| `sql` | Read-only SQL over the index, with the ranked search functions (`bm25_search`/`hybrid_search`) usable as table-valued relations. | Counts, rankings, aggregates over the whole repo in one query. |
+| `sql` | Read-only SQL over the index, with ranked retrieval as table-valued relations: `hybrid_search` fuses exact keyword matching (BM25) with semantic similarity in one ranked pass; `bm25_search` is the keyword arm alone. Rows carry the chunk content, so answers come straight from results. | Everything: how a subsystem works, code by meaning or exact term, context before a change, and any count/ranking/aggregate over the whole repo - one query language for all of it. |
 | `reindex` | Incremental sync (the server also auto-syncs in the background). | After significant edits. |
 
-Three tools is a deliberate design: one way to find, one way to count, one
-way to stay fresh. Every additional near-duplicate retrieval tool worsens an
-agent's tool selection, and hybrid search's keyword half already ranks
-exact identifier terms highly, so a separate lexical tool has no job left.
+Two tools is a deliberate design: one way to query, one way to stay fresh.
+Every additional near-duplicate retrieval tool worsens an agent's tool
+selection - and since hybrid ranking's keyword half already ranks exact
+identifier terms highly, retrieval needs no second door beside SQL.
 
-### The SQL move
+### One surface, both jobs
 
-Search-as-a-table composes with aggregation. Ranked by relevance, tallied by
-SQL, one engine pass:
+Finding code is a query:
+
+```sql
+SELECT path, start_line, end_line, symbol, content
+FROM hybrid_search('chunks', 'content', 'auth handling', 'embedding', {{q}}, 10)
+```
+
+and because search is a table, the same relation composes with aggregation -
+ranked by relevance, tallied by SQL, one engine pass:
 
 ```sql
 SELECT path, SUM(end_line - start_line + 1) AS lines, COUNT(*) AS chunks
@@ -138,9 +145,9 @@ FROM bm25_search('chunks', 'content', 'vector index quantization', 300)
 GROUP BY path ORDER BY lines DESC LIMIT 15
 ```
 
-`hybrid_search(...)` and `vector_search(...)` work the same way. The CLI and
-MCP server embed `{{name}}` placeholders server-side, so agents never handle
-raw vectors.
+The CLI and MCP server embed `{{name}}` placeholders server-side, so agents
+never handle raw vectors. (`vector_search` is deliberately not exposed: raw
+vector ranking drops the keyword arm for no benefit.)
 
 ### Staged readiness
 
@@ -149,7 +156,9 @@ that takes under a second, so search works before any embedding model even
 exists on the machine. Vectors backfill in the background with a local model
 (downloaded once, no key; about two minutes for that same repo), and
 hybrid/semantic ranking unlocks automatically when they land. If the vector
-stage fails, keyword search stays live and the index says so honestly.
+stage fails, keyword search stays live and the index says so honestly. The
+MCP server kicks this build off as it starts, so the index is typically live
+before an agent's first query.
 
 The default model optimizes quality-per-minute. See
 [docs/embedder-eval.md](docs/embedder-eval.md) for how it was chosen.
@@ -164,7 +173,7 @@ export and pass around.
 ## Setup for agents
 
 code-context is an MCP server over stdio, so any MCP client works. Register
-it once and the tools (`search`, `sql`, `reindex`) become available to the
+it once and the tools (`sql`, `reindex`) become available to the
 agent.
 
 <details>
@@ -188,7 +197,7 @@ claude mcp add-json code-context -s user '{"command":"npx","args":["-y","@infino
 for the index directly. In sessions with many MCP servers Claude Code defers
 tool definitions behind a tool-search step; without `alwaysLoad` the agent can
 miss code-context and fall back to grep/read. It's a small, always-loaded set
-(three tools). Omit it (or use the shorter `claude mcp add code-context -- npx
+(two tools). Omit it (or use the shorter `claude mcp add code-context -- npx
 -y @infino-ai/code-context mcp`) if you'd rather leave the tools deferred.
 
 Use *either* the plugin or the `add-json` command, not both. They register the
@@ -252,7 +261,7 @@ when the client's working directory is not the repo.
 
 </details>
 
-Tools: `search`, `sql`, `reindex` (incremental sync: an unchanged repo is
+Tools: `sql`, `reindex` (incremental sync: an unchanged repo is
 a fast no-op, and the server also auto-syncs in the background as queries
 arrive, so results track your edits without anyone asking).
 
@@ -267,19 +276,18 @@ no restart, no per-repo config.
 | Variable | Default | Purpose |
 |---|---|---|
 | `CX_INDEX_DIR` | `<repo>/.infino` | where the index lives |
-| `CX_SEARCH_K` | 10 | default number of hits `search` returns (also settable per call and via the CLI `-k` flag) |
-| `CX_MAX_FILES` / `CX_MAX_FILE_BYTES` | 20000 / 1MB | indexing caps (files over the file cap are left out; `search`/`sql` then flag the index as partial so an absence isn't read as proof) |
+| `CX_MAX_FILES` / `CX_MAX_FILE_BYTES` | 20000 / 1MB | indexing caps (files over the file cap are left out; `sql` then flags the index as partial so an absence isn't read as proof) |
 | `CX_ROOT` | current directory | default repo root for the MCP server / CLI when not run from the repo (each tool call can override it with a `path` argument) |
-| `CX_AUTO_INDEX` | on | `0` makes a query on an unindexed repo error instead of building the index inline on the first `search`/`sql` |
+| `CX_AUTO_INDEX` | on | `0` makes a query on an unindexed repo error instead of building eagerly at server startup (or inline on the first `sql`) |
 | `CX_AUTO_SYNC` | on | `0` disables the MCP server's background staleness sync |
 | `CX_SYNC_INTERVAL_SECS` | 30 | auto-sync debounce between staleness checks |
 | `CX_NO_EMBED` | off | keyword-only mode for the MCP server (skip the vector stage) |
 | `CX_NO_RECEIPT` | off | `1` turns off usage accounting - the per-call receipt on results and the `cx usage` ledger |
 
-Every `search` / `sql` result carries a **usage receipt** - a terse, local line
-showing the tokens it returned, the files it spanned, and a running session
-total (e.g. `returned ~1.2k tokens | 4 chunks / 3 files | session ~8.4k over 7
-queries`). Every figure is a `~` estimate, computed in-process - nothing about
+Every `sql` result carries a **usage receipt** - a terse, local line showing
+the tokens it returned, the row count, and a running session total (e.g.
+`returned ~1.2k tokens | 12 rows | invoked 7x this session (~8.4k tokens
+total)`). Every figure is a `~` estimate, computed in-process - nothing about
 your queries or code leaves the machine.
 
 ## CLI
@@ -294,17 +302,16 @@ npm install -g @infino-ai/code-context
 
 ```
 cx index [path]           sync the index (incremental; --full rebuilds, --watch follows edits)
-cx search <query>         exact terms + meaning, one ranked pass           (-k hits)
 cx sql <statement>        read-only SQL; --embed q="text" fills {{q}}
 cx status                 what the index holds, how fresh, vector readiness
 cx usage                  ledger of queries run and what each returned  (-n, --all, --clear, --json)
 cx mcp                    serve the MCP tools over stdio
 ```
 
-`cx usage` reads the local ledger at `.infino/usage.jsonl` - every `search` /
-`sql` (from the CLI or the MCP server) appends one line recording the query and
-a compact summary of what came back (paths and line ranges for search, row
-count for sql), plus the token figures from the receipt. It's a deterministic,
+`cx usage` reads the local ledger at `.infino/usage.jsonl` - every `sql` query
+(from the CLI or the MCP server) appends one line recording the statement and
+a compact summary of what came back (row count and a preview of the rows),
+plus the token figures from the receipt. It's a deterministic,
 model-independent view of what went through the index - no running server or
 agent needed to read it back. `CX_NO_RECEIPT=1` turns off both the inline
 receipt and this ledger.

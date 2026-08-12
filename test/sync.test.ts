@@ -8,7 +8,7 @@ import { connect } from "@infino-ai/infino";
 import { diffFiles, emptyFileState, hashContent, readFileState } from "../src/core/filestate.js";
 import { indexRepo, syncRepo } from "../src/core/indexer.js";
 import { readManifest } from "../src/core/manifest.js";
-import { search } from "../src/core/searcher.js";
+import { runSql } from "../src/core/searcher.js";
 import type { IndexHandle } from "../src/core/context.js";
 import type { Embedder } from "../src/core/embedder.js";
 
@@ -122,10 +122,14 @@ describe("syncRepo", () => {
     expect(count("axolotl")).toBeGreaterThan(0);
     expect(count("quokka")).toBe(0);
     expect(count("wombat")).toBe(0);
-    // hybrid search still works over synced rows (vectors were embedded)
-    const s = await search(handle, fakeEmbedder, "axolotl", 3);
-    expect(s.ranking).toBe("hybrid");
-    expect(s.hits.some((h) => h.path === "src/gamma.ts")).toBe(true);
+    // hybrid retrieval still works over synced rows (vectors were embedded)
+    const rows = await runSql(
+      handle,
+      fakeEmbedder,
+      "SELECT path FROM hybrid_search('chunks','content','axolotl','embedding', {{q}}, 3)",
+      { q: "axolotl" },
+    );
+    expect(rows.some((r) => r.path === "src/gamma.ts")).toBe(true);
   });
 
   it("is idempotent when a file is re-added identically (no duplicate rows)", async () => {

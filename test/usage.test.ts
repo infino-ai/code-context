@@ -5,7 +5,6 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import {
   estTokens,
   newSession,
-  searchEntry,
   sqlEntry,
   formatReceipt,
   recordUsage,
@@ -15,64 +14,11 @@ import {
   recordHookEvent,
   currentSessionStats,
 } from "../src/core/usage.js";
-import type { SearchResult, SearchHit } from "../src/core/searcher.js";
-
-const hit = (path: string, content: string): SearchHit => ({
-  path,
-  startLine: 1,
-  endLine: 10,
-  lang: "ts",
-  score: 1,
-  content,
-});
-
-const result = (hits: SearchHit[]): SearchResult => ({ query: "q", ranking: "keyword", hits });
-
 describe("estTokens", () => {
   it("estimates ~chars/4", () => {
     expect(estTokens("")).toBe(0);
     expect(estTokens("abcd")).toBe(1);
     expect(estTokens("abcde")).toBe(2);
-  });
-});
-
-describe("search receipt", () => {
-  let root: string;
-  beforeAll(() => {
-    root = mkdtempSync(join(tmpdir(), "cx-usage-"));
-    writeFileSync(join(root, "a.ts"), "x".repeat(4000)); // ~1k tokens on disk
-    writeFileSync(join(root, "b.ts"), "y".repeat(4000));
-  });
-  afterAll(() => rmSync(root, { recursive: true, force: true }));
-
-  it("reports tokens returned and chunks/files, with no trailing markers", () => {
-    const line = formatReceipt(searchEntry(result([hit("a.ts", "z".repeat(400)), hit("a.ts", "z".repeat(400))]), root));
-    expect(line).toBe("returned ~200 tokens | 2 chunks / 1 file");
-  });
-
-  it("does not assert a whole-file counterfactual in the receipt", () => {
-    // The estimate still lives on the entry (for the ledger), but the receipt
-    // shown after every response makes no "vs reading them whole" claim.
-    const entry = searchEntry(result([hit("a.ts", "z".repeat(40)), hit("b.ts", "z".repeat(40))]), root);
-    expect(entry.wholeFileTokens).toBeGreaterThan(0);
-    const line = formatReceipt(entry);
-    expect(line).not.toMatch(/whole/);
-    expect(line).not.toMatch(/\bvs\b/);
-  });
-
-  it("accumulates the session invocation count and token total across calls", () => {
-    const session = newSession();
-    formatReceipt(searchEntry(result([hit("a.ts", "z".repeat(400))]), root), session); // +100
-    const line = formatReceipt(searchEntry(result([hit("a.ts", "z".repeat(400))]), root), session); // +100
-    expect(session.queries).toBe(2);
-    expect(session.returnedTokens).toBe(200);
-    expect(line).toMatch(/invoked 2x this session \(~200 tokens total\)/);
-  });
-
-  it("counts the first call as invoked 1x", () => {
-    const session = newSession();
-    const line = formatReceipt(searchEntry(result([hit("a.ts", "z".repeat(40))]), "/nope"), session);
-    expect(line).toMatch(/invoked 1x this session/);
   });
 });
 
@@ -89,6 +35,14 @@ describe("sql receipt", () => {
     expect(line).not.toMatch(/to read those files whole/);
     expect(line).toMatch(/invoked 1x this session/);
   });
+
+  it("accumulates the invocation count and token total across calls", () => {
+    const session = newSession();
+    formatReceipt(sqlEntry("SELECT 1", [{ z: "z".repeat(396) }]), session);
+    const line = formatReceipt(sqlEntry("SELECT 1", [{ z: "z".repeat(396) }]), session);
+    expect(session.queries).toBe(2);
+    expect(line).toMatch(/invoked 2x this session/);
+  });
 });
 
 describe("the ledger", () => {
@@ -97,17 +51,17 @@ describe("the ledger", () => {
   afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
   it("round-trips entries oldest-first and captures the response summary", () => {
-    recordUsage(dir, searchEntry({ query: "auth", ranking: "hybrid", hits: [hit("a.ts", "zzzz")] }, dir));
+    recordUsage(dir, sqlEntry("SELECT path FROM bm25_search('chunks','content','auth', 5)", [{ path: "a.ts" }]));
     recordUsage(dir, sqlEntry("SELECT count(*)", [{ n: 3 }]));
     const entries = readUsage(dir);
-    expect(entries.map((e) => e.tool)).toEqual(["search", "sql"]);
-    expect(entries[0].query).toBe("auth");
-    expect(entries[0].hits?.[0]).toMatchObject({ path: "a.ts", startLine: 1, endLine: 10 });
+    expect(entries.map((e) => e.tool)).toEqual(["sql", "sql"]);
+    expect(entries[0].query).toContain("bm25_search");
+    expect(entries[0].rows).toBe(1);
     expect(entries[1].rows).toBe(1);
   });
 
   it("skips torn / hand-edited lines instead of throwing", () => {
-    writeFileSync(usageLogPath(dir), '{"tool":"search"}\nnot json\n', { flag: "a" });
+    writeFileSync(usageLogPath(dir), '{"tool":"sql"}\nnot json\n', { flag: "a" });
     expect(() => readUsage(dir)).not.toThrow();
     expect(readUsage(dir).length).toBeGreaterThanOrEqual(3);
   });
@@ -125,7 +79,7 @@ describe("prompt telemetry (hooks)", () => {
   afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
   const submit = (sid: string) => recordHookEvent(dir, { hook_event_name: "UserPromptSubmit", session_id: sid });
-  const cxCall = (sid: string) => recordHookEvent(dir, { hook_event_name: "PostToolUse", session_id: sid, tool_name: "mcp__code-context__search" });
+  const cxCall = (sid: string) => recordHookEvent(dir, { hook_event_name: "PostToolUse", session_id: sid, tool_name: "mcp__code-context__sql" });
   const otherCall = (sid: string) => recordHookEvent(dir, { hook_event_name: "PostToolUse", session_id: sid, tool_name: "Grep" });
 
   it("counts prompts, cx calls, and prompts-that-used-cx (once per prompt)", () => {

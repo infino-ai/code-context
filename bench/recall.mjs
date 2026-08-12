@@ -3,7 +3,7 @@
 // Indexes THIS repo (code-context) to a temp dir with the default local
 // embedder, then runs a fixed set of paraphrase queries whose gold file is
 // known, and reports hit@5 / MRR@5 for vector-only ranking (isolates the
-// embedder) and hybrid ranking (the `search` tool's real surface).
+// embedder) and hybrid ranking (the sql tool's hybrid_search surface).
 //
 // It's deterministic (same model+dtype -> same vectors) and needs no network
 // beyond the one-time model download, which makes it a good regression signal.
@@ -42,7 +42,7 @@ process.env.CX_INDEX_DIR = tmp;
 const { indexRepo } = await import(`${ROOT}/dist/core/indexer.js`);
 const { openForIndexing, openIndex } = await import(`${ROOT}/dist/core/context.js`);
 const { createEmbedder } = await import(`${ROOT}/dist/core/embedder.js`);
-const { search } = await import(`${ROOT}/dist/core/searcher.js`);
+const { runSql } = await import(`${ROOT}/dist/core/searcher.js`);
 const { TABLE, DEFAULT_CAPS } = await import(`${ROOT}/dist/core/config.js`);
 
 console.log(`indexing ${ROOT}`);
@@ -69,7 +69,14 @@ for (const [q, gold] of GOLD) {
   const [vec] = await embedder.embed([q]);
   const vRank = rankOf(table.vectorSearch("embedding", vec, 15, { projection: ["path"] }), gold);
   if (vRank >= 1 && vRank <= 5) { vHit++; vRr += 1 / vRank; }
-  const hRank = rankOf((await search(handle, embedder, q, 15)).hits, gold);
+  const esc = q.replaceAll("'", "''");
+  const hRows = await runSql(
+    handle,
+    embedder,
+    `SELECT path FROM hybrid_search('${TABLE}','content','${esc}','embedding', {{q}}, 15)`,
+    { q },
+  );
+  const hRank = rankOf(hRows, gold);
   if (hRank >= 1 && hRank <= 5) { hHit++; hRr += 1 / hRank; } else misses.push(`${gold}  ("${q}")`);
 }
 

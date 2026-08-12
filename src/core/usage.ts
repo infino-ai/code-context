@@ -7,9 +7,9 @@
 // estimate (we can't run the agent's tokenizer), and nothing leaves the
 // machine: the ledger is a plain JSONL file inside the repo's index dir.
 
-import { appendFileSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
-import { jsonify, type SearchResult } from "./searcher.js";
+import { appendFileSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { jsonify } from "./searcher.js";
 
 /** Rough tokens-per-char - the standard heuristic for English + code. Kept
  * deliberately simple: usage reports `~` figures, not a billed count. */
@@ -38,50 +38,12 @@ export const receiptEnabled = (): boolean =>
  * it doesn't duplicate the repo. */
 export interface UsageEntry {
   ts: string;
-  tool: "search" | "sql";
+  tool: "sql";
   query: string;
   returnedTokens: number;
-  /** search only: whole-file size of the distinct files the hits came from. */
-  wholeFileTokens?: number | null;
-  ranking?: "hybrid" | "keyword";
-  /** search only: the response, as the regions you'd jump to. */
-  hits?: Array<{ path: string; startLine: number; endLine: number }>;
-  /** sql only. */
   rows?: number;
-  /** sql only: a truncated preview of the returned rows (the answer itself). */
+  /** A truncated preview of the returned rows (the answer itself). */
   rowsPreview?: string;
-}
-
-/** Best-effort sum of the on-disk size (as tokens) of the distinct files the
- * hits came from - the "what reading them whole would cost" counterfactual.
- * Conservative: a file we can't stat is skipped, never guessed, so the figure
- * only ever understates the whole-file cost. null when nothing was stattable. */
-function wholeFileTokens(paths: string[], root: string): number | null {
-  let total = 0;
-  let counted = 0;
-  for (const p of paths) {
-    try {
-      total += Math.ceil(statSync(resolve(root, p)).size / CHARS_PER_TOKEN);
-      counted++;
-    } catch {
-      // unreadable/moved since indexing - drop it rather than mislead
-    }
-  }
-  return counted > 0 ? total : null;
-}
-
-export function searchEntry(result: SearchResult, root: string): UsageEntry {
-  const hits = result.hits.map((h) => ({ path: h.path, startLine: h.startLine, endLine: h.endLine }));
-  const files = [...new Set(hits.map((h) => h.path))];
-  return {
-    ts: new Date().toISOString(),
-    tool: "search",
-    query: result.query,
-    returnedTokens: result.hits.reduce((n, h) => n + estTokens(h.content), 0),
-    wholeFileTokens: wholeFileTokens(files, root),
-    ranking: result.ranking,
-    hits,
-  };
 }
 
 const ROWS_PREVIEW_CAP = 2000;
@@ -111,17 +73,7 @@ const plural = (n: number, one: string, many: string): string => `${n} ${n === 1
  * Mutates and appends the running total when a session is supplied. */
 export function formatReceipt(entry: UsageEntry, session?: SessionUsage): string {
   const parts: string[] = [];
-  if (entry.tool === "search") {
-    const hits = entry.hits ?? [];
-    const files = new Set(hits.map((h) => h.path)).size;
-    // Just what was returned - no "vs whole file" counterfactual here: it's an
-    // estimate of a road not taken, not a measured saving, so we don't assert
-    // it after every response. The raw wholeFileTokens still lives in the entry
-    // for anyone who wants to reason about it from the ledger.
-    parts.push(`returned ~${fmtTokens(entry.returnedTokens)} tokens | ${plural(hits.length, "chunk", "chunks")} / ${plural(files, "file", "files")}`);
-  } else {
-    parts.push(`returned ~${fmtTokens(entry.returnedTokens)} tokens | ${plural(entry.rows ?? 0, "row", "rows")}`);
-  }
+  parts.push(`returned ~${fmtTokens(entry.returnedTokens)} tokens | ${plural(entry.rows ?? 0, "row", "rows")}`);
   if (session) {
     session.queries++;
     session.returnedTokens += entry.returnedTokens;

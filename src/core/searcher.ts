@@ -1,19 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: Copyright The Infino Authors
 //
-// The two retrieval doors, shared by the CLI and the MCP server:
+// The one retrieval door, shared by the CLI and the MCP server:
 //
-//   search - the finding door: one ranked pass fuses exact keyword matching
-//            (BM25) with semantic similarity (vectors, RRF) once vectors are
-//            ready; ranked keyword search until then. Hits carry chunk
-//            content, so answers come straight from results.
-//   sql    - the power door: read-only SQL over the index, built on the search
-//            table functions (bm25_search / hybrid_search) composed with
-//            GROUP BY, with {{name}} placeholders embedded server-side for the
-//            vector functions.
+//   sql - read-only SQL over the index. Ranked retrieval is a table-valued
+//         function inside the query (hybrid_search for the fused keyword +
+//         semantic pass, bm25_search for keyword-only), so finding, counting,
+//         and ranking code are all one SELECT. {{name}} placeholders are
+//         embedded server-side for the vector functions.
 
 import type { IndexHandle } from "./context.js";
-import { TABLE, DEFAULT_SEARCH_K } from "./config.js";
 import type { Embedder } from "./embedder.js";
 import type { Manifest } from "./manifest.js";
 
@@ -26,8 +22,8 @@ export interface PartialIndex {
 }
 
 /** Build the partial-index marker from a manifest, or undefined when the whole
- * tree was indexed. Shared by search (below) and the SQL path (server-side),
- * so every query surfaces the same "results may be incomplete" signal. */
+ * tree was indexed - every query surfaces the same "results may be incomplete"
+ * signal. */
 export function partialIndex(manifest: Manifest): PartialIndex | undefined {
   if (!manifest.truncatedFiles) return undefined;
   const cap = manifest.maxFiles ?? 0;
@@ -48,87 +44,6 @@ export function jsonify(value: unknown, pretty = false): string {
     (_k, v) => (typeof v === "bigint" ? Number(v) : v),
     pretty ? 2 : undefined,
   );
-}
-
-// --- search -----------------------------------------------------------------
-
-export interface SearchHit {
-  path: string;
-  startLine: number;
-  endLine: number;
-  lang: string;
-  score: number;
-  content: string;
-  /** Definition name(s) in this chunk (e.g. "parseConfig"), when known. */
-  symbol?: string;
-  /** Set when content was capped - Read path:startLine-endLine for the rest. */
-  truncated?: boolean;
-}
-
-/** Per-hit content cap: enough to answer "how does X work" from the hit
- * itself (a whole ~60-line chunk fits; only pathological chunks truncate). */
-const HIT_CONTENT_CAP = 4000;
-
-export interface SearchResult {
-  query: string;
-  /** "hybrid" once vectors are ready; "keyword" while they backfill. */
-  ranking: "hybrid" | "keyword";
-  hits: SearchHit[];
-  note?: string;
-  /** Present when the index omitted files over the cap - results may be incomplete. */
-  partial?: PartialIndex;
-}
-
-const PROJECTION = ["path", "start_line", "end_line", "lang", "symbol", "content", "score"];
-
-export async function search(
-  handle: IndexHandle,
-  embedder: Embedder,
-  query: string,
-  k = DEFAULT_SEARCH_K,
-): Promise<SearchResult> {
-  const table = handle.db.openTable(TABLE);
-  let rows: Array<Record<string, unknown>>;
-  let ranking: "hybrid" | "keyword";
-  if (handle.manifest.vectors === "ready") {
-    const indexed = handle.manifest.embedder;
-    if (indexed && indexed.model !== embedder.model) {
-      throw new Error(
-        `query embedder (${embedder.model}) does not match the index embedder (${indexed.model}) - ` +
-          `set CX_EMBED_MODEL=${indexed.model} or re-run \`cx index\``,
-      );
-    }
-    const [vector] = await embedder.embed([query]);
-    rows = table.hybridSearch("content", query, "embedding", vector, k, { projection: PROJECTION });
-    ranking = "hybrid";
-  } else {
-    rows = table.bm25Search("content", query, k, { projection: PROJECTION });
-    ranking = "keyword";
-  }
-  return {
-    query,
-    ranking,
-    hits: rows.map((r) => {
-      const full = String(r.content);
-      return {
-        path: String(r.path),
-        startLine: Number(r.start_line),
-        endLine: Number(r.end_line),
-        lang: String(r.lang ?? ""),
-        score: Number(r.score),
-        ...(r.symbol ? { symbol: String(r.symbol) } : {}),
-        content: full.slice(0, HIT_CONTENT_CAP),
-        ...(full.length > HIT_CONTENT_CAP ? { truncated: true } : {}),
-      };
-    }),
-    ...(ranking === "keyword" && handle.manifest.vectors !== "ready"
-      ? { note: "vectors not ready yet - keyword-ranked only (re-run `cx index` or wait for the vector stage to finish)" }
-      : {}),
-    ...(() => {
-      const partial = partialIndex(handle.manifest);
-      return partial ? { partial } : {};
-    })(),
-  };
 }
 
 // --- sql --------------------------------------------------------------------
@@ -182,9 +97,8 @@ export async function runSql(
   sql: string,
   embeds?: Record<string, string>,
 ): Promise<Array<Record<string, unknown>>> {
-  // The mismatch guard applies to every path that embeds a query, not just
-  // `search` - a same-dimension model swap would otherwise return silently
-  // wrong vector_search/hybrid_search results through SQL.
+  // Embedder mismatch guard: a same-dimension model swap would otherwise
+  // return silently wrong hybrid_search results.
   if (PLACEHOLDER.test(sql)) {
     PLACEHOLDER.lastIndex = 0;
     const indexed = handle.manifest.embedder;

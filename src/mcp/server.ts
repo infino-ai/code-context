@@ -1,18 +1,18 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: Copyright The Infino Authors
 //
-// The dedicated MCP server: three tools over one code index.
+// The dedicated MCP server: two tools over one code index.
 //
-//   search  - find code: exact terms AND meaning in one ranked pass
-//   sql     - the power door: relevance-ranked aggregation over the search
-//             table functions (bm25_search / hybrid_search + GROUP BY)
+//   sql     - the only search surface: ranked retrieval via the search
+//             table functions (hybrid_search / bm25_search) composed
+//             freely with GROUP BY, regexp_like, and plain SQL
 //   reindex - sync from the working tree; replies the moment keyword
 //             search is live and backfills vectors in-process
 //
-// Three tools, deliberately: one way to find, one way to count, one way to
-// stay fresh - every additional near-duplicate retrieval tool worsens the
-// agent's tool selection. Results carry took_ms - server-side time for
-// the call (query embedding included where one happens; no transport).
+// Two tools, deliberately: one way to query, one way to stay fresh -
+// every additional near-duplicate retrieval tool worsens the agent's
+// tool selection. Results carry took_ms - server-side time for the
+// call (query embedding included where one happens; no transport).
 
 import { existsSync } from "node:fs";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
