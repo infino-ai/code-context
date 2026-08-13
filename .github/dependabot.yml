@@ -1,0 +1,15 @@
+# Keep dependencies current, most importantly the @infino-ai/infino engine —
+# a new engine release should show up here as a PR that has to pass CI, not
+# as silent drift.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: daily
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
