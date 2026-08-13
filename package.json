@@ -57,7 +57,7 @@
     "@vscode/tree-sitter-wasm": "^0.3.1",
     "commander": "^15.0.0",
     "ignore": "^7.0.5",
-    "zod": "^3.23.0"
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^20",
