@@ -1,0 +1,66 @@
+name: Release on merge
+
+# Second stage of the release train: when a `release-*` PR (opened by the
+# `Release prep` workflow) merges, tag the merge commit `vX.Y.Z` and publish
+# the GitHub release. publish.yml listens for that release and ships the
+# version to npm and the MCP Registry.
+#
+# The tag and release are created with the org's release-App token: a release
+# created with the default GITHUB_TOKEN would not trigger publish.yml
+# (workflows can't trigger workflows with the default token).
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+permissions:
+  contents: read # the tag + release use the release-App token
+
+jobs:
+  release:
+    name: Tag and publish the GitHub release
+    runs-on: ubuntu-latest
+    if: >-
+      github.repository == 'infino-ai/code-context' &&
+      github.event.pull_request.merged == true &&
+      startsWith(github.event.pull_request.head.ref, 'release-')
+    timeout-minutes: 5
+    steps:
+      - name: Mint release-App token scoped to code-context
+        id: token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: infino-ai
+          repositories: code-context
+
+      # Check out the merge commit itself: its package.json is the version
+      # this release ships, and the tag must point exactly at it.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          token: ${{ steps.token.outputs.token }}
+
+      # Idempotent: a re-run (or a manually pre-created tag) skips cleanly
+      # instead of failing on "tag already exists".
+      - name: Tag and release
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          SHA: ${{ github.event.pull_request.merge_commit_sha }}
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./package.json').version")"
+          tag="v$version"
+
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "release $tag already exists — nothing to do"
+            exit 0
+          fi
+          if ! git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null; then
+            git tag "$tag" "$SHA"
+            git push origin "refs/tags/$tag"
+          fi
+          gh release create "$tag" --target "$SHA" \
+            --title "$tag" --generate-notes
