@@ -46,7 +46,7 @@ import { createInterface } from "node:readline";
 import { join, relative, sep } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { IndexSpec, type Connection, type OptimizeOptions, type RowRecord } from "@infino-ai/infino";
-import { APPEND_BATCH, EMBED_BATCH, N_CENT, TABLE, DEFAULT_CAPS, type IndexCaps } from "./config.js";
+import { APPEND_BATCH, EMBED_BATCH, TABLE, DEFAULT_CAPS, type IndexCaps } from "./config.js";
 import { walkRepo } from "./walker.js";
 import { shouldIndexFile, chunkFile, looksBinary, embedText, type Chunk } from "./chunker.js";
 import { readManifest, writeManifest, INDEX_FORMAT_VERSION, type Manifest, type VectorState } from "./manifest.js";
@@ -254,7 +254,7 @@ export async function indexRepoStaged(opts: IndexOptions): Promise<StagedIndexRu
         const hybridTable = db.createTable(
           TABLE,
           { ...TEXT_SCHEMA, embedding: { vector: dim } },
-          new IndexSpec().fts("content").vector("embedding", dim, N_CENT, "cosine"),
+          new IndexSpec().fts("content").vector("embedding", dim, "cosine"),
         );
         // Zero chunks ⇒ no vector spill was ever written; the empty table is
         // already complete.
