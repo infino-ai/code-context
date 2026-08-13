@@ -130,6 +130,15 @@ describe("syncRepo", () => {
       { q: "axolotl" },
     );
     expect(rows.some((r) => r.path === "src/gamma.ts")).toBe(true);
+    // Meaning-only ranking proves the synced rows were actually re-embedded:
+    // vector_search can only return rows that have vectors.
+    const vrows = await runSql(
+      handle,
+      fakeEmbedder,
+      "SELECT path FROM vector_search('chunks','embedding', {{q}}, 3)",
+      { q: "axolotl" },
+    );
+    expect(vrows.some((r) => r.path === "src/gamma.ts")).toBe(true);
   });
 
   it("is idempotent when a file is re-added identically (no duplicate rows)", async () => {

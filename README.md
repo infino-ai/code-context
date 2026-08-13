@@ -203,6 +203,18 @@ miss code-context and fall back to grep/read. It's a small, always-loaded set
 Use *either* the plugin or the `add-json` command, not both. They register the
 same `code-context` server, so running both just collides.
 
+**Enforcement.** The plugin also ships hooks that make the index the default
+way to search: once a repo's index fully covers it (vectors ready, nothing
+truncated), the Grep tool and standalone `grep`/`rg` commands are denied with
+a redirect to `sql`. The deny is scoped, not absolute - grep as a pipe filter
+on other command output always passes, and a grep targeting something the
+index can't answer for (a gitignored file, an oversized file, a dot-path, a
+path outside the repo) is allowed silently. Two escape hatches: prefix a
+command with `CX_GREP_FALLBACK=1` when an index search genuinely came up
+short (the hook asks for approval instead of denying), and `CX_NO_ENFORCE=1`
+in the environment disables enforcement entirely. Plain MCP registration
+(`add-json`) gets the tools without the hooks.
+
 **For a team,** commit a project-scoped `.mcp.json` at the repo root so
 everyone gets it (after the one-time project-server approval):
 
@@ -283,6 +295,8 @@ no restart, no per-repo config.
 | `CX_SYNC_INTERVAL_SECS` | 30 | auto-sync debounce between staleness checks |
 | `CX_NO_EMBED` | off | keyword-only mode for the MCP server (skip the vector stage) |
 | `CX_NO_RECEIPT` | off | `1` turns off usage accounting - the per-call receipt on results and the `cx usage` ledger |
+| `CX_NO_ENFORCE` | off | `1` disables the Claude Code plugin's grep-enforcement hooks entirely |
+| `CX_GREP_FALLBACK` | - | prefix a `grep`/`rg` command with `CX_GREP_FALLBACK=1` to request an approved fallback grep after an index search came up short |
 
 Every `sql` result carries a **usage receipt** - a terse, local line showing
 the tokens it returned, the row count, and a running session total (e.g.

@@ -37,6 +37,20 @@ export function partialIndex(manifest: Manifest): PartialIndex | undefined {
   };
 }
 
+/** Agent-facing readiness note while the vector stage has not finished:
+ * hybrid_search / vector_search rank keyword-only or partial until the
+ * backfill lands, while bm25_search is unaffected. The old search() surfaced
+ * this on every call; the SQL surface must too, or an early query on an
+ * eagerly-building index silently reads as full hybrid recall. Undefined
+ * once vectors are ready. */
+export function vectorsNote(manifest: Manifest): string | undefined {
+  if (manifest.vectors === "ready") return undefined;
+  return (
+    "vectors are still backfilling - hybrid_search/vector_search rank keyword-only or partial " +
+    "results right now; bm25_search is unaffected. This note disappears when vectors are ready."
+  );
+}
+
 /** JSON.stringify that survives the engine's bigint row values. */
 export function jsonify(value: unknown, pretty = false): string {
   return JSON.stringify(

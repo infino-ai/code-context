@@ -22,7 +22,7 @@ import { connect } from "@infino-ai/infino";
 import { indexDir, resolveRoot, TABLE, DEFAULT_CAPS } from "../core/config.js";
 import { readManifest, type Manifest } from "../core/manifest.js";
 import type { IndexHandle } from "../core/context.js";
-import { runSql, jsonify, partialIndex } from "../core/searcher.js";
+import { runSql, jsonify, partialIndex, vectorsNote } from "../core/searcher.js";
 import { newSession, receiptEnabled, sqlEntry, formatReceipt, recordUsage } from "../core/usage.js";
 import {
   indexRepoStaged,
@@ -64,7 +64,7 @@ export async function serveMcp(rootPath?: string): Promise<void> {
   // keeps the stat walk off the hot path (~20ms to ~2s depending on repo size).
   const autoSyncEnabled = !["0", "false", "no"].includes((process.env.CX_AUTO_SYNC ?? "").toLowerCase());
   const syncIntervalMs = Number(process.env.CX_SYNC_INTERVAL_SECS ?? 30) * 1000;
-  // A search/sql on a never-indexed repo builds the index inline, then answers
+  // A sql query on a never-indexed repo builds the index inline, then answers
   // on the same call (staged: keyword search live in seconds). Off restores the
   // strict "index it first" error.
   const autoIndexEnabled = !["0", "false", "no"].includes((process.env.CX_AUTO_INDEX ?? "").toLowerCase());
@@ -279,6 +279,7 @@ export async function serveMcp(rootPath?: string): Promise<void> {
         const t0 = performance.now();
         const rows = await runSql(handle, getEmbedder(), query, embed as Record<string, string> | undefined);
         const partial = partialIndex(handle.manifest);
+        const note = vectorsNote(handle.manifest);
         let usage: string | undefined;
         if (receiptOn) {
           const entry = sqlEntry(query, rows);
@@ -287,6 +288,7 @@ export async function serveMcp(rootPath?: string): Promise<void> {
         }
         return ok({
           rows,
+          ...(note ? { note } : {}),
           ...(partial ? { partial } : {}),
           ...(autoIndexed ? { auto_indexed: autoIndexNote(autoIndexed) } : {}),
           took_ms: Math.round((performance.now() - t0) * 1000) / 1000,

@@ -7,7 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { connect } from "@infino-ai/infino";
 import { indexRepo, indexRepoStaged } from "../src/core/indexer.js";
 import { readManifest } from "../src/core/manifest.js";
-import { runSql } from "../src/core/searcher.js";
+import { runSql, vectorsNote } from "../src/core/searcher.js";
 import type { IndexHandle } from "../src/core/context.js";
 import type { Embedder } from "../src/core/embedder.js";
 
@@ -106,9 +106,12 @@ describe("ranked retrieval via sql TVFs", () => {
     expect(String(rows[0].path)).toMatch(/auth|README/);
   });
 
-  it("bm25_search needs no embedding, so it answers while vectors backfill", async () => {
+  it("surfaces the vectors-not-ready note while bm25_search still answers", async () => {
+    const building = { ...handle, manifest: { ...handle.manifest, vectors: "building" as const } };
+    expect(vectorsNote(building.manifest)).toMatch(/vectors are still backfilling/);
+    expect(vectorsNote(handle.manifest)).toBeUndefined();
     const rows = await runSql(
-      handle,
+      building,
       fakeEmbedder,
       "SELECT path FROM bm25_search('chunks','content','commit log', 5)",
     );
