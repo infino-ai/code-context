@@ -62,7 +62,7 @@
   "devDependencies": {
     "@types/node": "^20",
     "typescript": "^5",
-    "vitest": "^3"
+    "vitest": "^4"
   },
   "overrides": {
     "sharp": "^0.35.3",
