@@ -1,0 +1,181 @@
+name: Release prep
+
+# Opens a release PR when main has shipped-artifact changes since the last
+# release: classifies the diff, bumps package.json/package-lock.json, pushes a
+# `release-vX.Y.Z` branch, and opens the PR. A human reviews and merges it;
+# the `Release on merge` workflow then tags, and the tag's GitHub release
+# drives publish.yml (npm + MCP Registry).
+#
+# The bump is decided by which files changed since the last `v*` tag, by what
+# a release consumer actually receives. The npm tarball is dist/ + README +
+# LICENSE + package.json; the MCP Registry entry is server.json. Much of this
+# repo reaches its audience straight from GitHub main with no release at all
+# (docs/, llms.txt, context7.json, skills/, AGENTS.md) — changes there never
+# warrant one:
+#
+#   minor — behavior of the shipped artifact changes:
+#             src/**, package.json, package-lock.json
+#   patch — only artifact/catalog text or metadata changes:
+#             README.md, LICENSE, server.json
+#   skip  — nothing a release consumer receives changes (no PR at all):
+#             everything else (docs/**, llms.txt, context7.json, skills/**,
+#             test/**, bench/**, .github/**, …)
+#
+# Highest bucket wins across the diff. Major is never automatic — dispatch
+# with bump=major when a breaking release is intended. The classification
+# lands in the PR body so the human check has something to check.
+#
+# Auth is the org's release GitHub App (installed on this repo, scoped to
+# Contents + Pull requests): GITHUB_TOKEN can't be used here twice over — PRs
+# it opens don't trigger CI, and releases the next workflow creates with it
+# wouldn't trigger publish.yml. Needs the RELEASE_APP_ID variable and the
+# RELEASE_APP_PRIVATE_KEY secret.
+
+on:
+  # Daily: 10:45 IST (05:15 UTC), staggered after infino-mcp's train so the
+  # release PRs arrive for review in sequence. Skips itself when there is
+  # nothing to release, so a quiet day costs one no-op run.
+  schedule:
+    - cron: "15 5 * * *"
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Version bump (auto = classify the diff)"
+        required: true
+        type: choice
+        default: auto
+        options: [auto, patch, minor, major]
+
+permissions:
+  contents: read # pushes/PRs use the release-App token, not the workflow token
+
+# One release prep at a time; queue instead of cancelling.
+concurrency:
+  group: release-prep
+  cancel-in-progress: false
+
+jobs:
+  prep:
+    name: Classify, bump, and open the release PR
+    runs-on: ubuntu-latest
+    if: github.repository == 'infino-ai/code-context'
+    timeout-minutes: 10
+    steps:
+      - name: Mint release-App token scoped to code-context
+        id: token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: infino-ai
+          repositories: code-context
+
+      # Full history: the gate and classifier need the release tags.
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          token: ${{ steps.token.outputs.token }}
+          fetch-depth: 0
+
+      # Decide whether to release and at what level. Everything downstream is
+      # gated on `bump` not being "skip".
+      - name: Gate and classify the diff since the last release
+        id: classify
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          REQUESTED: ${{ inputs.bump || 'auto' }}
+        run: |
+          set -euo pipefail
+
+          if gh pr list --state open --json headRefName \
+              --jq '.[].headRefName' | grep -q '^release-'; then
+            echo "an open release-* PR already exists; not opening another"
+            echo "bump=skip" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          last="$(git describe --tags --abbrev=0 --match 'v[0-9]*' 2>/dev/null || true)"
+          if [ -z "$last" ]; then
+            echo "::error::no v* release tag found — cut the first release manually"
+            exit 1
+          fi
+          if [ "$(git rev-list "$last..HEAD" --count)" = "0" ]; then
+            echo "no commits on main since $last; nothing to release"
+            echo "bump=skip" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Classify each changed file into its bucket; highest wins.
+          bump=skip
+          minor_files=""; patch_files=""; skip_files=""
+          while IFS= read -r f; do
+            case "$f" in
+              src/*|package.json|package-lock.json)
+                bump=minor
+                minor_files="$minor_files$f, " ;;
+              README.md|LICENSE|server.json)
+                [ "$bump" = "skip" ] && bump=patch
+                patch_files="$patch_files$f, " ;;
+              *)
+                skip_files="$skip_files$f, " ;;
+            esac
+          done < <(git diff --name-only "$last"..HEAD)
+
+          if [ "$REQUESTED" != "auto" ]; then
+            echo "dispatch requested bump=$REQUESTED (classifier said $bump)"
+            bump="$REQUESTED"
+          fi
+
+          {
+            echo "bump=$bump"
+            echo "last=$last"
+            echo "minor_files=${minor_files%, }"
+            echo "patch_files=${patch_files%, }"
+            echo "skip_files=${skip_files%, }"
+          } >> "$GITHUB_OUTPUT"
+          echo "since $last: bump=$bump"
+
+      - name: Bump the version
+        if: steps.classify.outputs.bump != 'skip'
+        id: version
+        env:
+          BUMP: ${{ steps.classify.outputs.bump }}
+        run: |
+          set -euo pipefail
+          npm version "$BUMP" --no-git-tag-version
+          echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: Push the release branch and open the PR
+        if: steps.classify.outputs.bump != 'skip'
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+          BUMP: ${{ steps.classify.outputs.bump }}
+          LAST: ${{ steps.classify.outputs.last }}
+          MINOR_FILES: ${{ steps.classify.outputs.minor_files }}
+          PATCH_FILES: ${{ steps.classify.outputs.patch_files }}
+          SKIP_FILES: ${{ steps.classify.outputs.skip_files }}
+        run: |
+          set -euo pipefail
+          branch="release-v$VERSION"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$branch"
+          git commit -am "release: v$VERSION"
+          git push origin "$branch"
+
+          body="Release PR stamped by the \`Release prep\` workflow: \
+          **v$VERSION** (\`$BUMP\` bump, changes since \`$LAST\`).
+
+          | Bucket | Files |
+          | ------ | ----- |
+          | minor (shipped behavior) | ${MINOR_FILES:-—} |
+          | patch (artifact text/metadata) | ${PATCH_FILES:-—} |
+          | not released | ${SKIP_FILES:-—} |
+
+          On merge, \`Release on merge\` tags \`v$VERSION\` and the release
+          drives \`publish.yml\` (npm + MCP Registry). Close this PR to skip
+          the release; the next scheduled run will re-offer it."
+          gh pr create --base main --head "$branch" \
+            --title "release: v$VERSION" --body "$body"
