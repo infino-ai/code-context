@@ -205,15 +205,19 @@ same `code-context` server, so running both just collides.
 
 **Enforcement.** The plugin also ships hooks that make the index the default
 way to search: once a repo's index fully covers it (vectors ready, nothing
-truncated), the Grep tool and standalone `grep`/`rg` commands are denied with
-a redirect to `sql`. The deny is scoped, not absolute - grep as a pipe filter
-on other command output always passes, and a grep targeting something the
-index can't answer for (a gitignored file, an oversized file, a dot-path, a
-path outside the repo) is allowed silently. Two escape hatches: prefix a
-command with `CX_GREP_FALLBACK=1` when an index search genuinely came up
-short (the hook asks for approval instead of denying), and `CX_NO_ENFORCE=1`
-in the environment disables enforcement entirely. Plain MCP registration
-(`add-json`) gets the tools without the hooks.
+over the file cap), the Grep tool and standalone `grep`/`rg`/`git grep`
+commands are denied with a redirect to the `sql` search functions. Until the
+index is fully built, grep is untouched - enforcement never pushes an agent
+onto an index that can't answer yet. The deny is scoped, not absolute - grep
+as a pipe filter on other command output always passes, and a grep targeting
+something the index can't answer for (a gitignored file, a file over the byte
+cap, a dot-path, a path outside the repo) is allowed silently. Two escape
+hatches: prefix a command with `CX_GREP_FALLBACK=1` when an index search
+genuinely came up short (the hook asks for approval instead of denying), and
+`CX_NO_ENFORCE=1` in the environment disables enforcement entirely. Plain MCP
+registration (`add-json`) gets the tools without the hooks; `cx install`
+adds them (see below). Use *either* the plugin or `cx install`, not both -
+both sets fire, harmlessly, but it's noise.
 
 **For a team,** commit a project-scoped `.mcp.json` at the repo root so
 everyone gets it (after the one-time project-server approval):
@@ -283,6 +287,27 @@ target a specific repo when a session spans more than one. One server
 instance serves them all, each with its own index in its own `.infino/` -
 no restart, no per-repo config.
 
+**Enforcement without the plugin.** Enforcement - hooks that deny the Grep
+tool and standalone `grep`/`rg`/`git grep` on a fully-indexed repo and
+redirect to `sql`, with the full rules in the Claude Code block above - ships
+inside the plugin. For every other way of reaching code-context - `npx`,
+`claude mcp add-json`, Cursor, Windsurf - `cx install` wires the same hooks,
+and there it's the only form that survives a client restart:
+
+```
+cx install                # or: npx -y @infino-ai/code-context install
+```
+
+It copies the hook to `~/.claude/hooks/cx-deny-grep.mjs` and merges
+`SessionStart` + `PreToolUse` entries into `~/.claude/settings.json`, leaving
+any other hooks in the file alone. Re-running it is idempotent, `cx install
+--uninstall` reverses it, and `--settings <file>` targets a different settings
+file. The entries embed the absolute path of the `node` that ran the install,
+because a client's process often has no `node` on `PATH` and a hook that
+can't find node fails silently - which reads exactly like enforcement not
+working. Start a new session for the client to pick the hooks up. Use the
+plugin or this command, not both.
+
 ## Configuration
 
 | Variable | Default | Purpose |
@@ -295,7 +320,7 @@ no restart, no per-repo config.
 | `CX_SYNC_INTERVAL_SECS` | 30 | auto-sync debounce between staleness checks |
 | `CX_NO_EMBED` | off | keyword-only mode for the MCP server (skip the vector stage) |
 | `CX_NO_RECEIPT` | off | `1` turns off usage accounting - the per-call receipt on results and the `cx usage` ledger |
-| `CX_NO_ENFORCE` | off | `1` disables the Claude Code plugin's grep-enforcement hooks entirely |
+| `CX_NO_ENFORCE` | off | `1` disables the grep-enforcement hooks entirely (however they were installed - the plugin or `cx install`) |
 | `CX_GREP_FALLBACK` | - | prefix a `grep`/`rg` command with `CX_GREP_FALLBACK=1` to request an approved fallback grep after an index search came up short |
 
 Every `sql` result carries a **usage receipt** - a terse, local line showing
@@ -320,6 +345,7 @@ cx sql <statement>        read-only SQL; --embed q="text" fills {{q}}
 cx status                 what the index holds, how fresh, vector readiness
 cx usage                  ledger of queries run and what each returned  (-n, --all, --clear, --json)
 cx mcp                    serve the MCP tools over stdio
+cx install                wire the enforcement hooks into the client (--uninstall reverses)
 ```
 
 `cx usage` reads the local ledger at `.infino/usage.jsonl` - every `sql` query

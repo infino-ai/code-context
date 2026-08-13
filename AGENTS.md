@@ -39,7 +39,9 @@ the honest limits in [docs/tradeoffs.md](docs/tradeoffs.md).
   `indexer` (build + staged readiness + incremental sync), `searcher`
   (SQL + embed-placeholder plumbing), `embedder` (local model), `filestate` (incremental
   sync state), `walker`, `manifest`, `config`, `context`, `output`.
-- `src/commands/`: CLI command implementations (`index-cmd`, `query-cmds`).
+- `src/commands/`: CLI command implementations (`index-cmd`, `query-cmds`,
+  and `install-cmd`, which wires the enforcement hooks into a non-plugin
+  client's settings).
 - `test/`: vitest suites. `bench/`: the benchmark harness. `docs/`: docs.
 
 ## Build, test, gates

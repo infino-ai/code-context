@@ -16,6 +16,29 @@ meaning when you do not know the identifier, and ranking or aggregating
 across the whole repo. For jumping to one known symbol or literal string, a
 plain grep is already cheap and there is no need for an index.
 
+### How do I make an agent actually use the index instead of grep?
+
+Install the enforcement hooks. The Claude Code plugin ships them; on any other
+client - `npx`, `claude mcp add-json`, Cursor, Windsurf - `cx install` writes
+them, and there it is the only form that survives a client restart (use one or
+the other, not both). It copies the hook to `~/.claude/hooks/cx-deny-grep.mjs`
+and merges `SessionStart` + `PreToolUse` entries into
+`~/.claude/settings.json` - idempotent, reversed by `cx install --uninstall`,
+and pointed at another file with `--settings <file>`. The entries embed the
+absolute path of the `node` that ran the install, because a client's process
+often has no `node` on `PATH` and a hook that cannot find node fails silently.
+
+With the hooks in place, once a repo's index fully covers it (vectors ready,
+nothing over the file cap) the Grep tool and standalone `grep`/`rg`/`git grep`
+are denied with a redirect to the `sql` search functions. Until the index is
+fully built grep is untouched - enforcement never pushes an agent onto an
+index that cannot answer yet. The deny is scoped, too: grep as a pipe filter
+on other command output always passes, and a target the index cannot cover
+(gitignored, over the byte cap, a dot-path, outside the repo) passes
+silently. Prefix a command with
+`CX_GREP_FALLBACK=1` to turn a deny into an approval prompt when an index
+search genuinely came up short; `CX_NO_ENFORCE=1` disables enforcement.
+
 ### Does my code leave the machine?
 
 No. There are no accounts, no API keys, and no server. The embedding model is

@@ -4,9 +4,18 @@
 //
 // code-context / cx - local code search for AI coding agents.
 
+import { readFileSync } from "node:fs";
 import { Command } from "commander";
 import { indexCmd } from "./commands/index-cmd.js";
+import { installCmd } from "./commands/install-cmd.js";
 import { sqlCmd, statusCmd, usageCmd } from "./commands/query-cmds.js";
+
+/** The package manifest, one level up from this module both in source
+ * (`src/cli.ts`) and in the shipped build (`dist/cli.js`). Reading the version
+ * from it at runtime is what keeps `cx --version` from drifting away from what
+ * npm published, which a hand-maintained literal here did. */
+const PACKAGE_JSON = new URL("../package.json", import.meta.url);
+const { version } = JSON.parse(readFileSync(PACKAGE_JSON, "utf8")) as { version: string };
 
 const program = new Command();
 
@@ -18,7 +27,7 @@ program
       "hybrid_search fuses keyword + semantic ranking, bm25_search covers the window\n" +
       "before vectors finish backfilling, and GROUP BY turns either into aggregation.",
   )
-  .version("0.1.4")
+  .version(version)
   .addHelpText(
     "after",
     `
@@ -30,7 +39,8 @@ Examples:
   cx sql "SELECT path, SUM(end_line - start_line + 1) AS lines \\
           FROM bm25_search('chunks','content','vector index', 300) \\
           GROUP BY path ORDER BY lines DESC LIMIT 10"
-  cx mcp                              serve the MCP tools (sql/reindex) over stdio`,
+  cx mcp                              serve the MCP tools (sql/reindex) over stdio
+  cx install                          make the index the way Claude Code searches (hooks; --uninstall reverses)`,
   );
 
 program
@@ -57,6 +67,17 @@ program
   .option("--json", "machine-readable output")
   .option("-C, --path <dir>", "repo root (default: current directory)")
   .action(sqlCmd);
+
+program
+  .command("install")
+  .description(
+    "wire index-first enforcement into Claude Code (hooks that steer code search to sql) - " +
+      "Claude Code only; other MCP clients have no hook surface to configure",
+  )
+  .option("--uninstall", "remove the hooks this command installed")
+  .option("--settings <file>", "settings file to edit (default: ~/.claude/settings.json)")
+  .option("--force", "allow a project-scoped .claude settings file (its paths are machine-specific)")
+  .action(installCmd);
 
 program
   .command("status")
