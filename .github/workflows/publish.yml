@@ -39,7 +39,7 @@ jobs:
     name: Build and publish
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # A release tag must match the version it ships, or the npm version,
       # the git tag, and the registry entry drift apart.
       - name: Check tag matches package.json version
