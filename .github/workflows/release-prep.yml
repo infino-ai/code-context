@@ -183,7 +183,9 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -b "$branch"
           git commit -am "release: v$VERSION"
-          git push origin "$branch"
+          # Force: release-* branches are machine-owned, and a stale branch
+          # from a closed release PR would otherwise wedge the push.
+          git push --force origin "$branch"
 
           body="Release PR stamped by the \`Release prep\` workflow: \
           **v$VERSION** (\`$BUMP\` bump, changes since \`$LAST\`).
