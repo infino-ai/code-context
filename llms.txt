@@ -1,12 +1,13 @@
 # code-context
 
 > Local code search for AI coding agents: a CLI and an MCP server over an
-> index that lives in plain files inside the repo. Keyword (BM25) search is
-> live seconds after indexing starts, semantic and hybrid search unlock as
-> vectors backfill, and SQL composes ranked search with GROUP BY so "which
-> files have the most code about X" is one query. No accounts, no API keys,
-> no database server, no telemetry; embedding is a small local model and
-> code never leaves the machine.
+> index that lives in plain files inside the repo, queried through one door -
+> read-only SQL with ranked search table functions. hybrid_search fuses
+> keyword (BM25) and semantic ranking in one pass (bm25_search covers the
+> window before vectors backfill), and the same relation composes with
+> GROUP BY so "which files have the most code about X" is one query. No
+> accounts, no API keys, no database server, no telemetry; embedding is a
+> small local model and code never leaves the machine.
 
 code-context is built on infino (https://github.com/infino-ai/infino), an
 embedded retrieval engine; the same engine and index format also serve
@@ -25,20 +26,38 @@ logs, docs, and agent memory.
 - Zero-install for Claude Code (recommended; `alwaysLoad` keeps the tools in
   view when many MCP servers are configured):
   `claude mcp add-json code-context -s user '{"command":"npx","args":["-y","@infino-ai/code-context","mcp"],"alwaysLoad":true}'`.
-  A Claude Code plugin (`/plugin marketplace add infino-ai/code-context`) bakes the same config in.
-- MCP tools (stdio): `search` (exact terms AND meaning, one ranked pass,
-  hits carry chunk content with path:line ranges), `sql` (read-only
-  SELECT/WITH over `chunks(path, start_line, end_line, lang, content)`,
-  ranked search functions (bm25_search/hybrid_search) usable as table-valued
-  relations so search composes with GROUP BY), `reindex` (incremental sync;
-  the server also auto-syncs in the
-  background). A `search`/`sql` on a never-indexed repo builds the index
-  inline and answers on the same call (keyword live in seconds, vectors
-  backfilling); `CX_AUTO_INDEX=0` restores a strict "index it first" error.
-  Each tool takes an optional `path` (absolute repo root) so one server serves
-  multiple repos in a session; omit it for the startup root.
-- CLI: `cx index` (incremental; `--full`, `--watch`), `cx search`,
-  `cx sql`, `cx status`, `cx mcp`.
+  A Claude Code plugin (`/plugin marketplace add infino-ai/code-context`) bakes the same config in
+  and ships the enforcement hooks below.
+- Enforcement (make the index the way an agent searches): the Claude Code
+  plugin ships the hooks; on every other client - `npx`, `claude mcp
+  add-json`, Cursor, Windsurf - `cx install` writes them, and it is the only
+  form there that survives a client restart. It copies
+  `~/.claude/hooks/cx-deny-grep.mjs` and merges SessionStart + PreToolUse
+  entries into `~/.claude/settings.json`; idempotent, reversed by
+  `cx install --uninstall`, retargeted by `--settings <file>`, and it embeds
+  the absolute node path it ran with because a client process often has no
+  node on PATH and a hook that cannot find node fails silently. Once a repo's
+  index fully covers it (vectors ready, nothing over the file cap) the Grep
+  tool and standalone grep/rg/git grep are denied with a redirect to the sql
+  search functions; grep as a pipe filter on other output always passes, a
+  target the index cannot cover (gitignored, over the byte cap, a dot-path,
+  outside the repo) passes silently, `CX_GREP_FALLBACK=1 <cmd>` turns the
+  deny into an approval prompt, and `CX_NO_ENFORCE=1` disables enforcement.
+  Until the index is fully built grep is untouched. Use the plugin or
+  `cx install`, not both.
+- MCP tools (stdio): `sql` (the search surface: read-only SELECT/WITH over
+  `chunks(path, start_line, end_line, lang, symbol, content[, embedding])`,
+  with hybrid_search/bm25_search/vector_search as table-valued relations -
+  ranked retrieval and GROUP BY aggregation in one query) and `reindex`
+  (incremental sync; the server also auto-syncs in
+  the background). The server builds the index eagerly at startup, and a
+  query that beats the build still triggers it inline; `CX_AUTO_INDEX=0`
+  restores a strict "index it first" error. Each tool takes an optional
+  `path` (absolute repo root) so one server serves multiple repos in a
+  session; omit it for the startup root.
+- CLI: `cx index` (incremental; `--full`, `--watch`), `cx sql`,
+  `cx status`, `cx usage`, `cx mcp`, `cx install` (`--uninstall`,
+  `--settings <file>`).
 
 ## Evidence
 

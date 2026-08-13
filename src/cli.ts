@@ -4,32 +4,43 @@
 //
 // code-context / cx - local code search for AI coding agents.
 
+import { readFileSync } from "node:fs";
 import { Command } from "commander";
 import { indexCmd } from "./commands/index-cmd.js";
-import { searchCmd, sqlCmd, statusCmd, usageCmd } from "./commands/query-cmds.js";
-import { DEFAULT_SEARCH_K } from "./core/config.js";
+import { installCmd } from "./commands/install-cmd.js";
+import { sqlCmd, statusCmd, usageCmd } from "./commands/query-cmds.js";
+
+/** The package manifest, one level up from this module both in source
+ * (`src/cli.ts`) and in the shipped build (`dist/cli.js`). Reading the version
+ * from it at runtime is what keeps `cx --version` from drifting away from what
+ * npm published, which a hand-maintained literal here did. */
+const PACKAGE_JSON = new URL("../package.json", import.meta.url);
+const { version } = JSON.parse(readFileSync(PACKAGE_JSON, "utf8")) as { version: string };
 
 const program = new Command();
 
 program
   .name("cx")
   .description(
-    "Local code search for AI coding agents - an index in plain files under .infino/.\n" +
-      "Keyword search seconds after `cx index`; semantic and hybrid search when vectors\n" +
-      "finish backfilling; SQL with relevance-ranked aggregation over the whole repo.",
+    "Local code search for AI coding agents - an index in plain files under .infino/,\n" +
+      "queried through one door: read-only SQL with ranked search table functions.\n" +
+      "hybrid_search fuses keyword + semantic ranking, bm25_search covers the window\n" +
+      "before vectors finish backfilling, and GROUP BY turns either into aggregation.",
   )
-  .version("0.1.4")
+  .version(version)
   .addHelpText(
     "after",
     `
 Examples:
   cx index                            index the current repo (keyword search is live in seconds)
-  cx search "parse_config"            exact terms and meaning, one ranked pass
-  cx search "where is auth handled"   works when you don't know the words
+  cx sql "SELECT path, start_line, end_line, symbol, content \\
+          FROM hybrid_search('chunks','content','auth handling','embedding', {{q}}, 10)" \\
+        --embed "q=where is auth handled"
   cx sql "SELECT path, SUM(end_line - start_line + 1) AS lines \\
           FROM bm25_search('chunks','content','vector index', 300) \\
           GROUP BY path ORDER BY lines DESC LIMIT 10"
-  cx mcp                              serve the MCP tools (search/sql/reindex) over stdio`,
+  cx mcp                              serve the MCP tools (sql/reindex) over stdio
+  cx install                          make the index the way Claude Code searches (hooks; --uninstall reverses)`,
   );
 
 program
@@ -44,15 +55,6 @@ program
   .action(indexCmd);
 
 program
-  .command("search")
-  .description("find code: exact terms and meaning in one ranked pass")
-  .argument("<query>", "what you're looking for")
-  .option("-k <n>", "maximum hits", String(DEFAULT_SEARCH_K))
-  .option("--json", "machine-readable output")
-  .option("-C, --path <dir>", "repo root (default: current directory)")
-  .action(searchCmd);
-
-program
   .command("sql")
   .description("read-only SQL over the index, including ranked search table functions")
   .argument("<statement>", "a single SELECT/WITH statement")
@@ -65,6 +67,17 @@ program
   .option("--json", "machine-readable output")
   .option("-C, --path <dir>", "repo root (default: current directory)")
   .action(sqlCmd);
+
+program
+  .command("install")
+  .description(
+    "wire index-first enforcement into Claude Code (hooks that steer code search to sql) - " +
+      "Claude Code only; other MCP clients have no hook surface to configure",
+  )
+  .option("--uninstall", "remove the hooks this command installed")
+  .option("--settings <file>", "settings file to edit (default: ~/.claude/settings.json)")
+  .option("--force", "allow a project-scoped .claude settings file (its paths are machine-specific)")
+  .action(installCmd);
 
 program
   .command("status")
@@ -87,7 +100,7 @@ program
 
 program
   .command("mcp")
-  .description("serve the MCP tools (search / sql / reindex) over stdio")
+  .description("serve the MCP tools (sql / reindex) over stdio")
   .option("-C, --path <dir>", "repo root (default: current directory)")
   .action(async (opts: { path?: string }) => {
     const { serveMcp } = await import("./mcp/server.js");

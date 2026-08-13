@@ -54,6 +54,3 @@ export const EMBED_BATCH = 32;
  * files) without changing retrieval. */
 export const EMBED_MAX_CHARS = Number(process.env.CX_EMBED_MAX_CHARS ?? 8000);
 
-/** Default number of search hits. Configurable per call (the `k` tool param /
- * CLI `-k`) and via CX_SEARCH_K for config/CI-level defaults. */
-export const DEFAULT_SEARCH_K = Number(process.env.CX_SEARCH_K ?? 10);

@@ -12,7 +12,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { connect, type Connection } from "@infino-ai/infino";
 import { indexRepoStaged, type IndexStats } from "../src/core/indexer.js";
 import { readManifest } from "../src/core/manifest.js";
-import { search } from "../src/core/searcher.js";
+import { runSql } from "../src/core/searcher.js";
 import type { IndexHandle } from "../src/core/context.js";
 import type { Embedder } from "../src/core/embedder.js";
 import type { RepoCtx } from "../src/mcp/repos.js";
@@ -76,9 +76,13 @@ describe("auto-index on first query (end to end)", () => {
     expect(existsSync(ctx.dir)).toBe(true);
 
     // The freshly built index actually answers a query.
-    const hits = await search(res.handle, fakeEmbedder, "verifySession token", 5);
-    expect(hits.hits.length).toBeGreaterThan(0);
-    expect(hits.hits[0].path).toContain("auth.ts");
+    const rows = await runSql(
+      res.handle,
+      fakeEmbedder,
+      "SELECT path FROM bm25_search('chunks','content','verifySession token', 5)",
+    );
+    expect(rows.length).toBeGreaterThan(0);
+    expect(String(rows[0].path)).toContain("auth.ts");
   });
 
   it("does not rebuild when the index already exists", async () => {

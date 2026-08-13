@@ -1,15 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: Copyright The Infino Authors
 //
-// `cx search` / `cx sql` / `cx status` - the query commands.
+// `cx sql` / `cx status` / `cx usage` - the query commands.
 
 import { openIndex, NoIndexError } from "../core/context.js";
 import { indexDir, resolveRoot } from "../core/config.js";
 import { createEmbedder, embedderInfo } from "../core/embedder.js";
-import { search, runSql, jsonify } from "../core/searcher.js";
+import { runSql, jsonify } from "../core/searcher.js";
 import {
   receiptEnabled,
-  searchEntry,
   sqlEntry,
   formatReceipt,
   recordUsage,
@@ -19,45 +18,12 @@ import {
   recordHookEvent,
   currentSessionStats,
 } from "../core/usage.js";
-import { bold, dim, cyan, yellow, green, table, fmtAge, fmtCount, fmtMs } from "../core/output.js";
+import { bold, dim, cyan, yellow, table, fmtAge, fmtCount, fmtMs } from "../core/output.js";
 
 function die(err: unknown): never {
   const msg = err instanceof NoIndexError ? err.message : `error: ${(err as Error).message}`;
   console.error(msg);
   process.exit(1);
-}
-
-export interface SearchCmdOptions {
-  k: string;
-  json?: boolean;
-  path?: string;
-}
-
-export async function searchCmd(query: string, opts: SearchCmdOptions): Promise<void> {
-  try {
-    const handle = openIndex(opts.path);
-    const result = await search(handle, createEmbedder(), query, Number(opts.k));
-    if (receiptEnabled()) {
-      const entry = searchEntry(result, handle.root);
-      recordUsage(handle.dir, entry);
-      console.error(dim(formatReceipt(entry)));
-    }
-    if (opts.json) {
-      console.log(jsonify(result, true));
-      return;
-    }
-    if (result.note) console.error(yellow(`note: ${result.note}`));
-    if (result.partial) console.error(yellow(`warning: ${result.partial.note}`));
-    result.hits.forEach((h, i) => {
-      console.log(
-        `${bold(String(i + 1) + ".")} ${cyan(h.path)}${dim(`:${h.startLine}-${h.endLine}`)} ${dim(`(${result.ranking} ${h.score.toFixed(3)})`)}`,
-      );
-      console.log(`  ${h.content.split("\n").slice(0, 5).join("\n  ")}\n`);
-    });
-    if (result.hits.length === 0) console.error(yellow("no hits"));
-  } catch (err) {
-    die(err);
-  }
 }
 
 export interface SqlCmdOptions {
@@ -111,7 +77,7 @@ export function statusCmd(opts: StatusCmdOptions): void {
     console.log(
       `code-context index: ${fmtCount(m.chunks)} chunks from ${fmtCount(m.files)} files, ` +
         `vectors ${m.vectors}, indexed ${fmtAge(m.indexedAt)}. ` +
-        `MCP tools: search (terms + meaning), sql (aggregation), reindex (after big edits).`,
+        `MCP tools: sql (ranked search TVFs + aggregation), reindex (after big edits).`,
     );
     return;
   }
@@ -187,7 +153,7 @@ export async function usageCmd(opts: UsageCmdOptions): Promise<void> {
     return;
   }
   if (entries.length === 0 && (!session || session.prompts === 0)) {
-    console.error(yellow("no usage recorded yet - run `cx search`/`cx sql` here, or query via the MCP server"));
+    console.error(yellow("no usage recorded yet - run `cx sql` here, or query via the MCP server"));
     return;
   }
 
@@ -210,19 +176,9 @@ export async function usageCmd(opts: UsageCmdOptions): Promise<void> {
     const clock = new Date(e.ts).toLocaleTimeString("en-US", { hour12: false });
     const tool = e.tool.padEnd(6);
     const q = cyan(`"${truncate(e.query, 52)}"`);
-    if (e.tool === "search") {
-      const hits = e.hits ?? [];
-      const files = new Set(hits.map((h) => h.path)).size;
-      console.log(
-        `${dim(clock)}  ${bold(tool)}  ${q}  ${dim(`-> ${hits.length} hits / ${files} files | ~${fmtTokens(e.returnedTokens)} tok | ${e.ranking ?? "?"}`)}`,
-      );
-      const locs = hits.slice(0, 5).map((h) => `${h.path}:${h.startLine}-${h.endLine}`);
-      if (locs.length) console.log(green(`            ${locs.join("  ")}${hits.length > 5 ? dim(`  (+${hits.length - 5} more)`) : ""}`));
-    } else {
-      console.log(
-        `${dim(clock)}  ${bold(tool)}  ${q}  ${dim(`-> ${e.rows ?? 0} rows | ~${fmtTokens(e.returnedTokens)} tok`)}`,
-      );
-    }
+    console.log(
+      `${dim(clock)}  ${bold(tool)}  ${q}  ${dim(`-> ${e.rows ?? 0} rows | ~${fmtTokens(e.returnedTokens)} tok`)}`,
+    );
   }
 }
 

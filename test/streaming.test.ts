@@ -14,7 +14,7 @@ import { connect, type Connection } from "@infino-ai/infino";
 import { APPEND_BATCH, EMBED_BATCH } from "../src/core/config.js";
 import { indexRepo, indexRepoStaged, syncRepo, type SyncResult } from "../src/core/indexer.js";
 import { readManifest } from "../src/core/manifest.js";
-import { search } from "../src/core/searcher.js";
+import { runSql } from "../src/core/searcher.js";
 import { unpackRows, type Embedder } from "../src/core/embedder.js";
 import type { IndexHandle } from "../src/core/context.js";
 
@@ -93,9 +93,13 @@ describe("streamed staged build", () => {
     expect(Number(n)).toBe(stats.chunks);
 
     const handle: IndexHandle = { root, dir, db, manifest: readManifest(dir)! };
-    const r = await search(handle, float32Fake, "streamingfixture3 pipeline", 5);
-    expect(r.ranking).toBe("hybrid");
-    expect(r.hits.length).toBeGreaterThan(0);
+    const rows = await runSql(
+      handle,
+      float32Fake,
+      "SELECT path FROM hybrid_search('chunks','content','streamingfixture3 pipeline','embedding', {{q}}, 5)",
+      { q: "streamingfixture3 pipeline" },
+    );
+    expect(rows.length).toBeGreaterThan(0);
 
     // Handoff files are gone once the vector stage settles.
     expect(spillNames(dir)).toEqual([]);
@@ -127,9 +131,12 @@ describe("streamed staged build", () => {
 
     // Keyword search still answers from the stage-1 table.
     const handle: IndexHandle = { root, dir, db, manifest: readManifest(dir)! };
-    const r = await search(handle, embedOnlyFake, "streamingfixture5", 3);
-    expect(r.ranking).toBe("keyword");
-    expect(r.hits.length).toBeGreaterThan(0);
+    const rows = await runSql(
+      handle,
+      embedOnlyFake,
+      "SELECT path FROM bm25_search('chunks','content','streamingfixture5', 3)",
+    );
+    expect(rows.length).toBeGreaterThan(0);
     expect(spillNames(dir)).toEqual([]);
   });
 
@@ -178,9 +185,13 @@ describe("streamed incremental sync", () => {
     expect(outcome.chunks).toBe(stats.chunks + outcome.chunksAdded);
 
     const handle: IndexHandle = { root, dir, db, manifest: readManifest(dir)! };
-    const r = await search(handle, float32Fake, "syncwavefixture101", 3);
-    expect(r.ranking).toBe("hybrid");
-    expect(r.hits.some((h) => h.path === "src/mod101.js")).toBe(true);
+    const rows = await runSql(
+      handle,
+      float32Fake,
+      "SELECT path FROM hybrid_search('chunks','content','syncwavefixture101','embedding', {{q}}, 3)",
+      { q: "syncwavefixture101" },
+    );
+    expect(rows.some((r) => r.path === "src/mod101.js")).toBe(true);
   });
 });
 
@@ -244,8 +255,13 @@ describe("review-confirmed regressions", () => {
     const [{ n: after }] = db.querySql(`SELECT COUNT(*) AS n FROM chunks`) as [{ n: unknown }];
     expect(Number(after)).toBe(Number(before));
     const handle: IndexHandle = { root, dir, db, manifest: readManifest(dir)! };
-    const r = await search(handle, float32Fake, "streamingfixture0 pipeline", 3);
-    expect(r.hits.some((h) => h.path === "src/mod0.js")).toBe(true);
+    const rows = await runSql(
+      handle,
+      float32Fake,
+      "SELECT path FROM hybrid_search('chunks','content','streamingfixture0 pipeline','embedding', {{q}}, 3)",
+      { q: "streamingfixture0 pipeline" },
+    );
+    expect(rows.some((r) => r.path === "src/mod0.js")).toBe(true);
     expect(spillNames(dir)).toEqual([]);
 
     // A later sync with a healthy embedder heals the same changeset.

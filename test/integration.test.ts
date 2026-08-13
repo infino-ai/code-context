@@ -7,7 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { connect } from "@infino-ai/infino";
 import { indexRepo, indexRepoStaged } from "../src/core/indexer.js";
 import { readManifest } from "../src/core/manifest.js";
-import { runSql, search } from "../src/core/searcher.js";
+import { runSql, vectorsNote } from "../src/core/searcher.js";
 import type { IndexHandle } from "../src/core/context.js";
 import type { Embedder } from "../src/core/embedder.js";
 
@@ -82,27 +82,40 @@ describe("indexing", () => {
   });
 });
 
-describe("search", () => {
-  it("finds exact identifiers through the keyword half", async () => {
-    const r = await search(handle, fakeEmbedder, "verifySession token", 5);
-    expect(r.hits.length).toBeGreaterThan(0);
-    expect(r.hits[0].path).toBe("src/auth.ts");
-    expect(r.hits[0].startLine).toBeGreaterThan(0);
-    expect(r.hits[0].content).toContain("verifySession");
+describe("ranked retrieval via sql TVFs", () => {
+  it("finds exact identifiers through bm25_search", async () => {
+    const rows = await runSql(
+      handle,
+      fakeEmbedder,
+      "SELECT path, start_line, content FROM bm25_search('chunks','content','verifySession token', 5)",
+    );
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows[0].path).toBe("src/auth.ts");
+    expect(Number(rows[0].start_line)).toBeGreaterThan(0);
+    expect(String(rows[0].content)).toContain("verifySession");
   });
 
-  it("hybrid ranking once vectors are ready", async () => {
-    const r = await search(handle, fakeEmbedder, "session verification", 5);
-    expect(r.ranking).toBe("hybrid");
-    expect(r.hits.length).toBeGreaterThan(0);
-    expect(r.hits[0].path).toMatch(/auth|README/);
+  it("ranks by meaning through hybrid_search once vectors are ready", async () => {
+    const rows = await runSql(
+      handle,
+      fakeEmbedder,
+      "SELECT path FROM hybrid_search('chunks','content','session verification','embedding', {{q}}, 5)",
+      { q: "session verification" },
+    );
+    expect(rows.length).toBeGreaterThan(0);
+    expect(String(rows[0].path)).toMatch(/auth|README/);
   });
 
-  it("keyword ranking while vectors are not ready", async () => {
-    const noVec = { ...handle, manifest: { ...handle.manifest, vectors: "building" as const } };
-    const r = await search(noVec, fakeEmbedder, "commit log", 5);
-    expect(r.ranking).toBe("keyword");
-    expect(r.note).toMatch(/vectors not ready/);
+  it("surfaces the vectors-not-ready note while bm25_search still answers", async () => {
+    const building = { ...handle, manifest: { ...handle.manifest, vectors: "building" as const } };
+    expect(vectorsNote(building.manifest)).toMatch(/vectors are still backfilling/);
+    expect(vectorsNote(handle.manifest)).toBeUndefined();
+    const rows = await runSql(
+      building,
+      fakeEmbedder,
+      "SELECT path FROM bm25_search('chunks','content','commit log', 5)",
+    );
+    expect(rows.length).toBeGreaterThan(0);
   });
 });
 

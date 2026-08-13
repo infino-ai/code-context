@@ -17,6 +17,17 @@ export interface FileEntry {
   size: number;
   mtimeMs: number;
   hash: string;
+  /** Rows this file contributed to the `chunks` table - `0` for a file that is
+   * fingerprinted but produced none (binary bytes behind an indexable
+   * extension, an empty `__init__.py`, a bare barrel `index.ts`). The state has
+   * to fingerprint those anyway, or every sync rediscovers them as "added";
+   * the count is what keeps the state from reading as a superset of the
+   * queryable table. The enforcement hook needs exactly that distinction: it
+   * may only deny grep on a path sql can answer for, so a file with no rows
+   * must not count as covered. Optional, and absent means "unknown" - state
+   * written before the field existed still reads, and the hook treats those
+   * entries as covered. */
+  chunks?: number;
 }
 
 export interface FileState {
@@ -57,7 +68,10 @@ export interface RepoDiff {
   deleted: string[];
   /** Candidate files whose size+mtime matched the stored entry (not hashed). */
   unchanged: number;
-  /** The next state to persist after the sync applies. */
+  /** The next state to persist after the sync applies. Entries carried over
+   * from the previous state keep their chunk count; `added`/`changed` entries
+   * are stamped by the caller, which is the only place the new count is
+   * knowable. */
   next: FileState;
 }
 
@@ -92,8 +106,12 @@ export function diffFiles(
     if (buf === undefined) continue; // racing delete - drops out of the index
     const hash = hashContent(buf);
     if (before && before.hash === hash) {
-      // touched but identical - refresh the stat fingerprint only
-      next.files[c.path] = { size: c.size, mtimeMs: c.mtimeMs, hash };
+      // Touched but identical - refresh the stat fingerprint only, and carry
+      // the chunk count over: identical content chunks identically, and the
+      // caller never re-chunks this file to restamp it.
+      const refreshed: FileEntry = { size: c.size, mtimeMs: c.mtimeMs, hash };
+      if (before.chunks !== undefined) refreshed.chunks = before.chunks;
+      next.files[c.path] = refreshed;
       unchanged++;
       continue;
     }

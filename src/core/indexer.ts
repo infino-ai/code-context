@@ -56,6 +56,7 @@ import {
   hashContent,
   readFileState,
   writeFileState,
+  type FileEntry,
   type FileState,
 } from "./filestate.js";
 import type { Embedder } from "./embedder.js";
@@ -177,14 +178,20 @@ export async function indexRepoStaged(opts: IndexOptions): Promise<StagedIndexRu
           continue; // racing deletes are fine - index what's readable
         }
         // Every readable candidate is fingerprinted (binary ones too, so a later
-        // sync's stat walk doesn't keep rediscovering them as "added").
-        fileState.files[taken[i].path] = {
+        // sync's stat walk doesn't keep rediscovering them as "added"), and each
+        // entry records how many rows the file actually contributed. The two
+        // skip branches below record 0 rather than omitting the file: a
+        // fingerprint on its own would claim a file the table has no rows for.
+        const entry: FileEntry = {
           size: taken[i].size,
           mtimeMs: taken[i].mtimeMs,
           hash: hashContent(buf),
+          chunks: 0,
         };
+        fileState.files[taken[i].path] = entry;
         if (looksBinary(buf)) continue;
         const fileChunks = await chunkFile(taken[i].path, buf.toString("utf8"));
+        entry.chunks = fileChunks.length;
         if (fileChunks.length === 0) continue;
         files++;
         chunkCount += fileChunks.length;
@@ -227,7 +234,7 @@ export async function indexRepoStaged(opts: IndexOptions): Promise<StagedIndexRu
       vectors: embedder ? "building" : "none",
       indexMs,
     };
-    writeManifest(indexDirPath, toManifest(stats));
+    writeManifest(indexDirPath, toManifest(root, stats));
     writeFileState(indexDirPath, fileState);
     if (!embedder) {
       spill.release();
@@ -264,7 +271,7 @@ export async function indexRepoStaged(opts: IndexOptions): Promise<StagedIndexRu
         stats.embedMs = Math.round(performance.now() - tEmbed);
         writeManifest(
           indexDirPath,
-          toManifest(stats, {
+          toManifest(root, stats, {
             provider: embedder.provider,
             model: embedder.model,
             dim,
@@ -275,7 +282,7 @@ export async function indexRepoStaged(opts: IndexOptions): Promise<StagedIndexRu
         stats.vectors = "none";
         stats.embedError = (err as Error).message;
         try {
-          writeManifest(indexDirPath, toManifest(stats));
+          writeManifest(indexDirPath, toManifest(root, stats));
         } catch {
           /* disk gone - nothing left to record on, and completion must not reject */
         }
@@ -620,7 +627,7 @@ export async function syncRepo(opts: IndexOptions): Promise<SyncOutcome> {
     // while the indexed content doesn't. Reconcile the manifest when it drifts,
     // otherwise the "index is partial" marker goes stale.
     if (truncatedFiles !== (manifest.truncatedFiles ?? 0)) {
-      const reconciled: Manifest = { ...manifest };
+      const reconciled: Manifest = { ...manifest, root };
       if (truncatedFiles > 0) {
         reconciled.truncatedFiles = truncatedFiles;
         reconciled.maxFiles = caps.maxFiles;
@@ -663,8 +670,15 @@ export async function syncRepo(opts: IndexOptions): Promise<SyncOutcome> {
           delete diff.next.files[path];
           continue;
         }
+        // The diff stamped size/mtime/hash; the row count is only knowable
+        // here, and is recorded as 0 for a file that yields none (dropping the
+        // entry instead would make every later sync re-hash the file).
+        const entry = diff.next.files[path];
+        entry.chunks = 0;
         if (looksBinary(buf)) continue;
-        for (const c of await chunkFile(path, buf.toString("utf8"))) {
+        const fileChunks = await chunkFile(path, buf.toString("utf8"));
+        entry.chunks = fileChunks.length;
+        for (const c of fileChunks) {
           chunksAdded++;
           await chunkWriter.write(JSON.stringify(c) + "\n");
         }
@@ -709,6 +723,9 @@ export async function syncRepo(opts: IndexOptions): Promise<SyncOutcome> {
     for (const r of langRows) languages[r.lang || "other"] = Number(r.n);
     const nextManifest: Manifest = {
       ...manifest,
+      // Re-stamped every sync so a moved checkout (or a manifest written before
+      // `root` existed) converges on the tree the sync actually walked.
+      root,
       files: Number(fileCount),
       chunks: Number(chunkCount),
       languages,
@@ -808,10 +825,13 @@ function toTextRow(c: Chunk) {
   };
 }
 
-function toManifest(stats: IndexStats, embedder?: Manifest["embedder"]): Manifest {
+/** `root` is recorded so readers can map the index back to its tree even when
+ * the index dir lives outside the repo (a custom CX_INDEX_DIR). */
+function toManifest(root: string, stats: IndexStats, embedder?: Manifest["embedder"]): Manifest {
   return {
     version: INDEX_FORMAT_VERSION,
     table: TABLE,
+    root,
     vectors: stats.vectors,
     ...(embedder ? { embedder } : {}),
     files: stats.files,
