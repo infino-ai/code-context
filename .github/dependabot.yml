@@ -21,13 +21,6 @@ updates:
           - "*"
         exclude-patterns:
           - "@infino-ai/infino"
-    ignore:
-      # zod 4 moved `z.record` to a two-argument form, so the MCP tool input
-      # schemas need migrating before it can land. Left unignored it sits red
-      # inside the grouped PR and blocks every routine update with it. Drop
-      # this entry with the migration.
-      - dependency-name: zod
-        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: github-actions
     directory: /
