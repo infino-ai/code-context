@@ -66,7 +66,7 @@ jobs:
     steps:
       - name: Mint release-App token scoped to code-context
         id: token
-        uses: actions/create-github-app-token@v1
+        uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ vars.RELEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
@@ -74,7 +74,7 @@ jobs:
           repositories: code-context
 
       # Full history: the gate and classifier need the release tags.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: main
           token: ${{ steps.token.outputs.token }}
