@@ -301,7 +301,7 @@ export async function serveMcp(rootPath?: string): Promise<void> {
           .string()
           .describe("A single read-only SELECT or WITH statement. May use search table functions and {{name}} vector placeholders."),
         embed: z
-          .record(z.string())
+          .record(z.string(), z.string())
           .optional()
           .describe('Map of placeholder name → query text, embedded server-side. E.g. {"q":"vector indexing"} fills {{q}}.'),
         path: z
