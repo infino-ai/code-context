@@ -1,6 +1,13 @@
 # Keep dependencies current, most importantly the @infino-ai/infino engine —
 # a new engine release should show up here as a PR that has to pass CI, not
 # as silent drift.
+#
+# Dependabot has no priority setting, and a full queue means it simply opens no
+# more PRs — so the dependency that matters most here can be the one left out
+# (it has happened: a full queue of routine updates starved an engine release).
+# The fix is to keep the queue from filling: every dependency except the engine
+# rides in one grouped PR, occupying a single slot however many are pending,
+# while @infino-ai/infino matches no group and so always gets its own.
 version: 2
 updates:
   - package-ecosystem: npm
@@ -8,8 +15,25 @@ updates:
     schedule:
       interval: daily
     open-pull-requests-limit: 5
+    groups:
+      dependencies:
+        patterns:
+          - "*"
+        exclude-patterns:
+          - "@infino-ai/infino"
+    ignore:
+      # zod 4 moved `z.record` to a two-argument form, so the MCP tool input
+      # schemas need migrating before it can land. Left unignored it sits red
+      # inside the grouped PR and blocks every routine update with it. Drop
+      # this entry with the migration.
+      - dependency-name: zod
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    groups:
+      actions:
+        patterns:
+          - "*"
