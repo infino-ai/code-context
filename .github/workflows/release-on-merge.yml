@@ -29,7 +29,7 @@ jobs:
     steps:
       - name: Mint release-App token scoped to code-context
         id: token
-        uses: actions/create-github-app-token@v1
+        uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ vars.RELEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
@@ -38,7 +38,7 @@ jobs:
 
       # Check out the merge commit itself: its package.json is the version
       # this release ships, and the tag must point exactly at it.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.merge_commit_sha }}
           token: ${{ steps.token.outputs.token }}
