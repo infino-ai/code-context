@@ -14,7 +14,10 @@ name: Release prep
 # warrant one:
 #
 #   minor — behavior of the shipped artifact changes:
-#             src/**, package.json, package-lock.json
+#             src/**, package.json (package-lock.json is skip: npm never
+#             publishes it, and an installer resolves package.json's ranges
+#             itself, so an in-range dependency bump changes what CI builds
+#             from and nothing a consumer receives)
 #   patch — only artifact/catalog text or metadata changes:
 #             README.md, LICENSE, server.json
 #   skip  — nothing a release consumer receives changes (no PR at all):
@@ -110,7 +113,7 @@ jobs:
           minor_files=""; patch_files=""; skip_files=""
           while IFS= read -r f; do
             case "$f" in
-              src/*|package.json|package-lock.json)
+              src/*|package.json)
                 bump=minor
                 minor_files="$minor_files$f, " ;;
               README.md|LICENSE|server.json)
