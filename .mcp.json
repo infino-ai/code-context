@@ -2,7 +2,7 @@
   "mcpServers": {
     "code-context": {
       "command": "npx",
-      "args": ["-y", "@infino-ai/code-context@0.2.0", "mcp"],
+      "args": ["-y", "@infino-ai/code-context@0.3.0", "mcp"],
       "alwaysLoad": true
     }
   }
