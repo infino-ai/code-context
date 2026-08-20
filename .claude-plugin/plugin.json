@@ -1,7 +1,7 @@
 {
   "name": "code-context",
   "description": "Local hybrid keyword + semantic search and SQL over your codebase, for coding agents.",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "author": { "name": "Infino AI" },
   "homepage": "https://github.com/infino-ai/code-context"
 }
