@@ -20,6 +20,7 @@ import {
   currentSessionStats,
 } from "../core/usage.js";
 import { bold, dim, cyan, yellow, green, table, fmtAge, fmtCount, fmtMs } from "../core/output.js";
+import { guardDecision } from "../core/guard.js";
 
 function die(err: unknown): never {
   const msg = err instanceof NoIndexError ? err.message : `error: ${(err as Error).message}`;
@@ -137,6 +138,35 @@ export function statusCmd(opts: StatusCmdOptions): void {
     .join(" · ");
   if (langs) console.log(`  languages  ${langs}`);
   console.log(dim(`  embedder   ${embedderInfo()}`));
+}
+
+/** `cx guard --hook` - a PreToolUse hook that denies grep-family
+ * invocations (the Grep tool; `grep`/`egrep`/`fgrep`/`rg`/`git grep` at
+ * command position in Bash) so retrieval goes through the ranked index.
+ * Allow = print nothing. Deny = the PreToolUse decision JSON on stdout.
+ * A hook must never fail the session: unparseable input allows. */
+export async function guardCmd(opts: { hook?: boolean }): Promise<void> {
+  if (!opts.hook) {
+    console.error("cx guard is a Claude Code hook; run it as `cx guard --hook` from a PreToolUse hook");
+    process.exit(1);
+  }
+  let reason: string | null = null;
+  try {
+    reason = guardDecision(JSON.parse(await readStdin()));
+  } catch {
+    // a guard that cannot parse its event allows: never fail the session
+  }
+  if (reason !== null) {
+    console.log(
+      JSON.stringify({
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          permissionDecision: "deny",
+          permissionDecisionReason: reason,
+        },
+      }),
+    );
+  }
 }
 
 export interface UsageCmdOptions {
