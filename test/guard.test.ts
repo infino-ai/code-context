@@ -41,6 +41,61 @@ describe("guardDecision", () => {
     }
   });
 
+  it("denies readers, pagers and text filters — anything that emits file contents", () => {
+    for (const cmd of [
+      "cat f.log",
+      "head -20 f.log",
+      "tail -5 f.log",
+      "tac f.log",
+      "nl f.log",
+      "less f.log",
+      "strings bin",
+      "xxd -l 64 bin",
+      "od -c bin",
+      "cut -d, -f2 data.csv",
+      "sort f.log | uniq -c",
+      "tr -d ' ' < f",
+      "jq '.rows[]' out.json",
+      "cargo test | tail -20",
+      "/usr/bin/head -1 f",
+      "echo $(cat f)",
+    ]) {
+      expect(guardDecision(bash(cmd)), cmd).not.toBeNull();
+    }
+  });
+
+  it("denies interpreters run inline, allows them run from a script file", () => {
+    for (const cmd of [
+      "python3 -c 'import re; print(1)'",
+      "python -c 'print(1)'",
+      "python3 - <<'EOF'\nprint(1)\nEOF",
+      "node -e 'console.log(1)'",
+      "perl -pe 's/a/b/' f",
+      "ruby -e 'puts 1'",
+    ]) {
+      expect(guardDecision(bash(cmd)), cmd).not.toBeNull();
+    }
+    for (const cmd of ["python3 gen_chart.py", "node build.js", "bash run.sh"]) {
+      expect(guardDecision(bash(cmd)), cmd).toBeNull();
+    }
+  });
+
+  it("leaves the commands that do work alone", () => {
+    for (const cmd of [
+      "cargo test --lib",
+      "cargo bench --bench bench -- vector-codec",
+      "make ci",
+      "git status --short",
+      "git commit -F msg.txt",
+      "ls -la /mnt/scratch",
+      "cp a.log b.log",
+      "mkdir -p /mnt/scratch/out",
+      "cargo bench > /mnt/scratch/out.log 2>&1",
+    ]) {
+      expect(guardDecision(bash(cmd)), cmd).toBeNull();
+    }
+  });
+
   it("denies grep behind a pipe", () => {
     expect(guardDecision(bash("cat build.log | grep -i error"))).not.toBeNull();
   });

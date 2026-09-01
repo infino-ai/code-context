@@ -27,14 +27,42 @@ export interface GuardPayload {
  * history and stays allowed; `\grep`, `/usr/bin/grep`, `env grep`, and
  * `... | grep` are all still grep and denied.
  *
- * `awk` and `sed` are here for the same reason as grep, learned the hard
- * way: with grep blocked, a pattern-matching agent reaches for the next
- * line-filter to hand rather than reading the file, and answers from the
- * three lines it printed. Whatever the tool, extracting a fragment and
- * reasoning from it is the failure being blocked - so the stream editors
- * that make it easy are blocked too. In-place edits belong to Edit, and
- * reading belongs to Read or the index. */
-const BLOCKED_PROGRAMS = new Set(["grep", "egrep", "fgrep", "rg", "awk", "gawk", "mawk", "sed"]);
+ * The line to hold is not "no grep", it is **no file content reaching the
+ * agent through a shell**. Blocking one program at a time loses: with grep
+ * denied an agent reaches for `awk`, then `sed`, then `cut`, then an
+ * inline interpreter, and answers from the handful of lines whichever one
+ * printed. So the whole family of utilities whose job is to emit file
+ * contents is denied together - readers and pagers, the text filters, and
+ * the interpreters run as one-liners.
+ *
+ * Nothing here blocks doing work. Builds, tests, benchmarks, git,
+ * file moves, and scripts run from a file are all untouched; only "show me
+ * the bytes" is redirected to Read and the index, which answer over a
+ * corpus of any size and carry the surrounding context a fragment does
+ * not. */
+const BLOCKED_PROGRAMS = new Set([
+  // grep family
+  "grep", "egrep", "fgrep", "rg", "ag", "ack",
+  // stream editors
+  "awk", "gawk", "mawk", "nawk", "sed", "ed",
+  // readers and pagers
+  "cat", "tac", "head", "tail", "nl", "less", "more", "strings",
+  "od", "xxd", "hexdump",
+  // text filters
+  "cut", "tr", "sort", "uniq", "paste", "join", "comm", "column",
+  "fold", "rev", "expand", "unexpand", "jq", "yq",
+]);
+
+/** Interpreters that are only denied when run as a one-liner: `python3 -c`,
+ * `node -e`, `perl -pe`, or a heredoc/stdin script are a text filter wearing
+ * a different name, while `python3 script.py` is running a program someone
+ * can read. */
+const INLINE_INTERPRETERS = new Set([
+  "python", "python3", "node", "perl", "ruby", "php", "deno", "bun",
+]);
+
+/** Flags that make an interpreter evaluate source from the command line. */
+const INLINE_EVAL_FLAG = /^-[A-Za-z]*[ce]$/;
 
 /** Wrapper programs that execute their argument: the token after them is
  * still in command position. */
@@ -75,6 +103,17 @@ function segmentBlocked(segment: string): string | null {
       continue;
     }
     if (BLOCKED_PROGRAMS.has(prog)) return prog;
+    // An interpreter is denied only when it evaluates source given on the
+    // command line or read from stdin - `python3 -c '...'`, `node -e`,
+    // `python3 -` and `python3 <<EOF`. Running a script file is allowed.
+    if (INLINE_INTERPRETERS.has(prog)) {
+      const args = tokens.slice(i + 1);
+      const inline =
+        args.some((a) => INLINE_EVAL_FLAG.test(a)) ||
+        args.includes("-") ||
+        /<<-?\s*['"]?\w+/.test(segment);
+      return inline ? `${prog} run inline` : null;
+    }
     // `git grep` is grep over the worktree; other `git <sub>` is not.
     if (prog === "git") {
       const sub = tokens
@@ -99,10 +138,13 @@ function segments(command: string): string[] {
 /** The denial message: what was blocked and what to use instead. */
 export function denyReason(program: string): string {
   return (
-    `${program} is blocked here by code-context. Use the code-context MCP instead: ` +
-    `bm25_search('chunks','content','<terms>', k) via the sql tool for exact ` +
-    `identifiers and strings, hybrid_search to add meaning, then Read the ` +
-    `located file for full context.`
+    `${program} is blocked here by code-context: file contents do not reach ` +
+    `you through a shell. To read a file, use Read (it takes an offset, so ` +
+    `size is not a reason to filter). To find something, use the ` +
+    `code-context MCP: bm25_search('chunks','content','<terms>', k) via the ` +
+    `sql tool for exact identifiers and strings, hybrid_search to add ` +
+    `meaning. Both answer over a corpus of any size and return the ` +
+    `surrounding context, which a matched line does not.`
   );
 }
 
