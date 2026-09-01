@@ -25,6 +25,22 @@ describe("guardDecision", () => {
     }
   });
 
+  it("denies the stream editors, which are grep by another name", () => {
+    for (const cmd of [
+      "awk '/x/{print}' f.log",
+      "gawk -f s.awk f",
+      "mawk '{print}' f",
+      "sed -n '1,5p' f.log",
+      "cat f.log | awk '{print $2}'",
+      "/usr/bin/sed s/a/b/ f",
+      "\\sed -i s/a/b/ f",
+      "TMPDIR=/x awk '{print}' f",
+      "xargs -0 sed -i s/a/b/",
+    ]) {
+      expect(guardDecision(bash(cmd)), cmd).not.toBeNull();
+    }
+  });
+
   it("denies grep behind a pipe", () => {
     expect(guardDecision(bash("cat build.log | grep -i error"))).not.toBeNull();
   });

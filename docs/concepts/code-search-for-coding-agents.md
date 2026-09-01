@@ -42,6 +42,13 @@ chunk - which carries its content - is not. code-context therefore ships a
 PreToolUse guard that denies grep-family commands; `bm25_search` covers the
 pinpoint case, and Read fills in whatever the chunk does not show.
 
+The guard also denies `awk` and `sed`, which is not obvious until you watch
+an agent work with grep blocked: it reaches for the next line-filter within
+reach and answers from the three lines that one printed. The failure being
+blocked is reasoning from an extracted fragment, not the name of the program
+that extracted it. Editing a file in place is Edit's job, and reading one is
+Read's or the index's.
+
 ## Hybrid, not just semantic
 
 Keyword (BM25) matching and vector similarity fuse into one ranked pass, so a

@@ -25,8 +25,16 @@ export interface GuardPayload {
 /** Programs whose invocation is denied, matched as the executed program
  * (command position), never as a substring - `git log --grep=x` filters
  * history and stays allowed; `\grep`, `/usr/bin/grep`, `env grep`, and
- * `... | grep` are all still grep and denied. */
-const BLOCKED_PROGRAMS = new Set(["grep", "egrep", "fgrep", "rg"]);
+ * `... | grep` are all still grep and denied.
+ *
+ * `awk` and `sed` are here for the same reason as grep, learned the hard
+ * way: with grep blocked, a pattern-matching agent reaches for the next
+ * line-filter to hand rather than reading the file, and answers from the
+ * three lines it printed. Whatever the tool, extracting a fragment and
+ * reasoning from it is the failure being blocked - so the stream editors
+ * that make it easy are blocked too. In-place edits belong to Edit, and
+ * reading belongs to Read or the index. */
+const BLOCKED_PROGRAMS = new Set(["grep", "egrep", "fgrep", "rg", "awk", "gawk", "mawk", "sed"]);
 
 /** Wrapper programs that execute their argument: the token after them is
  * still in command position. */
