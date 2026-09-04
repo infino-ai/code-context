@@ -45,6 +45,9 @@ export const DEFAULT_HOSTED_EMBED_PROVIDER = "platform";
 export const BENCH_DB_URL = "CX_BENCH_DB_URL";
 export const BENCH_KEY_FILE = "CX_BENCH_KEY_FILE";
 export const BENCH_EMBED_PROVIDER = "CX_BENCH_EMBED_PROVIDER";
+/** Optional turn cap for retrieval_agent in the agent lanes, passed through as
+ * the server's --agent-max-turns; unset leaves the server's default. */
+export const BENCH_AGENT_MAX_TURNS = "CX_BENCH_AGENT_MAX_TURNS";
 
 /** The env a hosted lane needs before it can run. */
 const HOSTED_REQUIRES = [BENCH_DB_URL, BENCH_KEY_FILE];
@@ -69,6 +72,13 @@ export function hostedFlags(env = process.env) {
     "--embed-provider",
     env[BENCH_EMBED_PROVIDER] ?? DEFAULT_HOSTED_EMBED_PROVIDER,
   ];
+}
+
+/** The server flags that add retrieval_agent to a hosted lane, with the turn
+ * cap when the harness names one. */
+export function agentFlags(env = process.env) {
+  const cap = env[BENCH_AGENT_MAX_TURNS];
+  return ["--retrieval-agent", ...(cap ? ["--agent-max-turns", cap] : [])];
 }
 
 /** The lane table. Each lane is the identical hermetic base plus:
@@ -103,7 +113,7 @@ export const LANES = {
     tools: STOCK_TOOLS,
     mcp: true,
     env: mcpEnvBase,
-    args: (env) => [...hostedFlags(env), "--retrieval-agent"],
+    args: (env) => [...hostedFlags(env), ...agentFlags(env)],
     requires: HOSTED_REQUIRES,
   },
   "agent-only": {
@@ -111,7 +121,7 @@ export const LANES = {
     tools: ["Read"],
     mcp: true,
     env: mcpEnvBase,
-    args: (env) => [...hostedFlags(env), "--retrieval-agent"],
+    args: (env) => [...hostedFlags(env), ...agentFlags(env)],
     disallowedTools: CX_RETRIEVAL_TOOLS.map((tool) => `${CX_TOOL_PREFIX}${tool}`),
     requires: HOSTED_REQUIRES,
   },

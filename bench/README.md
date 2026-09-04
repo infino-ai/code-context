@@ -54,6 +54,9 @@ where the server's index lives.
 | `hosted-agent` | hosted | Glob, Grep, Read, LS, Bash | yes        | as `hosted` plus `--retrieval-agent`                                                                                   | `CX_BENCH_DB_URL`, `CX_BENCH_KEY_FILE`  |
 | `agent-only`   | hosted | Read                      | yes        | as `hosted-agent`, with `find`, `search` and `sql` removed from the model's context (the SDK's `disallowedTools`)      | `CX_BENCH_DB_URL`, `CX_BENCH_KEY_FILE`  |
 
+Both agent lanes pass `CX_BENCH_AGENT_MAX_TURNS`, when set, through as the
+server's `--agent-max-turns`, to measure the agent under a tighter turn cap.
+
 `combo` is what installing the MCP server actually produces in a real client;
 `hosted` is the same agent and the same three tools with the index in a
 platform database (`CX_BENCH_DB_URL` is `https://host/<database>`, the shape

@@ -36,7 +36,7 @@ const FAKE_KEY_FILE = "/keys/bench.key";
 function withHostedEnv(fn, extra = {}) {
   const saved = {};
   const set = { CX_BENCH_DB_URL: FAKE_URL, CX_BENCH_KEY_FILE: FAKE_KEY_FILE, INFINO_API_KEY: undefined, ...extra };
-  for (const k of [...Object.keys(set), "CX_BENCH_EMBED_PROVIDER"]) saved[k] = process.env[k];
+  for (const k of [...Object.keys(set), "CX_BENCH_EMBED_PROVIDER", "CX_BENCH_AGENT_MAX_TURNS"]) saved[k] = process.env[k];
   for (const [k, v] of Object.entries(set)) {
     if (v === undefined) delete process.env[k];
     else process.env[k] = v;
@@ -106,6 +106,20 @@ test("agent-only keeps Read and retrieval_agent and hides the three retrieval to
     assert.equal(laneOptions("hosted-agent", "/r", "/r/.infino").disallowedTools, undefined);
     assert.equal(laneOptions("combo", "/r", "/r/.infino").disallowedTools, undefined);
   });
+});
+
+test("CX_BENCH_AGENT_MAX_TURNS passes through as --agent-max-turns on the agent lanes only", () => {
+  withHostedEnv(() => {
+    const only = laneOptions("agent-only", "/r", "/r/.infino").mcpServers["code-context"].args;
+    assert.deepEqual(only.slice(-3), ["--retrieval-agent", "--agent-max-turns", "4"]);
+    const withAgent = laneOptions("hosted-agent", "/r", "/r/.infino").mcpServers["code-context"].args;
+    assert.deepEqual(withAgent.slice(-3), ["--retrieval-agent", "--agent-max-turns", "4"]);
+    assert.equal(laneOptions("hosted", "/r", "/r/.infino").mcpServers["code-context"].args.includes("--agent-max-turns"), false);
+  }, { CX_BENCH_AGENT_MAX_TURNS: "4" });
+  withHostedEnv(() => {
+    const only = laneOptions("agent-only", "/r", "/r/.infino").mcpServers["code-context"].args;
+    assert.equal(only.at(-1), "--retrieval-agent");
+  }, { CX_BENCH_AGENT_MAX_TURNS: undefined });
 });
 
 test("hostedFlags is the one place the server's hosted command line is built", () => {
