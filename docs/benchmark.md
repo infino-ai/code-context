@@ -194,13 +194,13 @@ questions it exists for.
   where the tool applies; a standing cost of about a thousand prompt tokens
   per turn plus occasional mis-selection.
 - One grep-shaped question was not covered: per-file counts (Q7). `find`
-  returned lines with a total, capped at 100 by default, where the true answer
-  was about 300 lines across 27 files, so the agent used Grep instead. Both
-  lanes answered that question identically, and identically wrong (13 files
-  where the tree has 27). The build measured here was `dc713da`; the commit
-  after it added `byFile` - matching lines per file over every match, never
-  cut - and the "known file is a Read" steer, neither of which is measured
-  above.
+  returned lines with a total, capped at 100 by default in that build, where
+  the true answer was about 300 lines across 27 files, so the agent used Grep
+  instead. Both lanes answered that question identically, and identically
+  wrong (13 files where the tree has 27). The build measured here was
+  `dc713da`; the commits after it added `byFile` - matching lines per file
+  over every match, never cut - the "known file is a Read" steer, and a
+  default limit of 500 (the cap), none of which is measured above.
 - Steering is by description only and mostly works: nothing restricts Grep,
   and the agent still preferred `find` on lookups.
 

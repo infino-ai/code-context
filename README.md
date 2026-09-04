@@ -278,7 +278,7 @@ no restart, no per-repo config.
 |---|---|---|
 | `CX_INDEX_DIR` | `<repo>/.infino` | where the index lives |
 | `CX_SEARCH_K` | 10 | default number of hits `search` returns (also settable per call and via the CLI `-k` flag) |
-| `CX_FIND_LIMIT` | 100 | default number of matching lines `find` returns, hard cap 500 (also settable per call and via the CLI `--limit` flag); `total` and `byFile` are complete either way |
+| `CX_FIND_LIMIT` | 500 | default number of matching lines `find` returns, which is also the hard cap, so it only bites on a flood (also settable per call and via the CLI `--limit` flag); `total` and `byFile` are complete either way |
 | `CX_MAX_FILES` / `CX_MAX_FILE_BYTES` | 20000 / 1MB | indexing caps (files over the file cap are left out; `find`/`search`/`sql` then flag the index as partial so an absence isn't read as proof) |
 | `CX_ROOT` | current directory | default repo root for the MCP server / CLI when not run from the repo (each tool call can override it with a `path` argument) |
 | `CX_AUTO_INDEX` | on | `0` makes a query on an unindexed repo error instead of building the index inline on the first `find`/`search`/`sql` |

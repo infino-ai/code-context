@@ -42,10 +42,11 @@ listed names, comma-separated). Never load them one call at a time.
   case-sensitive unless `ignoreCase`.
 - Complete, not ranked: every matching line comes back as `path`, `line`,
   and the line's `text` (plus the enclosing definition's `symbol` when
-  known), in path order, up to `limit` (default 100, max 500). `total` is
+  known), in path order, up to `limit` (default and cap 500, so it only
+  bites on a flood; pass a smaller `limit` when you want fewer). `total` is
   the repo-wide count either way, `byFile` lists matching lines per file
   over every match (the `grep -c` answer, never cut), and `truncated` says
-  when the line list was cut - raise `limit` or narrow the text.
+  when the line list was cut - narrow the text.
 - Not for a file you already know the path of: Read it. `find` locates
   occurrences across the repo; pulling a few lines out of one known file
   is a Read.
