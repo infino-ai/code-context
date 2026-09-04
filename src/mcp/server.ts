@@ -226,9 +226,10 @@ export async function serveMcp(rootPath?: string): Promise<void> {
         "Ranked code search fusing exact keyword matching with semantic similarity, so it works " +
         "whether or not you know the words. Use it for 'how does X work', 'where is Y handled', code " +
         "by meaning, context before a change, similar implementations. Each hit carries path, line " +
-        "range, and the chunk content: answer and cite from the hits; Read a file only for one marked " +
-        "truncated. For every occurrence of an exact string use find; for counts and rankings use " +
-        "sql.",
+        "range, and the chunk content: answer and cite from the hits without re-confirming them with " +
+        "grep or by opening the file; Read a file only for one marked truncated. When one search is " +
+        "not enough, refine the query and search again. For every occurrence of an exact string use " +
+        "find; for counts and rankings use sql.",
       inputSchema: {
         query: z.string().describe("What you're looking for - terms, a phrase, or a description."),
         k: z.number().int().positive().max(50).default(DEFAULT_SEARCH_K).describe("Maximum hits."),
