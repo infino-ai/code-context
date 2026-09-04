@@ -2,7 +2,7 @@
 name: code-context
 description: >
   How to answer codebase questions with the code-context MCP tools (find,
-  search, sql, reindex): exact-text lookup that replaces grep, ranked hybrid
+  search, sql): exact-text lookup that replaces grep, ranked hybrid
   keyword+semantic search, relevance-ranked SQL aggregation over the index,
   and index lifecycle. Use when you would grep for an identifier or literal,
   when a question spans many files ("how does X work", "where is Y
@@ -14,16 +14,16 @@ description: >
 # code-context: search over the repository
 
 code-context maintains a local index of the repository (in `.infino/` at the
-repo root) and exposes four MCP tools. Every lookup an agent would otherwise
+repo root) and exposes three MCP tools. Every lookup an agent would otherwise
 do with grep or by crawling files runs against the index instead: `find` for
 the exact-text case, one ranked pass for everything that spans the repo.
 
 ## If the tools are deferred
 
 When the tool names appear in a deferred-tools listing but their schemas are
-not loaded, load all four in ONE ToolSearch call before the first use, e.g.
-query `+code-context find search sql reindex` (or `select:` with the exact
-listed names, comma-separated). Never load them one call at a time.
+not loaded, load all three in ONE ToolSearch call before the first use, e.g.
+query `+code-context find search sql` (or `select:` with the exact listed
+names, comma-separated). Never load them one call at a time.
 
 ## Choosing the right tool
 
@@ -33,7 +33,7 @@ listed names, comma-separated). Never load them one call at a time.
 | A file you already know the path of | Read |
 | "How does X work", "where is Y handled", concept without exact name | `search` |
 | Counts, rankings, GROUP BY across the repo ("which files have the most code about X") | `sql` |
-| Working tree changed a lot mid-session | `reindex` (usually unnecessary - see lifecycle) |
+| Working tree changed a lot mid-session | nothing - the next query re-syncs (see lifecycle) |
 
 ## find
 
@@ -103,8 +103,9 @@ GROUP BY path ORDER BY lines DESC LIMIT 15
   while vectors backfill in the background. Do not pre-emptively reindex.
 - **Later queries auto-sync**: the server re-chunks only files that changed
   since the last index. An unchanged tree is a fast no-op.
-- Call `reindex` explicitly only after sweeping working-tree changes you
-  want reflected immediately, or `full: true` to force a rebuild.
+- There is no reindex tool. If the index is actually wrong (not merely
+  behind an edit the next query will pick up), `cx index --full` from a
+  shell rebuilds it.
 - Each repo's index is keyed to its own root directory: a fresh git worktree
   is a new root and builds its own index on first query (the main checkout's
   index does not carry over).
@@ -116,7 +117,8 @@ GROUP BY path ORDER BY lines DESC LIMIT 15
   possibly-unindexed, not as proof the code doesn't exist.
 - Find, search, and sql results carry a one-line `usage` receipt (tokens
   returned, matches or chunks / files, session running total), computed
-  locally. End your reply by showing that line to the user verbatim.
+  locally. It is there for the user who asks what a lookup cost; `cx usage`
+  keeps the ledger.
 
 ## Multi-repo sessions
 
@@ -128,6 +130,6 @@ different repository than the one the server started in.
 - `find`/`search`/`sql` calls are cheap (local, milliseconds).
 - The first index of a repo and the vector backfill are the expensive part
   (CPU for the local embedding model, proportional to repo size). Avoid
-  forcing `full: true` rebuilds unless the index is actually wrong, and
+  forcing `cx index --full` rebuilds unless the index is actually wrong, and
   avoid triggering first-time indexing of large repos that the task does
   not need.

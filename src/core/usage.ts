@@ -220,9 +220,9 @@ export interface PromptStats {
   promptsWithCx: number;
   /** transient: has the current prompt already used code-context. */
   curPromptUsedCx: boolean;
-  /** code-context invocations by tool (`find`, `search`, `sql`, `reindex`):
-   * which door the agent actually walks through. Absent on stats files
-   * written before it was recorded. */
+  /** code-context invocations by tool (`find`, `search`, `sql`): which door
+   * the agent actually walks through. Absent on stats files written before
+   * it was recorded. */
   cxCallsByTool?: Record<string, number>;
   /** The first tool the agent called in each prompt, counted by name - a
    * code-context tool by its short name, anything else (Grep, Read, Bash)

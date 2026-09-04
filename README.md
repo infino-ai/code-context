@@ -60,7 +60,7 @@ Install the Claude Code plugin - nothing to paste into a config:
 /plugin install code-context@infino-ai
 ```
 
-It registers code-context's four tools with `alwaysLoad` already set, so the
+It registers code-context's three tools with `alwaysLoad` already set, so the
 agent keeps them in view and reaches for the index directly instead of falling
 back to plain file search.
 
@@ -78,7 +78,7 @@ the plugin or this command, not both.)
 Then just ask a question about the code. The first `find`, `search`, or `sql`
 on an unindexed repo builds the index inline and answers on the same call: keyword
 search is live in seconds, and vectors backfill in the background. (Prefer to
-kick it off yourself? The `reindex` tool does the same build on demand.)
+kick it off yourself? `cx index` does the same build from a shell.)
 
 CI-tested on Linux x64 (glibc) and macOS arm64; linux-arm64, musl, and
 Windows-via-WSL are expected to work through the engine's prebuilt bindings
@@ -115,6 +115,13 @@ same repo, questions, model, and a blind judge: answer quality level (judge
 calls**, the shipped question set flat (-3% tokens, +1% dollars), and about a
 thousand tokens per turn of added prompt for the fourth tool.
 
+The tool surface itself was then measured lever by lever - names, result
+shapes, and every sentence of description - on two models with a blind
+judge: the shipped text is the one that kept selection where it was, cut the
+per-turn prompt cost of the tool definitions by more than half, and judged
+51 to 33 over the previous surface. That run is also why there are three
+tools and not four.
+
 Full methodology and per-question tables are in
 [docs/benchmark.md](docs/benchmark.md), with the harness in
 [`bench/`](bench/) so you can run the same lanes on your own repo.
@@ -128,11 +135,12 @@ One index and a deliberately small tool surface for agents:
 | `find` | Every line containing an exact string, cited `path:line` like `grep -n`, plus matching lines per file like `grep -c`. Complete and unranked: the index's token match picks the candidate chunks, then each line is checked for the literal, so no file is scanned and every hit is a real occurrence. | Where an agent would grep: every use or definition of an identifier, an error message, a config key. |
 | `search` | One ranked pass fusing exact keyword matching (BM25) with semantic similarity (reciprocal-rank fusion). Hits carry the chunk content, so answers come straight from results. | A strong default for finding and understanding code: how a subsystem works, code by meaning or exact term, context before a change, similar implementations - exact identifiers and paraphrases in the same call. |
 | `sql` | Read-only SQL over the index, with the ranked search functions (`bm25_search`/`hybrid_search`) usable as table-valued relations. | Counts, rankings, aggregates over the whole repo in one query. |
-| `reindex` | Incremental sync (the server also auto-syncs in the background). | After significant edits. |
 
-Four tools, each a different question: where does this exact text occur,
-what is most relevant to this, how much of what is where, and stay fresh.
-There are still no near-duplicate retrieval tools, because those worsen an
+Three tools, each a different question: where does this exact text occur,
+what is most relevant to this, how much of what is where. Freshness is not
+a tool: the first query on an unindexed repo builds the index, every query
+re-syncs it against the working tree, and `cx index --full` rebuilds from a
+shell. There are no near-duplicate retrieval tools, because those worsen an
 agent's tool selection: `find` is unranked and complete where `search` is
 ranked and top-k, and hybrid search's keyword half already ranks exact
 identifier terms highly, so no separate lexical *ranking* tool exists.
@@ -174,8 +182,8 @@ export and pass around.
 ## Setup for agents
 
 code-context is an MCP server over stdio, so any MCP client works. Register
-it once and the tools (`find`, `search`, `sql`, `reindex`) become available to
-the agent.
+it once and the tools (`find`, `search`, `sql`) become available to the
+agent.
 
 <details>
 <summary><strong>Claude Code</strong></summary>
@@ -198,7 +206,7 @@ claude mcp add-json code-context -s user '{"command":"npx","args":["-y","@infino
 for the index directly. In sessions with many MCP servers Claude Code defers
 tool definitions behind a tool-search step; without `alwaysLoad` the agent can
 miss code-context and fall back to grep/read. It's a small, always-loaded set
-(four tools). Omit it (or use the shorter `claude mcp add code-context -- npx
+(three tools). Omit it (or use the shorter `claude mcp add code-context -- npx
 -y @infino-ai/code-context mcp`) if you'd rather leave the tools deferred.
 
 Use *either* the plugin or the `add-json` command, not both. They register the
@@ -262,9 +270,9 @@ when the client's working directory is not the repo.
 
 </details>
 
-Tools: `find`, `search`, `sql`, `reindex` (incremental sync: an unchanged
-repo is a fast no-op, and the server also auto-syncs in the background as
-queries arrive, so results track your edits without anyone asking).
+Tools: `find`, `search`, `sql`. The server auto-syncs in the background as
+queries arrive (an unchanged repo is a fast no-op), so results track your
+edits without anyone asking; `cx index --full` from a shell forces a rebuild.
 
 **Multiple repos in one session.** Each tool takes an optional `path` (an
 absolute repo root). Omit it and the server uses its startup root; set it to

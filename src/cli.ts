@@ -18,7 +18,7 @@ program
       "Keyword search seconds after `cx index`; semantic and hybrid search when vectors\n" +
       "finish backfilling; SQL with relevance-ranked aggregation over the whole repo.",
   )
-  .version("0.1.4")
+  .version("0.5.0")
   .addHelpText(
     "after",
     `
@@ -30,7 +30,7 @@ Examples:
   cx sql "SELECT path, SUM(end_line - start_line + 1) AS lines \\
           FROM bm25_search('chunks','content','vector index', 300) \\
           GROUP BY path ORDER BY lines DESC LIMIT 10"
-  cx mcp                              serve the MCP tools (find/search/sql/reindex) over stdio`,
+  cx mcp                              serve the MCP tools (find/search/sql) over stdio`,
   );
 
 program
@@ -99,7 +99,7 @@ program
 
 program
   .command("mcp")
-  .description("serve the MCP tools (find / search / sql / reindex) over stdio")
+  .description("serve the MCP tools (find / search / sql) over stdio")
   .option("-C, --path <dir>", "repo root (default: current directory)")
   .action(async (opts: { path?: string }) => {
     const { serveMcp } = await import("./mcp/server.js");

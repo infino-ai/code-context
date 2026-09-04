@@ -224,9 +224,9 @@ describe("prompt telemetry (hooks)", () => {
 
   it("names a tool from a renamed server variant by its short name", () => {
     submit("s1");
-    recordHookEvent(dir, { hook_event_name: "PostToolUse", session_id: "s1", tool_name: "mcp__code-context-dev__reindex" });
-    expect(currentSessionStats(dir)?.cxCallsByTool).toEqual({ reindex: 1 });
-    expect(currentSessionStats(dir)?.firstToolByPrompt).toEqual({ reindex: 1 });
+    recordHookEvent(dir, { hook_event_name: "PostToolUse", session_id: "s1", tool_name: "mcp__code-context-dev__search" });
+    expect(currentSessionStats(dir)?.cxCallsByTool).toEqual({ search: 1 });
+    expect(currentSessionStats(dir)?.firstToolByPrompt).toEqual({ search: 1 });
   });
 
   it("loads a stats file written before the per-tool fields existed", () => {

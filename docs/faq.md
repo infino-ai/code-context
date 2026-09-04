@@ -35,7 +35,7 @@ reports that honestly rather than failing.
 
 No. The first `find`, `search`, or `sql` on a repo that has never been indexed
 builds the index inline and answers on that same call - keyword search is live in
-seconds, vectors backfill behind it. Call `reindex` first if you'd rather
+seconds, vectors backfill behind it. Run `cx index` first if you'd rather
 kick the build off explicitly, or set `CX_AUTO_INDEX=0` to make an unindexed
 query return a "index it first" error instead of building.
 
@@ -72,16 +72,19 @@ and re-index for full coverage.
 
 ### What tools does the MCP server expose?
 
-Four, by design, one per question: `find` (every line containing an exact
+Three, by design, one per question: `find` (every line containing an exact
 string, cited `path:line` like `grep -n`; complete and unranked, the grep
 replacement), `search` (hybrid keyword + semantic retrieval, one ranked pass,
-hits carry chunk content with `path:line` ranges), `sql` (read-only
+hits carry chunk content with `path:line` ranges), and `sql` (read-only
 `SELECT`/`WITH` over the index, with the ranked search functions usable as
-table-valued relations so search composes with `GROUP BY`), and `reindex`
-(incremental sync). Every additional near-duplicate retrieval tool worsens an
-agent's tool selection, so the surface is kept deliberately small: `find` and
-`search` are not duplicates, one is complete and unranked, the other ranked
-and top-k.
+table-valued relations so search composes with `GROUP BY`). Every additional
+near-duplicate retrieval tool worsens an agent's tool selection, so the
+surface is kept deliberately small: `find` and `search` are not duplicates,
+one is complete and unranked, the other ranked and top-k. There used to be a
+fourth, `reindex`; measured, no Sonnet run ever called it, Haiku called it
+where it hurt, and every tool in the list is prompt text on every turn. The
+first query builds the index, every query re-syncs it, and `cx index --full`
+rebuilds from a shell.
 
 ### How is SQL over code useful?
 
