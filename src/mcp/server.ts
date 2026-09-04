@@ -5,7 +5,7 @@
 //
 //   find    - the grep door: every line containing an exact string, cited
 //             path:line - complete and unranked
-//   search  - find code: exact terms AND meaning in one ranked pass
+//   context - ranked code for a topic: exact terms AND meaning in one pass
 //   sql     - the power door: relevance-ranked aggregation over the search
 //             table functions (bm25_search / hybrid_search + GROUP BY)
 //   reindex - sync from the working tree; replies the moment keyword
@@ -201,7 +201,7 @@ export async function serveMcp(rootPath?: string): Promise<void> {
       instructions:
         "code-context is a local index of this repository. Which tool for which question:\n" +
         "- find - every line containing an exact string, where you would grep.\n" +
-        "- search - how does X work, where is Y handled, code by meaning.\n" +
+        "- context - how does X work, where is Y handled, code by meaning.\n" +
         "- sql - counts, rankings, and aggregates across the repo.\n" +
         "- reindex - after sweeping edits; the server auto-syncs otherwise.\n" +
         "Answer and cite from results (path:line); Read a file only for a hit marked truncated. " +
@@ -212,11 +212,11 @@ export async function serveMcp(rootPath?: string): Promise<void> {
   );
 
   server.registerTool(
-    "search",
+    "context",
     {
-      title: "Code search (exact terms + meaning)",
+      title: "Code context on a topic (exact terms + meaning)",
       description:
-        "Ranked code search fusing exact keyword matching with semantic similarity, so it works " +
+        "Ranked code context on a topic, fusing exact keyword matching with semantic similarity, so it works " +
         "whether or not you know the words. Use it for 'how does X work', 'where is Y handled', code " +
         "by meaning, context before a change, similar implementations. Each hit carries path, line " +
         "range, and the chunk content: answer and cite from the hits; Read a file only for one marked " +
@@ -266,7 +266,7 @@ export async function serveMcp(rootPath?: string): Promise<void> {
           ...(usage ? { usage } : {}),
         });
       } catch (err) {
-        return fail(`search failed: ${(err as Error).message}`);
+        return fail(`context failed: ${(err as Error).message}`);
       }
     },
   );
@@ -280,7 +280,7 @@ export async function serveMcp(rootPath?: string): Promise<void> {
         "unranked, with the repo-wide total and per-file counts (byFile, the grep -c answer). " +
         "Literal text within one line, case-sensitive unless ignoreCase. Use it where you would " +
         "grep: every use or definition of an identifier, an error message, a config key. Not for a " +
-        "file you already know - Read that file. For meaning or 'how does X work' use search; for " +
+        "file you already know - Read that file. For meaning or 'how does X work' use context; for " +
         "rankings use sql.",
       inputSchema: {
         query: z
