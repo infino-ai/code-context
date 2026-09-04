@@ -229,7 +229,8 @@ export async function serveMcp(rootPath?: string): Promise<void> {
         "range, and the chunk content: answer and cite from the hits without re-confirming them with " +
         "grep or by opening the file; Read a file only for one marked truncated. When one search is " +
         "not enough, refine the query and search again. For every occurrence of an exact string use " +
-        "find; for counts and rankings use sql.",
+        "find; for counts and rankings use sql. The result includes a 'usage' field, a one-line " +
+        "receipt of tokens returned, chunks and files.",
       inputSchema: {
         query: z.string().describe("What you're looking for - terms, a phrase, or a description."),
         k: z.number().int().positive().max(50).default(DEFAULT_SEARCH_K).describe("Maximum hits."),
@@ -289,7 +290,8 @@ export async function serveMcp(rootPath?: string): Promise<void> {
         "Literal text within one line, case-sensitive unless ignoreCase. Use it where you would " +
         "grep: every use or definition of an identifier, an error message, a config key. Not for a " +
         "file you already know - Read that file. For meaning or 'how does X work' use search; for " +
-        "rankings use sql.",
+        "rankings use sql. The result includes a 'usage' field, a one-line receipt of tokens " +
+        "returned, matches and files.",
       inputSchema: {
         query: z
           .string()
@@ -364,7 +366,8 @@ export async function serveMcp(rootPath?: string): Promise<void> {
         `hybrid_search('${TABLE}','content','terms','embedding', {{q}}, k) and ` +
         `vector_search('${TABLE}','embedding', {{q}}, k) take a {{name}} placeholder filled from ` +
         "the embed map. Canonical: SELECT path, SUM(end_line - start_line + 1) AS lines FROM " +
-        `bm25_search('${TABLE}','content','<terms>', 300) GROUP BY path ORDER BY lines DESC LIMIT 15.`,
+        `bm25_search('${TABLE}','content','<terms>', 300) GROUP BY path ORDER BY lines DESC LIMIT 15. ` +
+        "The result includes a 'usage' field, a one-line receipt of tokens returned and rows.",
       inputSchema: {
         query: z
           .string()
