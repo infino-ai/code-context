@@ -207,7 +207,7 @@ export async function serveMcp(rootPath?: string): Promise<void> {
         "Answer and cite from results (path:line); Read a file only for a hit marked truncated. " +
         "Every tool takes an optional 'path' (an absolute repo root) to target another repository. " +
         "A 'partial' marker means files over the index cap were left out, so a missing match is not " +
-        "proof of absence. Each result carries a 'usage' receipt; show it to the user.",
+        "proof of absence.",
     },
   );
 
@@ -221,9 +221,7 @@ export async function serveMcp(rootPath?: string): Promise<void> {
         "by meaning, context before a change, similar implementations. Each hit carries path, line " +
         "range, and the chunk content: answer and cite from the hits; Read a file only for one marked " +
         "truncated. For every occurrence of an exact string use find; for counts and rankings use " +
-        "sql. The result includes a 'usage' field - a one-line receipt (tokens returned, " +
-        "chunks/files, session total). After you answer, end your reply by showing that 'usage' line " +
-        "to the user verbatim.",
+        "sql.",
       inputSchema: {
         query: z.string().describe("What you're looking for - terms, a phrase, or a description."),
         k: z.number().int().positive().max(50).default(DEFAULT_SEARCH_K).describe("Maximum hits."),
@@ -283,9 +281,7 @@ export async function serveMcp(rootPath?: string): Promise<void> {
         "Literal text within one line, case-sensitive unless ignoreCase. Use it where you would " +
         "grep: every use or definition of an identifier, an error message, a config key. Not for a " +
         "file you already know - Read that file. For meaning or 'how does X work' use search; for " +
-        "rankings use sql. The result includes a 'usage' field - a one-line receipt (tokens " +
-        "returned, matches/files, session total). After you answer, end your reply by showing that " +
-        "'usage' line to the user verbatim.",
+        "rankings use sql.",
       inputSchema: {
         query: z
           .string()
@@ -359,9 +355,7 @@ export async function serveMcp(rootPath?: string): Promise<void> {
         `hybrid_search('${TABLE}','content','terms','embedding', {{q}}, k) and ` +
         `vector_search('${TABLE}','embedding', {{q}}, k) take a {{name}} placeholder filled from ` +
         "the embed map. Canonical: SELECT path, SUM(end_line - start_line + 1) AS lines FROM " +
-        `bm25_search('${TABLE}','content','<terms>', 300) GROUP BY path ORDER BY lines DESC LIMIT 15. ` +
-        "The result includes a 'usage' field - a one-line receipt (tokens returned, rows, session " +
-        "total). After you answer, end your reply by showing that 'usage' line to the user verbatim.",
+        `bm25_search('${TABLE}','content','<terms>', 300) GROUP BY path ORDER BY lines DESC LIMIT 15.`,
       inputSchema: {
         query: z
           .string()
@@ -418,6 +412,11 @@ export async function serveMcp(rootPath?: string): Promise<void> {
     },
   );
 
+  // Plan 101 variant V3: CX_HIDE_REINDEX takes the tool off the surface so the
+  // ablation can measure its absence from the same build; auto-sync and
+  // auto-index cover the job in-session and `cx index --full` on the CLI.
+  const hideReindex = ["1", "true", "yes"].includes((process.env.CX_HIDE_REINDEX ?? "").toLowerCase());
+  if (!hideReindex) {
   server.registerTool(
     "reindex",
     {
@@ -484,6 +483,7 @@ export async function serveMcp(rootPath?: string): Promise<void> {
       }
     },
   );
+  }
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
