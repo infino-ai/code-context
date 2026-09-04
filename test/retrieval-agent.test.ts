@@ -271,8 +271,8 @@ describe("factsFrom", () => {
     const manyHits = Array.from({ length: MAX_HITS + 5 }, (_, i) => chunkRow(i));
     const manyRows = Array.from({ length: MAX_ROWS + 3 }, (_, i) => ({ path: `p${i}`, n: i }));
     const facts = rows(manyHits, manyRows);
-    expect(MAX_HITS).toBe(50);
-    expect(MAX_ROWS).toBe(100);
+    expect(MAX_HITS).toBe(10); // search's default k
+    expect(MAX_ROWS).toBe(50);
     expect(facts.hits).toHaveLength(MAX_HITS);
     expect(facts.hitsTotal).toBe(MAX_HITS + 5);
     expect(facts.rows).toHaveLength(MAX_ROWS);

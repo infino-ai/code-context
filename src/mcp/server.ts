@@ -468,9 +468,10 @@ export async function serveMcp(rootPath?: string): Promise<void> {
         title: "Retrieval subagent over the hosted index",
         description:
           "A read-only retrieval subagent over the repository index. Give it a question or task in " +
-          "plain language; it searches the index itself and returns the facts it retrieved - rows with " +
-          "exact path, start_line, end_line and the code, in the shape of search hits, plus aggregate " +
-          "rows (counts, rankings) and the SQL whose rows answer the question - never a summary. Use it " +
+          "plain language; it searches and ranks across the index itself and returns the facts it " +
+          "retrieved - the top rows with exact path, start_line, end_line and the code, in the shape of " +
+          "search hits, plus aggregate rows (counts, rankings) and the SQL whose rows answer the " +
+          "question - never a summary. Use it " +
           "for how does X work, where is Y handled, which files or symbols, counts and rankings; spawn " +
           "several in parallel for independent questions instead of exploring the code yourself. For " +
           "every occurrence of an exact string use find; for a file you already know, Read it. Answer " +

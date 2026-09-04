@@ -16,14 +16,20 @@
 // the transcript itself is never returned.
 
 import type { HostedDb, RowRecord } from "./hosted.js";
+import { DEFAULT_SEARCH_K } from "./config.js";
 
-/** Place-naming rows kept in one result: the same ceiling as search's `k`;
- * more than that is a survey, and the statement's rows come first. */
-export const MAX_HITS = 50;
+/** Place-naming rows kept in one result: as many as a search returns by
+ * default, so a subagent result costs the outer agent what a search does.
+ * Measured at 50: the loop's four or five queries at 25 rows each filled the
+ * cap and a result averaged 10.9k tokens, which is where the lane's token
+ * bill went. The platform retrieves and ranks more than this before
+ * answering; the statement's rows lead, and `hitsTotal` says what was cut. */
+export const MAX_HITS = DEFAULT_SEARCH_K;
 
 /** Aggregate rows (a count or rank per path) kept in one result: small rows,
- * so a longer list still costs less than a few hits. */
-export const MAX_ROWS = 100;
+ * so a longer list still costs less than a few hits - but a ranking past
+ * fifty paths is a survey, not an answer. */
+export const MAX_ROWS = 50;
 
 /** Characters kept of a hit's content: search's own cap on a chunk, so a
  * subagent hit reads exactly like a search hit. */
