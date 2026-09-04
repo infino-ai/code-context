@@ -39,6 +39,7 @@ program
   .description("every line containing an exact string, like grep -n: complete and unranked")
   .argument("<text>", "the exact text to find, as it appears in the code")
   .option("-i, --ignore-case", "match regardless of letter case")
+  .option("-c, --count", "print matching lines per file instead of the lines, like grep -c")
   .option("--limit <n>", `maximum matching lines to print (default ${DEFAULT_FIND_LIMIT}, max ${MAX_FIND_LIMIT})`)
   .option("--json", "machine-readable output")
   .option("-C, --path <dir>", "repo root (default: current directory)")

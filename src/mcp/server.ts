@@ -300,14 +300,17 @@ export async function serveMcp(rootPath?: string): Promise<void> {
         "Every line in the repository that contains an exact string - the grep replacement. Use it " +
         "where you would reach for grep or rg: every use or definition of an identifier, an error " +
         "message, a config key, a literal. Complete, not ranked: it returns every matching line (up " +
-        "to `limit`, and always the repo-wide total) as path, line number, and the line's text, plus " +
-        "the enclosing definition name when known. Literal text, not a regex; within a single line; " +
-        "case-sensitive unless ignoreCase. It reads only the chunks the index says contain the " +
-        "query's tokens and then checks each line, so every hit is a real occurrence and no file is " +
-        "scanned. Read path:line for the surrounding code when you need it. For 'how does X work' or " +
-        "when you don't know the exact words, use search; for counts and rankings, sql. The result " +
-        "includes a 'usage' field - a one-line receipt (tokens returned, matches/files, session " +
-        "total). After you answer, end your reply by showing that 'usage' line to the user verbatim.",
+        "to `limit`, and always the repo-wide `total`) as path, line number, and the line's text, " +
+        "plus the enclosing definition name when known, and `byFile` - matching lines per file over " +
+        "every match, the `grep -c` answer in the same call. Literal text, not a regex; within a " +
+        "single line; case-sensitive unless ignoreCase. It reads only the chunks the index says " +
+        "contain the query's tokens and then checks each line, so every hit is a real occurrence " +
+        "and no file is scanned. Not for a file you already know: Read that file directly - find is " +
+        "for locating occurrences across the repository, and Read path:line when you need the code " +
+        "around a hit. For 'how does X work' or when you don't know the exact words, use search; " +
+        "for rankings and aggregates beyond per-file counts, sql. The result includes a 'usage' " +
+        "field - a one-line receipt (tokens returned, matches/files, session total). After you " +
+        "answer, end your reply by showing that 'usage' line to the user verbatim.",
       inputSchema: {
         query: z
           .string()

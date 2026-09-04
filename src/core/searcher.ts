@@ -148,10 +148,17 @@ export interface FindMatch {
   path: string;
   /** 1-based line number of the matching line. */
   line: number;
-  /** The matching line, capped at FIND_LINE_CAP characters. */
+  /** The matching line; a line longer than FIND_LINE_CAP is cut to a window
+   * around the match, with `...` marking each cut end. */
   text: string;
   /** Definition name(s) of the enclosing chunk (e.g. "parseConfig"), when known. */
   symbol?: string;
+}
+
+/** Matching lines in one file - the `grep -c` view. */
+export interface FindFileCount {
+  path: string;
+  count: number;
 }
 
 export interface FindResult {
@@ -163,6 +170,10 @@ export interface FindResult {
   total: number;
   /** Distinct files with at least one match, before the limit. */
   files: number;
+  /** Matching lines per file, before the limit, most matches first. Always
+   * complete even when `matches` is cut, so "how many and where" never needs a
+   * second call. */
+  byFile: FindFileCount[];
   /** Set when `total` exceeded the limit and `matches` was cut. */
   truncated?: boolean;
   /** Present when the index omitted files over the cap - results may be incomplete. */
@@ -172,7 +183,7 @@ export interface FindResult {
 export interface FindOptions {
   /** Match regardless of letter case. Default false: case-sensitive, like grep. */
   ignoreCase?: boolean;
-  /** Maximum matches returned; clamped to [1, MAX_FIND_LIMIT]. */
+  /** Maximum matches returned: a positive integer, clamped to MAX_FIND_LIMIT. */
   limit?: number;
 }
 
@@ -183,6 +194,10 @@ export const MAX_FIND_LIMIT = 500;
 
 /** Per-line cap so one minified or generated line cannot flood the result. */
 const FIND_LINE_CAP = 240;
+
+/** Characters kept ahead of the match when a long line is cut to a window, so
+ * the excerpt shows what leads into the match rather than starting on it. */
+const FIND_EXCERPT_LEAD = 60;
 
 /** Columns a find reads: no `end_line` (each match cites its own line) and no
  * `score` (there is none - matches are unranked). */
@@ -221,21 +236,35 @@ export function analyzerTokens(text: string): string[] {
 }
 
 /** The lines of `content` (whose first line is 1-based `startLine`) that
- * contain `query` literally, each with its repo line number. */
+ * contain `query` literally, each with its repo line number and the 0-based
+ * column of the first occurrence. */
 export function matchLines(
   content: string,
   startLine: number,
   query: string,
   ignoreCase: boolean,
-): Array<{ line: number; text: string }> {
+): Array<{ line: number; text: string; at: number }> {
   const needle = ignoreCase ? query.toLowerCase() : query;
-  const out: Array<{ line: number; text: string }> = [];
+  const out: Array<{ line: number; text: string; at: number }> = [];
   const lines = content.split("\n");
   for (let i = 0; i < lines.length; i++) {
-    const haystack = ignoreCase ? lines[i].toLowerCase() : lines[i];
-    if (haystack.includes(needle)) out.push({ line: startLine + i, text: lines[i].replace(/\r$/, "") });
+    const text = lines[i].replace(/\r$/, "");
+    const at = (ignoreCase ? text.toLowerCase() : text).indexOf(needle);
+    if (at >= 0) out.push({ line: startLine + i, text, at });
   }
   return out;
+}
+
+/** `text` cut to at most FIND_LINE_CAP characters around the match at `at`
+ * (of `needleLength` characters), with `...` on each end that was cut. A short
+ * line comes back whole. The match always survives the cut: a hit whose text
+ * did not contain the query would read as the tool being wrong. */
+export function excerpt(text: string, at: number, needleLength: number): string {
+  if (text.length <= FIND_LINE_CAP) return text;
+  const lead = Math.min(FIND_EXCERPT_LEAD, Math.max(0, FIND_LINE_CAP - needleLength));
+  const start = Math.max(0, Math.min(at - lead, text.length - FIND_LINE_CAP));
+  const end = Math.min(text.length, start + FIND_LINE_CAP);
+  return `${start > 0 ? "..." : ""}${text.slice(start, end)}${end < text.length ? "..." : ""}`;
 }
 
 export function find(handle: IndexHandle, query: string, opts: FindOptions = {}): FindResult {
@@ -250,8 +279,13 @@ export function find(handle: IndexHandle, query: string, opts: FindOptions = {})
         "only punctuation or non-ASCII text cannot use it - try search, or sql with regexp_like(content, ...)",
     );
   }
+  // Reject rather than clamp a malformed limit: NaN would slice to nothing and
+  // report nothing, which reads as "no matches".
+  if (opts.limit !== undefined && (!Number.isInteger(opts.limit) || opts.limit < 1)) {
+    throw new Error(`limit must be a positive integer, got ${opts.limit}`);
+  }
   const ignoreCase = opts.ignoreCase ?? false;
-  const limit = Math.min(Math.max(1, opts.limit ?? DEFAULT_FIND_LIMIT), MAX_FIND_LIMIT);
+  const limit = Math.min(opts.limit ?? DEFAULT_FIND_LIMIT, MAX_FIND_LIMIT);
 
   const table = handle.db.openTable(TABLE);
   const candidates = table.tokenMatch("content", tokens.join(" "), { mode: "and", projection: FIND_PROJECTION });
@@ -269,12 +303,19 @@ export function find(handle: IndexHandle, query: string, opts: FindOptions = {})
       all.push({
         path,
         line: m.line,
-        text: m.text.length > FIND_LINE_CAP ? m.text.slice(0, FIND_LINE_CAP) + "..." : m.text,
+        text: excerpt(m.text, m.at, query.length),
         ...(symbol ? { symbol } : {}),
       });
     }
   }
   all.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : a.line - b.line));
+
+  // Per-file counts over every match, not the cut list: `grep -c` in one call.
+  const counts = new Map<string, number>();
+  for (const m of all) counts.set(m.path, (counts.get(m.path) ?? 0) + 1);
+  const byFile: FindFileCount[] = [...counts]
+    .map(([path, count]) => ({ path, count }))
+    .sort((a, b) => b.count - a.count || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
 
   const partial = partialIndex(handle.manifest);
   return {
@@ -282,7 +323,8 @@ export function find(handle: IndexHandle, query: string, opts: FindOptions = {})
     ignoreCase,
     matches: all.slice(0, limit),
     total: all.length,
-    files: new Set(all.map((m) => m.path)).size,
+    files: byFile.length,
+    byFile,
     ...(all.length > limit ? { truncated: true } : {}),
     ...(partial ? { partial } : {}),
   };

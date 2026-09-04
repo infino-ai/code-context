@@ -7,7 +7,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { connect } from "@infino-ai/infino";
 import { indexRepo, indexRepoStaged } from "../src/core/indexer.js";
 import { readManifest } from "../src/core/manifest.js";
-import { find, runSql, search } from "../src/core/searcher.js";
+import { analyzerTokens, find, runSql, search } from "../src/core/searcher.js";
+import { TABLE } from "../src/core/config.js";
 import type { IndexHandle } from "../src/core/context.js";
 import type { Embedder } from "../src/core/embedder.js";
 
@@ -51,6 +52,15 @@ export function replayLog(): number { return 42; }
 `,
   );
   writeFileSync(join(root, "README.md"), "# Fixture\n\nA tiny repo about sessions and commit logs.\n");
+  // A plain-text file long enough to chunk as fixed windows (60 lines, 10
+  // overlapping), so a line in the overlap lives in two chunks. Line 55 is in
+  // windows 1-60 and 51-110; line 20 carries analyzer edge cases; line 130 is
+  // longer than the excerpt cap with its marker past the cap.
+  const notes = Array.from({ length: 130 }, (_, i) => `filler ${i + 1}`);
+  notes[19] = "parse_config(Path) ABC-123 x.y Süd ok";
+  notes[54] = "OVERLAP_MARK sits in two windows";
+  notes[129] = "z".repeat(600) + " FAR_MARK " + "z".repeat(300);
+  writeFileSync(join(root, "notes.txt"), notes.join("\n") + "\n");
   writeFileSync(join(root, ".gitignore"), "ignored.ts\n");
   writeFileSync(join(root, "ignored.ts"), "export const SHOULD_NOT_APPEAR = 1;\n");
 
@@ -67,7 +77,7 @@ afterAll(() => {
 describe("indexing", () => {
   it("indexes the fixture and honors .gitignore", () => {
     const m = handle.manifest;
-    expect(m.files).toBe(3); // auth.ts, storage.ts, README.md (.gitignore is not indexable)
+    expect(m.files).toBe(4); // auth.ts, storage.ts, README.md, notes.txt (.gitignore is not indexable)
     expect(m.vectors).toBe("ready");
     expect(m.embedder?.dim).toBe(16);
     const rows = handle.db.querySql("SELECT DISTINCT path FROM chunks ORDER BY path") as Array<{ path: string }>;
@@ -116,8 +126,73 @@ describe("find", () => {
     expect(r.matches[0].symbol).toContain("verifySession");
     expect(r.total).toBe(2);
     expect(r.files).toBe(1);
+    expect(r.byFile).toEqual([{ path: "src/auth.ts", count: 2 }]);
     expect(r.truncated).toBeUndefined();
     expect(r.ignoreCase).toBe(false);
+  });
+
+  it("counts matches per file over every match, most first, even when the list is cut", () => {
+    // `export function` twice in each of auth.ts and storage.ts; the tie
+    // breaks on path. The cut list is one line, the counts are still whole.
+    const r = find(handle, "export function", { limit: 1 });
+    expect(r.matches.length).toBe(1);
+    expect(r.total).toBe(4);
+    expect(r.byFile).toEqual([
+      { path: "src/auth.ts", count: 2 },
+      { path: "src/storage.ts", count: 2 },
+    ]);
+  });
+
+  it("reports a line that lives in two overlapping chunks once", () => {
+    const r = find(handle, "OVERLAP_MARK");
+    expect(r.matches.map((m) => `${m.path}:${m.line}`)).toEqual(["notes.txt:55"]);
+    expect(r.total).toBe(1);
+    // The overlap is real: the line is in two indexed chunks.
+    const rows = handle.db.querySql(
+      `SELECT start_line FROM ${TABLE} WHERE path = 'notes.txt' AND start_line <= 55 AND end_line >= 55`,
+    );
+    expect(rows.length).toBe(2);
+  });
+
+  it("windows a long line around the match so the cited text contains it", () => {
+    const r = find(handle, "FAR_MARK");
+    expect(r.matches.length).toBe(1);
+    expect(r.matches[0].line).toBe(130);
+    expect(r.matches[0].text).toContain("FAR_MARK");
+    expect(r.matches[0].text.startsWith("...")).toBe(true);
+  });
+
+  it("agrees with the engine's analyzer on which chunks are candidates", () => {
+    // The client-side token mirror must produce the same candidate set as
+    // handing the raw text to the engine, or a literal the repo does contain
+    // could be missed. Checked on strings with the analyzer's edge cases:
+    // underscores and punctuation as separators, digits, a dropped non-ASCII run.
+    const table = handle.db.openTable(TABLE);
+    const chunks = (rows: Array<Record<string, unknown>>) =>
+      rows.map((r) => `${r.path}:${r.start_line}`).sort();
+    for (const text of ["parse_config(Path)", "ABC-123 x.y", "Süd ok", "Session(", "session record"]) {
+      const viaEngine = table.tokenMatch("content", text, { mode: "and", projection: ["path", "start_line"] });
+      const viaMirror = table.tokenMatch("content", analyzerTokens(text).join(" "), {
+        mode: "and",
+        projection: ["path", "start_line"],
+      });
+      expect(viaEngine.length, text).toBeGreaterThan(0);
+      expect(chunks(viaMirror), text).toEqual(chunks(viaEngine));
+    }
+  });
+
+  it("carries the partial-index marker like search does", () => {
+    const partial = { ...handle, manifest: { ...handle.manifest, truncatedFiles: 3, maxFiles: 10 } };
+    expect(find(partial, "Session(").partial?.filesSkipped).toBe(3);
+    expect(find(handle, "Session(").partial).toBeUndefined();
+  });
+
+  it("rejects a malformed limit instead of returning nothing", () => {
+    expect(() => find(handle, "Session(", { limit: Number.NaN })).toThrow(/positive integer/);
+    expect(() => find(handle, "Session(", { limit: 0 })).toThrow(/positive integer/);
+    expect(() => find(handle, "Session(", { limit: 2.5 })).toThrow(/positive integer/);
+    // Over the hard cap clamps rather than errors: a big number is a valid wish.
+    expect(find(handle, "Session(", { limit: 10_000 }).total).toBe(2);
   });
 
   it("matches the literal, not just its tokens", () => {

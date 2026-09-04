@@ -83,6 +83,7 @@ describe("find receipt", () => {
     ignoreCase: false,
     total: 3,
     files: 1,
+    byFile: [{ path: "a.ts", count: 3 }],
     truncated: true,
     matches: [
       { path: "a.ts", line: 3, text: "x = 1" },

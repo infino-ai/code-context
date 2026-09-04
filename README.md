@@ -118,7 +118,7 @@ One index and a deliberately small tool surface for agents:
 
 | Tool | What it does | When agents use it |
 |---|---|---|
-| `find` | Every line containing an exact string, cited `path:line` like `grep -n`. Complete and unranked: the index's token match picks the candidate chunks, then each line is checked for the literal, so no file is scanned and every hit is a real occurrence. | Where an agent would grep: every use or definition of an identifier, an error message, a config key. |
+| `find` | Every line containing an exact string, cited `path:line` like `grep -n`, plus matching lines per file like `grep -c`. Complete and unranked: the index's token match picks the candidate chunks, then each line is checked for the literal, so no file is scanned and every hit is a real occurrence. | Where an agent would grep: every use or definition of an identifier, an error message, a config key. |
 | `search` | One ranked pass fusing exact keyword matching (BM25) with semantic similarity (reciprocal-rank fusion). Hits carry the chunk content, so answers come straight from results. | A strong default for finding and understanding code: how a subsystem works, code by meaning or exact term, context before a change, similar implementations - exact identifiers and paraphrases in the same call. |
 | `sql` | Read-only SQL over the index, with the ranked search functions (`bm25_search`/`hybrid_search`) usable as table-valued relations. | Counts, rankings, aggregates over the whole repo in one query. |
 | `reindex` | Incremental sync (the server also auto-syncs in the background). | After significant edits. |
@@ -297,7 +297,7 @@ npm install -g @infino-ai/code-context
 
 ```
 cx index [path]           sync the index (incremental; --full rebuilds, --watch follows edits)
-cx find <text>            every line containing the exact text, path:line  (-i, --limit)
+cx find <text>            every line containing the exact text, path:line  (-i, -c per-file counts, --limit)
 cx search <query>         exact terms + meaning, one ranked pass           (-k hits)
 cx sql <statement>        read-only SQL; --embed q="text" fills {{q}}
 cx status                 what the index holds, how fresh, vector readiness

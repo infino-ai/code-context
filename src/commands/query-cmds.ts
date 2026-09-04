@@ -30,6 +30,8 @@ function die(err: unknown): never {
 
 export interface FindCmdOptions {
   ignoreCase?: boolean;
+  /** Per-file counts instead of the matching lines, like `grep -c`. */
+  count?: boolean;
   limit?: string;
   json?: boolean;
   path?: string;
@@ -40,6 +42,8 @@ export interface FindCmdOptions {
 export function findCmd(text: string, opts: FindCmdOptions): void {
   try {
     const handle = openIndex(opts.path);
+    // `find` rejects a non-integer, so `--limit abc` is an error rather than an
+    // empty listing; the raw string is converted here and validated there.
     const result = find(handle, text, {
       ignoreCase: opts.ignoreCase,
       limit: opts.limit === undefined ? undefined : Number(opts.limit),
@@ -54,9 +58,13 @@ export function findCmd(text: string, opts: FindCmdOptions): void {
       return;
     }
     if (result.partial) console.error(yellow(`warning: ${result.partial.note}`));
-    for (const m of result.matches) console.log(`${cyan(m.path)}${dim(`:${m.line}:`)} ${m.text}`);
-    if (result.truncated) {
-      console.error(yellow(`showing ${result.matches.length} of ${result.total} matches - raise --limit to see more`));
+    if (opts.count) {
+      for (const f of result.byFile) console.log(`${cyan(f.path)}${dim(":")} ${f.count}`);
+    } else {
+      for (const m of result.matches) console.log(`${cyan(m.path)}${dim(`:${m.line}:`)} ${m.text}`);
+      if (result.truncated) {
+        console.error(yellow(`showing ${result.matches.length} of ${result.total} matches - raise --limit to see more`));
+      }
     }
     if (result.total === 0) console.error(yellow("no matches"));
   } catch (err) {

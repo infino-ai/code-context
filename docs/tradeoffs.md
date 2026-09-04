@@ -10,17 +10,17 @@ symbol-precise references. It ranks and retrieves content and aggregates by
 relevance. Tools that resolve structure (LSP servers, graph indexes) are
 complementary: MCP servers stack, so run both when you need both.
 
-### Pinpoint lookups are not where the token win is
+### Pinpoint lookups are the smaller win
 
-Naming the one file a known symbol lives in is a single grep's job. `find`
-does that job from the index - every matching line as `path:line`, no file
-scanned - and returns the same one-line-per-match shape grep does, so it
-matches grep's cost rather than beating it. Ranked `search` is the wrong tool
-there: it returns chunks that carry their content, which is what pays off on
-"how does X work" and whole-repo questions and is dead weight when all you
-need is a path. Adding code-context does not reduce accuracy on
-localization; it just does not win on cost there. Both are measured in the
-[benchmark](benchmark.md).
+Naming the one file a known symbol lives in is a single grep's job, and
+`find` does that job from the index: every matching line as `path:line`, per
+file counts, no file scanned. A grep hit still needs a follow-up read before
+it is a cited line; a `find` hit already is one, so on exact lookups the
+saving is the reads that never happen, not a change in what gets found.
+Ranked `search` is the wrong tool there: it returns chunks that carry their
+content, which is what pays off on "how does X work" and whole-repo questions
+and is dead weight when all you need is a path. The large savings are on
+questions that span the repo; the [benchmark](benchmark.md) records both.
 
 ### The first index of a repo pays a one-time vector cost
 
