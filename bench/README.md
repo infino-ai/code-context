@@ -54,3 +54,19 @@ Lane design notes (they matter for fairness):
   build with `CX_BENCH_CLI=/path/to/other/dist/cli.js` and label it with
   `CX_BENCH_BUILD=<name>`; both land on every result row, so one
   `questions.jsonl` can hold every variant.
+
+Reading a multi-build results file (all default to `.work/results/questions.jsonl`;
+a build is its `CX_BENCH_BUILD` label, or `since..until` ISO timestamps for rows
+recorded before the label existed):
+
+```bash
+node compare-builds.mjs "" V0,V3          # per set: tokens, cost, calls, first tool; CX_MD=1 for markdown, CX_DETAIL=1 per question
+node cite-check.mjs /path/to/repo "" V0,V3  # every cited path:line exists, is in bounds, and names an identifier found nearby
+node judge.mjs /path/to/repo V0 V3          # blind pairwise judge (claude-opus-5, Read/Grep/Glob on the repo) -> .work/results/judge.jsonl
+node judge-report.mjs                       # wins, ties, unsupported claims and confidence per set for each judged pair
+```
+
+The judge sees both answers in random order and returns a winner, a
+confidence, and how many claims each answer makes that the code does not
+support; `JUDGE_LIMIT=n` caps the pairs for a smoke run. Judging costs about
+a quarter of a dollar per pair.
