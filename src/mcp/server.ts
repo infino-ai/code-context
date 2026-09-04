@@ -204,7 +204,8 @@ export async function serveMcp(rootPath?: string): Promise<void> {
         "- search - how does X work, where is Y handled, code by meaning.\n" +
         "- sql - counts, rankings, and aggregates across the repo.\n" +
         "- reindex - after sweeping edits; the server auto-syncs otherwise.\n" +
-        "Answer and cite from results (path:line); Read a file only for a hit marked truncated. " +
+        "Answer and cite from results (path:line); Read a file only for a hit marked truncated or " +
+        "a later search hit whose excerpt is what you need. " +
         "Every tool takes an optional 'path' (an absolute repo root) to target another repository. " +
         "A 'partial' marker means files over the index cap were left out, so a missing match is not " +
         "proof of absence.",
@@ -219,9 +220,9 @@ export async function serveMcp(rootPath?: string): Promise<void> {
         "Ranked code search fusing exact keyword matching with semantic similarity, so it works " +
         "whether or not you know the words. Use it for 'how does X work', 'where is Y handled', code " +
         "by meaning, context before a change, similar implementations. Each hit carries path, line " +
-        "range, and the chunk content: answer and cite from the hits; Read a file only for one marked " +
-        "truncated. For every occurrence of an exact string use find; for counts and rankings use " +
-        "sql.",
+        "range, and symbol; the top hits carry the chunk content and the rest a one-line excerpt: " +
+        "answer and cite from the hits; Read a later hit only when the top ones did not answer. For " +
+        "every occurrence of an exact string use find; for counts and rankings use sql.",
       inputSchema: {
         query: z.string().describe("What you're looking for - terms, a phrase, or a description."),
         k: z.number().int().positive().max(50).default(DEFAULT_SEARCH_K).describe("Maximum hits."),

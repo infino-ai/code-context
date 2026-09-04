@@ -97,7 +97,7 @@ export async function searchCmd(query: string, opts: SearchCmdOptions): Promise<
       console.log(
         `${bold(String(i + 1) + ".")} ${cyan(h.path)}${dim(`:${h.startLine}-${h.endLine}`)} ${dim(`(${result.ranking} ${h.score.toFixed(3)})`)}`,
       );
-      console.log(`  ${h.content.split("\n").slice(0, 5).join("\n  ")}\n`);
+      console.log(`  ${(h.content ?? h.excerpt ?? "").split("\n").slice(0, 5).join("\n  ")}\n`);
     });
     if (result.hits.length === 0) console.error(yellow("no hits"));
   } catch (err) {

@@ -58,6 +58,13 @@ export const EMBED_MAX_CHARS = Number(process.env.CX_EMBED_MAX_CHARS ?? 8000);
  * CLI `-k`) and via CX_SEARCH_K for config/CI-level defaults. */
 export const DEFAULT_SEARCH_K = Number(process.env.CX_SEARCH_K ?? 10);
 
+/** How many of the top search hits carry their chunk content. Hits ranked
+ * below this carry a one-line excerpt and their line range instead, so the
+ * result stays citable at a fraction of the tokens and the caller Reads a
+ * later hit only when the top ones did not answer. Set it at or above k (via
+ * CX_SEARCH_FULL_HITS) to get content on every hit. */
+export const SEARCH_FULL_HITS = Number(process.env.CX_SEARCH_FULL_HITS ?? 3);
+
 /** Hard cap on matching lines in one `find` result. At roughly fifty tokens
  * per returned line (path, line number, text) this is about 25k tokens: a
  * large tool result, but one a session survives, where an unbounded find of

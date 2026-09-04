@@ -1,6 +1,38 @@
 import { describe, expect, it } from "vitest";
-import { analyzerTokens, applyEmbeds, excerpt, guardSql, matchLines } from "../src/core/searcher.js";
+import { analyzerTokens, applyEmbeds, bestLine, excerpt, guardSql, matchLines } from "../src/core/searcher.js";
 import type { Embedder } from "../src/core/embedder.js";
+
+describe("bestLine", () => {
+  const chunk = "/// Compaction policy.\n\nfn should_compact(files: usize) -> bool {\n    files > SMALL_FILE_THRESHOLD\n}";
+
+  it("picks the line carrying the most distinct query tokens", () => {
+    expect(bestLine(chunk, analyzerTokens("compact files"))).toBe("fn should_compact(files: usize) -> bool {");
+  });
+
+  it("takes the first line on a tie", () => {
+    expect(bestLine(chunk, analyzerTokens("compaction"))).toBe("/// Compaction policy.");
+  });
+
+  it("matches whole words up to a short inflection, not substrings", () => {
+    // `compacted` reaches `compaction`; `code` must not reach `codec`, and the
+    // second line has no whole-word match at all, so the first line wins.
+    const two = "// the codec layout\n// picks which superfiles get compaction";
+    expect(bestLine(two, ["compacted"])).toBe("// picks which superfiles get compaction");
+    expect(bestLine(two, ["code"])).toBe("// the codec layout");
+  });
+
+  it("falls back to the first non-blank line when no token occurs", () => {
+    expect(bestLine(chunk, analyzerTokens("tombstone"))).toBe("/// Compaction policy.");
+    expect(bestLine("\n\n  x\n", [])).toBe("  x");
+  });
+
+  it("windows a long line around the first token so the excerpt shows it", () => {
+    const line = "a".repeat(600) + " NEEDLE " + "b".repeat(300);
+    const out = bestLine(`filler\n${line}`, ["needle"]);
+    expect(out).toContain("NEEDLE");
+    expect(out.startsWith("...")).toBe(true);
+  });
+});
 
 describe("analyzerTokens", () => {
   it("splits on anything outside [A-Za-z0-9] and lowercases, like the index analyzer", () => {

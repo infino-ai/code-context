@@ -80,7 +80,7 @@ export function searchEntry(result: SearchResult, root: string): UsageEntry {
     ts: new Date().toISOString(),
     tool: "search",
     query: result.query,
-    returnedTokens: result.hits.reduce((n, h) => n + estTokens(h.content), 0),
+    returnedTokens: result.hits.reduce((n, h) => n + estTokens(h.content ?? h.excerpt ?? ""), 0),
     wholeFileTokens: wholeFileTokens(files, root),
     ranking: result.ranking,
     hits,

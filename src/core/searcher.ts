@@ -8,15 +8,16 @@
 //            is a different question from "the chunks most about it".
 //   search - the finding door: one ranked pass fuses exact keyword matching
 //            (BM25) with semantic similarity (vectors, RRF) once vectors are
-//            ready; ranked keyword search until then. Hits carry chunk
-//            content, so answers come straight from results.
+//            ready; ranked keyword search until then. The top hits carry
+//            chunk content, so answers come straight from results; the rest
+//            carry a one-line excerpt and are Read on demand.
 //   sql    - the power door: read-only SQL over the index, built on the search
 //            table functions (bm25_search / hybrid_search) composed with
 //            GROUP BY, with {{name}} placeholders embedded server-side for the
 //            vector functions.
 
 import type { IndexHandle } from "./context.js";
-import { TABLE, DEFAULT_SEARCH_K, DEFAULT_FIND_LIMIT, MAX_FIND_LIMIT } from "./config.js";
+import { TABLE, DEFAULT_SEARCH_K, SEARCH_FULL_HITS, DEFAULT_FIND_LIMIT, MAX_FIND_LIMIT } from "./config.js";
 import type { Embedder } from "./embedder.js";
 import type { Manifest } from "./manifest.js";
 
@@ -61,7 +62,11 @@ export interface SearchHit {
   endLine: number;
   lang: string;
   score: number;
-  content: string;
+  /** The chunk text, on the top SEARCH_FULL_HITS hits only. */
+  content?: string;
+  /** On hits below the top SEARCH_FULL_HITS: the chunk's line that best
+   * matches the query, so the hit is citable and judged without a Read. */
+  excerpt?: string;
   /** Definition name(s) in this chunk (e.g. "parseConfig"), when known. */
   symbol?: string;
   /** Set when content was capped - Read path:startLine-endLine for the rest. */
@@ -72,10 +77,22 @@ export interface SearchHit {
  * itself (a whole ~60-line chunk fits; only pathological chunks truncate). */
 const HIT_CONTENT_CAP = 4000;
 
+/** Function words a natural-language query carries ("which code decides when
+ * a superfile is compacted") that say nothing about which line of a chunk to
+ * show; left out when picking a hit's excerpt line so a comment full of "the"
+ * and "is" does not outrank the line that names the subject. */
+const EXCERPT_STOPWORDS = new Set([
+  "a", "an", "and", "are", "as", "at", "be", "by", "do", "does", "for", "from", "how", "i", "if", "in",
+  "into", "is", "it", "of", "on", "or", "that", "the", "this", "to", "was", "what", "when", "where",
+  "which", "with",
+]);
+
 export interface SearchResult {
   query: string;
   /** "hybrid" once vectors are ready; "keyword" while they backfill. */
   ranking: "hybrid" | "keyword";
+  /** How many leading hits carry content; the rest carry an excerpt. */
+  fullHits: number;
   hits: SearchHit[];
   note?: string;
   /** Present when the index omitted files over the cap - results may be incomplete. */
@@ -108,11 +125,20 @@ export async function search(
     rows = table.bm25Search("content", query, k, { projection: PROJECTION });
     ranking = "keyword";
   }
+  const queryTokens = analyzerTokens(query).filter((t) => !EXCERPT_STOPWORDS.has(t));
   return {
     query,
     ranking,
-    hits: rows.map((r) => {
+    fullHits: SEARCH_FULL_HITS,
+    hits: rows.map((r, rank) => {
       const full = String(r.content);
+      const body =
+        rank < SEARCH_FULL_HITS
+          ? {
+              content: full.slice(0, HIT_CONTENT_CAP),
+              ...(full.length > HIT_CONTENT_CAP ? { truncated: true } : {}),
+            }
+          : { excerpt: bestLine(full, queryTokens) };
       return {
         path: String(r.path),
         startLine: Number(r.start_line),
@@ -120,8 +146,7 @@ export async function search(
         lang: String(r.lang ?? ""),
         score: Number(r.score),
         ...(r.symbol ? { symbol: String(r.symbol) } : {}),
-        content: full.slice(0, HIT_CONTENT_CAP),
-        ...(full.length > HIT_CONTENT_CAP ? { truncated: true } : {}),
+        ...body,
       };
     }),
     ...(ranking === "keyword" && handle.manifest.vectors !== "ready"
@@ -132,6 +157,53 @@ export async function search(
       return partial ? { partial } : {};
     })(),
   };
+}
+
+/** Two analyzer tokens count as the same word for the excerpt pick when they
+ * share a prefix of at least this many characters ... */
+const STEM_MIN_PREFIX = 5;
+/** ... and the shorter of them differs from that prefix by at most this many
+ * trailing characters: `compacted` and `compaction` share `compact`, while
+ * `superfile` and `supertable` (prefix `super`) and `code` and `codec` do not. */
+const STEM_MAX_SUFFIX = 3;
+
+/** Whether two analyzer tokens are the same word up to a short inflection. */
+function sameStem(a: string, b: string): boolean {
+  if (a === b) return true;
+  const shorter = Math.min(a.length, b.length);
+  let common = 0;
+  while (common < shorter && a[common] === b[common]) common++;
+  return common >= STEM_MIN_PREFIX && common >= shorter - STEM_MAX_SUFFIX;
+}
+
+/** The line of `content` whose analyzer tokens cover the most query tokens
+ * (first such line on a tie), cut to a window around the first covered one;
+ * the first non-blank line when no token occurs, so a hit is never blank. */
+export function bestLine(content: string, queryTokens: string[]): string {
+  let best = "";
+  let bestAt = 0;
+  let bestScore = 0;
+  for (const raw of content.split("\n")) {
+    const text = raw.replace(/\r$/, "");
+    if (!best && text.trim()) best = text;
+    const lineTokens = analyzerTokens(text);
+    const lower = text.toLowerCase();
+    let score = 0;
+    let at = -1;
+    for (const q of queryTokens) {
+      const hit = lineTokens.find((t) => sameStem(q, t));
+      if (!hit) continue;
+      score++;
+      const i = lower.indexOf(hit);
+      if (at < 0 || i < at) at = i;
+    }
+    if (score > bestScore) {
+      bestScore = score;
+      best = text;
+      bestAt = at;
+    }
+  }
+  return excerpt(best, bestAt, 0);
 }
 
 // --- find -------------------------------------------------------------------

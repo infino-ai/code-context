@@ -8,7 +8,7 @@ import { connect } from "@infino-ai/infino";
 import { indexRepo, indexRepoStaged } from "../src/core/indexer.js";
 import { readManifest } from "../src/core/manifest.js";
 import { analyzerTokens, find, runSql, search } from "../src/core/searcher.js";
-import { TABLE } from "../src/core/config.js";
+import { SEARCH_FULL_HITS, TABLE } from "../src/core/config.js";
 import type { IndexHandle } from "../src/core/context.js";
 import type { Embedder } from "../src/core/embedder.js";
 
@@ -113,6 +113,27 @@ describe("search", () => {
     const r = await search(noVec, fakeEmbedder, "commit log", 5);
     expect(r.ranking).toBe("keyword");
     expect(r.note).toMatch(/vectors not ready/);
+  });
+
+  it("tiers the result: content on the top hits, a one-line excerpt below them", async () => {
+    // The fixture has more chunks than SEARCH_FULL_HITS, so a wide k reaches
+    // the excerpt tier. Every hit stays citable: path, line range, and either
+    // the chunk or the line of it that best matches the query.
+    const r = await search(handle, fakeEmbedder, "filler", 10);
+    expect(r.fullHits).toBe(SEARCH_FULL_HITS);
+    expect(r.hits.length).toBeGreaterThan(SEARCH_FULL_HITS);
+    r.hits.forEach((h, rank) => {
+      if (rank < SEARCH_FULL_HITS) {
+        expect(h.content, `hit ${rank}`).toBeDefined();
+        expect(h.excerpt, `hit ${rank}`).toBeUndefined();
+      } else {
+        expect(h.content, `hit ${rank}`).toBeUndefined();
+        expect(h.excerpt, `hit ${rank}`).toBeTruthy();
+        expect(h.excerpt!.includes("\n"), `hit ${rank}`).toBe(false);
+        // A chunk that holds the term shows the line with it, not its first line.
+        if (h.path === "notes.txt") expect(h.excerpt, `hit ${rank}`).toMatch(/filler/);
+      }
+    });
   });
 });
 
