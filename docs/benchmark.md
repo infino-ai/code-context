@@ -331,14 +331,19 @@ Blind judge, each variant against V0, same question and repeat paired:
 | V1 | 107 | 39 | 46 | 22 | 185 / 151 | 0.70 |
 | V3 | 108 | 31 | 55 | 22 | 283 / 192 | 0.72 |
 | V5 | 107 | 35 | 47 | 25 | 243 / 201 | 0.72 |
+| V8 | 107 | 33 | 51 | 23 | 302 / 236 | 0.68 |
 
 V3 wins on every set (aggregation 21 to 8, by-meaning 10 to 7, comprehension
 9 to 6, pinpoint 8 to 5 with 11 ties, known-file 7 to 5) and makes a third
 fewer claims the code does not support. The aggregation gap is the second
 `search` call: a "ranked list with a short reason each" answered from one
 `sql` result invents its reasons; answered after a `search` it cites them.
-No build cited a line outside its file except one V4a answer; V3 answers
-carry more citations than V0's (0.7 against 0.5 per answer).
+V8, the shipping candidate, holds that: aggregation 18 to 10, by-meaning 11
+to 6, pinpoint 9 to 7 with 8 ties, comprehension 7 to 7, and on the
+known-file set 6 to 3 with 2 unsupported claims against 7 - the extra
+`find`-first runs there did not cost the answers anything. No build cited a
+line outside its file except one V4a answer; the trimmed builds' answers
+carry more citations than V0's (0.7 to 0.8 against 0.5 per answer).
 
 ### The rename and the shape
 
@@ -389,8 +394,7 @@ the highest code-context first-call count of the run. Its one soft spot is
 the tripwire set: `find` was the first call on 13 of 18 known-file runs
 against V0's 9 and 10, though at 114k tokens against 131k, because a `find`
 that lands on a file the agent should have Read costs one cheap call, not a
-detour. The blind judge on V8 against V0 was still running when this was
-written; its row joins the quality table when it lands.
+detour, and the judge preferred V8's known-file answers 6 to 3.
 
 ### Haiku 4.5
 
