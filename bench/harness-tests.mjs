@@ -53,8 +53,18 @@ function withHostedEnv(fn, extra = {}) {
 
 // --- lane table ---------------------------------------------------------------
 
-test("the lane table names exactly the six lanes and an unknown lane throws", () => {
-  assert.deepEqual(Object.keys(LANES).sort(), ["agent-only", "combo", "cx", "files", "hosted", "hosted-agent"]);
+test("the lane table names exactly the nine lanes and an unknown lane throws", () => {
+  assert.deepEqual(Object.keys(LANES).sort(), [
+    "agent-only",
+    "combo",
+    "cx",
+    "files",
+    "hosted",
+    "hosted-agent",
+    "index-explore",
+    "platform-explore",
+    "stock-explore",
+  ]);
   assert.throws(() => laneDef("cobmo"), /unknown lane "cobmo"/);
   assert.throws(() => laneOptions("cobmo", "/r", "/r/.infino"), /unknown lane/);
 });
@@ -106,6 +116,42 @@ test("agent-only keeps Read and retrieval_agent and hides the three retrieval to
     assert.equal(laneOptions("hosted-agent", "/r", "/r/.infino").disallowedTools, undefined);
     assert.equal(laneOptions("combo", "/r", "/r/.infino").disallowedTools, undefined);
   });
+});
+
+test("the explore lanes add the Agent tool and override Explore; stock keeps the built-in", () => {
+  const stock = laneOptions("stock-explore", "/r", "/r/.infino");
+  assert.deepEqual(stock.tools, ["Glob", "Grep", "Read", "LS", "Bash", "Agent"]);
+  assert.equal(stock.agents, undefined);
+  assert.equal(stock.mcpServers, undefined);
+
+  const index = laneOptions("index-explore", "/r", "/r/.infino");
+  assert.deepEqual(index.tools, stock.tools);
+  assert.deepEqual(Object.keys(index.agents), ["Explore"]);
+  assert.deepEqual(index.agents.Explore.tools, ["mcp__code-context__find", "mcp__code-context__search", "mcp__code-context__sql", "Read"]);
+  assert.equal(index.agents.Explore.model, "haiku");
+  assert.deepEqual(index.mcpServers["code-context"].args.slice(1), ["mcp"]);
+
+  withHostedEnv(() => {
+    const platform = laneOptions("platform-explore", "/r", "/r/.infino");
+    assert.deepEqual(platform.agents.Explore.tools, ["mcp__code-context__retrieval_agent", "Read"]);
+    assert.equal(platform.agents.Explore.description, index.agents.Explore.description);
+    const args = platform.mcpServers["code-context"].args;
+    assert.deepEqual(args.slice(-3), ["--retrieval-agent", "--agent-max-turns", "4"]);
+  }, { CX_BENCH_AGENT_MAX_TURNS: "4" });
+  assert.equal(laneOptions("combo", "/r", "/r/.infino").agents, undefined);
+});
+
+test("foldToolMessage counts calls made inside subagents and records the subagent types spawned", () => {
+  const acc = newToolAccounting();
+  foldToolMessage(acc, { type: "assistant", parent_tool_use_id: null, message: { content: [{ type: "tool_use", id: "a1", name: "Agent", input: { subagent_type: "Explore", prompt: "how does compaction work" } }] } });
+  foldToolMessage(acc, { type: "assistant", parent_tool_use_id: "a1", message: { content: [{ type: "tool_use", id: "s1", name: "mcp__code-context__search", input: { query: "compaction" } }] } });
+  foldToolMessage(acc, { type: "assistant", parent_tool_use_id: "a1", message: { content: [{ type: "tool_use", id: "s2", name: "Read", input: {} }] } });
+  foldToolMessage(acc, { type: "assistant", parent_tool_use_id: null, message: { content: [{ type: "tool_use", id: "m1", name: "Read", input: {} }] } });
+  assert.deepEqual(acc.toolCalls, ["Agent", "cx:search", "Read", "Read"]);
+  assert.equal(acc.subagentCalls, 2);
+  assert.deepEqual(acc.subagents, ["Explore"]);
+  assert.equal(acc.toolDetails[1].inSubagent, true);
+  assert.equal(acc.toolDetails[3].inSubagent, undefined);
 });
 
 test("CX_BENCH_AGENT_MAX_TURNS passes through as --agent-max-turns on the agent lanes only", () => {

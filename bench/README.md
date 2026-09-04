@@ -54,8 +54,17 @@ where the server's index lives.
 | `hosted-agent` | hosted | Glob, Grep, Read, LS, Bash | yes        | as `hosted` plus `--retrieval-agent`                                                                                   | `CX_BENCH_DB_URL`, `CX_BENCH_KEY_FILE`  |
 | `agent-only`   | hosted | Read                      | yes        | as `hosted-agent`, with `find`, `search` and `sql` removed from the model's context (the SDK's `disallowedTools`)      | `CX_BENCH_DB_URL`, `CX_BENCH_KEY_FILE`  |
 
-Both agent lanes pass `CX_BENCH_AGENT_MAX_TURNS`, when set, through as the
+| `stock-explore`    | local  | Glob, Grep, Read, LS, Bash, Agent | no  | - (the built-in Explore subagent)                                                                             | -                                        |
+| `index-explore`    | local  | Glob, Grep, Read, LS, Bash, Agent | yes | `Explore` overridden: `find`, `search`, `sql`, Read, Haiku inside                                             | -                                        |
+| `platform-explore` | hosted | Glob, Grep, Read, LS, Bash, Agent | yes | as `hosted-agent` (with the turn cap), `Explore` overridden: `retrieval_agent`, Read, Haiku inside            | `CX_BENCH_DB_URL`, `CX_BENCH_KEY_FILE`  |
+
+The agent lanes pass `CX_BENCH_AGENT_MAX_TURNS`, when set, through as the
 server's `--agent-max-turns`, to measure the agent under a tighter turn cap.
+The explore lanes leave the main agent as a real session has it (stock tools
+plus the Agent tool, and in the index lanes the three MCP tools too) and
+change only what the read-only `Explore` subagent runs on; rows record
+`subagents` (the types spawned, in order) and `subagentCalls` (tool calls made
+inside them), so delegation is read off the rows.
 
 `combo` is what installing the MCP server actually produces in a real client;
 `hosted` is the same agent and the same three tools with the index in a

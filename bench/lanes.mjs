@@ -30,6 +30,54 @@ const CX_SHORT_PREFIX = "cx:";
 /** The three retrieval tools, hidden from the model in the agent-only lane
  * so that every retrieval has to go through `retrieval_agent`. */
 const CX_RETRIEVAL_TOOLS = ["find", "search", "sql"];
+/** The built-in tool that spawns subagents, and the built-in read-only
+ * exploration subagent the explore lanes override: a programmatic agent
+ * definition under the same name replaces it (probed: the overridden Explore
+ * sees only the tools its definition names, the main agent keeps its own). */
+const AGENT_TOOL = "Agent";
+const EXPLORE = "Explore";
+/** The model inside an overridden Explore: the cheap one, since the index
+ * does the finding and the subagent only reads results and writes the
+ * conclusion. */
+const EXPLORE_MODEL = "haiku";
+
+/** What the main agent reads when deciding to delegate: the same job the
+ * built-in Explore advertises (broad, read-only, conclusion not file dumps),
+ * with the index named as how it gets there. Shared by both overrides so the
+ * two differ only in what runs underneath. */
+const EXPLORE_DESCRIPTION =
+  "Read-only exploration agent for questions that span the repository: how X works, where Y is " +
+  "handled, which files are about Z, every occurrence of an identifier. It searches the repository's " +
+  "code index and returns the conclusion with path:line citations, not file dumps. Use it when " +
+  "answering means sweeping many files and you only need the conclusion.";
+
+/** Explore over code-context's own tools, Haiku inside. */
+const exploreOnIndex = {
+  description: EXPLORE_DESCRIPTION,
+  tools: [...CX_RETRIEVAL_TOOLS.map((tool) => `${CX_TOOL_PREFIX}${tool}`), "Read"],
+  prompt:
+    "You explore this repository through code-context's index. find: every occurrence of an exact " +
+    "identifier or string, where you would grep. search: how something works, where it is handled, code " +
+    "by meaning. sql: counts and rankings across the repo (bm25_search('chunks','content','<terms>', k) " +
+    "as a table function with GROUP BY). Answer from the hits and cite path:line; Read a file only for a " +
+    "hit marked truncated. Return a concise, complete answer with citations - the caller will not see " +
+    "your tool results.",
+  model: EXPLORE_MODEL,
+};
+
+/** Explore over the platform's retrieval agent alone, Haiku relaying. The
+ * inner loop's turn cap comes from the server flags (CX_BENCH_AGENT_MAX_TURNS),
+ * so the outer agent, not the platform's ladder, decides how far to go. */
+const exploreOnPlatform = {
+  description: EXPLORE_DESCRIPTION,
+  tools: [`${CX_TOOL_PREFIX}retrieval_agent`, "Read"],
+  prompt:
+    "You explore this repository by calling retrieval_agent with the question, at most twice (rephrase " +
+    "once if the first call returns no answer). Return its answer with the places it found cited " +
+    "path:line; if there is still no answer, return what it found and say so. The caller will not see " +
+    "your tool results.",
+  model: EXPLORE_MODEL,
+};
 /** The embedding provider a hosted lane's server uses when the caller does
  * not pick one: the product default - the platform embeds - since the hosted
  * lanes measure the hosted product as shipped. CX_BENCH_EMBED_PROVIDER=local
@@ -90,6 +138,7 @@ export function agentFlags(env = process.env) {
  *   env       server env for the MCP lanes (repoDir, indexDir) => object
  *   args      extra flags for the server command line (env) => string[]
  *   disallowedTools  MCP tool names the SDK removes from the model's context
+ *   agents    subagent definitions by name; a built-in name (Explore) is overridden
  *   requires  harness env vars that must be set before the lane can run
  *
  *   files      - stock file tools only
@@ -102,7 +151,13 @@ export function agentFlags(env = process.env) {
  *   agent-only - Read plus retrieval_agent alone: find, search and sql are
  *                hidden, so every retrieval goes through the platform's agent.
  *                Measures that agent's answers and cost in isolation - not how
- *                often a model would choose it (hosted-agent measures that). */
+ *                often a model would choose it (hosted-agent measures that).
+ *   stock-explore    - files plus the Agent tool with the built-in Explore
+ *                      subagent: pure Sonnet as a real session has it
+ *   index-explore    - stock-explore plus the local MCP server, with Explore
+ *                      overridden to run on code-context's tools (Haiku inside)
+ *   platform-explore - the same over the hosted server, with Explore
+ *                      overridden to run on retrieval_agent alone */
 export const LANES = {
   files: { kind: "local", tools: STOCK_TOOLS, mcp: false, requires: [] },
   cx: { kind: "local", tools: ["Read"], mcp: true, env: mcpEnvBase, requires: [] },
@@ -123,6 +178,24 @@ export const LANES = {
     env: mcpEnvBase,
     args: (env) => [...hostedFlags(env), ...agentFlags(env)],
     disallowedTools: CX_RETRIEVAL_TOOLS.map((tool) => `${CX_TOOL_PREFIX}${tool}`),
+    requires: HOSTED_REQUIRES,
+  },
+  "stock-explore": { kind: "local", tools: [...STOCK_TOOLS, AGENT_TOOL], mcp: false, requires: [] },
+  "index-explore": {
+    kind: "local",
+    tools: [...STOCK_TOOLS, AGENT_TOOL],
+    mcp: true,
+    env: mcpEnvBase,
+    agents: { [EXPLORE]: exploreOnIndex },
+    requires: [],
+  },
+  "platform-explore": {
+    kind: "hosted",
+    tools: [...STOCK_TOOLS, AGENT_TOOL],
+    mcp: true,
+    env: mcpEnvBase,
+    args: (env) => [...hostedFlags(env), ...agentFlags(env)],
+    agents: { [EXPLORE]: exploreOnPlatform },
     requires: HOSTED_REQUIRES,
   },
 };
@@ -161,7 +234,13 @@ export function dbHost(lane, env = process.env) {
 export function laneOptions(lane, repoDir, indexDir) {
   const def = laneDef(lane);
   checkLaneEnv(lane);
-  const hermetic = { cwd: repoDir, settingSources: [], strictMcpConfig: true, tools: def.tools };
+  const hermetic = {
+    cwd: repoDir,
+    settingSources: [],
+    strictMcpConfig: true,
+    tools: def.tools,
+    ...(def.agents ? { agents: def.agents } : {}),
+  };
   if (!def.mcp) return hermetic;
   return {
     ...hermetic,
@@ -222,17 +301,23 @@ export function parseCxResult(text) {
 
 /** Fold one SDK message into the per-run tool accounting. Assistant messages
  * carry the tool_use blocks (name + id); the user messages the CLI emits
- * carry the matching tool_result blocks, so the id joins the two. Exported
- * so the parsing is testable without a model. */
+ * carry the matching tool_result blocks, so the id joins the two. A message
+ * with parent_tool_use_id set came from inside a subagent: its calls are
+ * counted like any other and marked, and an Agent call records which
+ * subagent type it spawned. Exported so the parsing is testable without a
+ * model. */
 export function foldToolMessage(acc, m) {
   if (m.type === "assistant") {
+    const inSubagent = Boolean(m.parent_tool_use_id);
     for (const b of m.message?.content ?? []) {
       if (b.type === "tool_use") {
         const name = shortToolName(b.name);
         acc.toolCalls.push(name);
-        const detail = { name, tookMs: null, usage: null };
+        const detail = { name, tookMs: null, usage: null, ...(inSubagent ? { inSubagent: true } : {}) };
         acc.toolDetails.push(detail);
         if (b.id) acc.pending.set(b.id, detail);
+        if (inSubagent) acc.subagentCalls++;
+        if (b.name === AGENT_TOOL) acc.subagents.push(typeof b.input?.subagent_type === "string" ? b.input.subagent_type : "?");
       }
     }
   }
@@ -253,7 +338,7 @@ export function foldToolMessage(acc, m) {
   }
 }
 
-export const newToolAccounting = () => ({ toolCalls: [], toolDetails: [], pending: new Map() });
+export const newToolAccounting = () => ({ toolCalls: [], toolDetails: [], pending: new Map(), subagentCalls: 0, subagents: [] });
 
 /** Sum of the server-side took_ms over the code-context calls of a run - the
  * engine work inside the question's wall clock. */
@@ -301,7 +386,7 @@ export async function runLane({ lane, prompt, system, repoDir, indexDir, maxTurn
     (u.cache_creation_input_tokens ?? 0) +
     (u.cache_read_input_tokens ?? 0) +
     (u.output_tokens ?? 0);
-  const { toolCalls, toolDetails } = acc;
+  const { toolCalls, toolDetails, subagentCalls, subagents } = acc;
   return {
     lane,
     laneKind: laneDef(lane).kind,
@@ -317,6 +402,10 @@ export async function runLane({ lane, prompt, system, repoDir, indexDir, maxTurn
     toolDetails,
     cxTookMs: cxTookMs(toolDetails),
     calls: toolCalls.length,
+    // Calls made inside subagents (a subset of `calls`) and the subagent
+    // types the main agent spawned, in order - the delegation signal.
+    subagentCalls,
+    subagents,
     answer,
     error,
     ts: new Date().toISOString(),
