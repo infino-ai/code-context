@@ -8,11 +8,22 @@
 //           `since..until` ISO windows for rows written before the label
 //           existed (they print as the window). Default: every label in the
 //           file, with CX_V0_WINDOW=since..until prepended when set.
+//   lane    the lane whose rows are compared (third positional; default
+//           combo). A hosted run is read with `hosted` or `hosted-agent`; the
+//           same build label can then be compared across lanes by running
+//           this once per lane.
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { RESULTS } from "./lanes.mjs";
+import { RESULTS, laneDef } from "./lanes.mjs";
 
-const [resultsArg, buildsArg, laneWanted = "combo"] = process.argv.slice(2);
+const [resultsArg, buildsArg, laneArg] = process.argv.slice(2);
+const laneWanted = laneArg || "combo";
+try {
+  laneDef(laneWanted); // an unknown lane is a usage error, not an empty table
+} catch (err) {
+  console.error(`error: ${err.message}`);
+  process.exit(1);
+}
 const resultsFile = resultsArg ? resolve(resultsArg) : join(RESULTS, "questions.jsonl");
 const all = readFileSync(resultsFile, "utf8")
   .split("\n")
@@ -50,10 +61,14 @@ function summarize(rows) {
   }
   const cats = {};
   for (const g of byQ.values()) {
-    const c = (cats[g.cat] ??= { tok: 0, cost: 0, calls: 0, runs: 0, cxFirst: 0, cxAny: 0, first: {}, errors: 0 });
+    const c = (cats[g.cat] ??= { tok: 0, cost: 0, calls: 0, cxMs: 0, runs: 0, cxFirst: 0, cxAny: 0, first: {}, errors: 0 });
     c.tok += median(g.runs.map((r) => r.tokens));
     c.cost += median(g.runs.map((r) => r.costUsd ?? 0));
     c.calls += median(g.runs.map((r) => r.calls));
+    // Server-side time inside the code-context calls (took_ms summed per run,
+    // recorded as cxTookMs; 0 on rows from before it was recorded) - the
+    // engine's share of the wall clock, comparable across local and hosted.
+    c.cxMs += median(g.runs.map((r) => r.cxTookMs ?? 0));
     for (const r of g.runs) {
       c.runs++;
       if (r.error) c.errors++;
@@ -76,23 +91,23 @@ const fmtFirst = (o) => Object.entries(o).sort((a, b) => b[1] - a[1]).map(([t, n
 
 console.log(`lane=${laneWanted}  builds: ${summaries.map((s) => `${label(s.spec)}=${all.filter(selector(s.spec)).length} runs`).join(", ")}`);
 console.log("");
-console.log("category        build  tokens   cost   calls  cx-first  cx-any  errors  first tool of each run");
+console.log("category        build  tokens   cost   calls   cx ms  cx-first  cx-any  errors  first tool of each run");
 for (const cat of catOrder) {
   for (const s of summaries) {
     const c = s.cats[cat];
     if (!c) continue;
     console.log(
-      `${cat.padEnd(15)} ${label(s.spec).padEnd(5)} ${k(c.tok).padStart(7)}  ${("$" + c.cost.toFixed(2)).padStart(5)}  ${String(c.calls).padStart(5)}  ${`${c.cxFirst}/${c.runs}`.padStart(8)}  ${`${c.cxAny}/${c.runs}`.padStart(6)}  ${String(c.errors).padStart(6)}  ${fmtFirst(c.first)}`,
+      `${cat.padEnd(15)} ${label(s.spec).padEnd(5)} ${k(c.tok).padStart(7)}  ${("$" + c.cost.toFixed(2)).padStart(5)}  ${String(c.calls).padStart(5)}  ${k(c.cxMs).padStart(6)}  ${`${c.cxFirst}/${c.runs}`.padStart(8)}  ${`${c.cxAny}/${c.runs}`.padStart(6)}  ${String(c.errors).padStart(6)}  ${fmtFirst(c.first)}`,
     );
   }
   console.log("");
 }
-console.log("build  tokens   cost   calls  cx-first  runs  errors");
+console.log("build  tokens   cost   calls   cx ms  cx-first  runs  errors");
 for (const s of summaries) {
   const cs = Object.values(s.cats);
   const sum = (f) => cs.reduce((a, c) => a + f(c), 0);
   console.log(
-    `${label(s.spec).padEnd(5)} ${k(sum((c) => c.tok)).padStart(7)}  ${("$" + sum((c) => c.cost).toFixed(2)).padStart(5)}  ${String(sum((c) => c.calls)).padStart(5)}  ${`${sum((c) => c.cxFirst)}/${sum((c) => c.runs)}`.padStart(8)}  ${String(sum((c) => c.runs)).padStart(4)}  ${String(sum((c) => c.errors)).padStart(6)}`,
+    `${label(s.spec).padEnd(5)} ${k(sum((c) => c.tok)).padStart(7)}  ${("$" + sum((c) => c.cost).toFixed(2)).padStart(5)}  ${String(sum((c) => c.calls)).padStart(5)}  ${k(sum((c) => c.cxMs)).padStart(6)}  ${`${sum((c) => c.cxFirst)}/${sum((c) => c.runs)}`.padStart(8)}  ${String(sum((c) => c.runs)).padStart(4)}  ${String(sum((c) => c.errors)).padStart(6)}`,
   );
 }
 

@@ -4,25 +4,35 @@
 // returns a winner, a confidence, and how many claims each answer makes that
 // the code does not support. Verdicts append to bench/.work/results/judge.jsonl.
 //
-// Usage: node judge.mjs <repoDir> <baseline> <candidate> [results=questions.jsonl] [cats]
+// Usage: node judge.mjs <repoDir> <baseline> <candidate> [results=questions.jsonl] [cats] [lane=combo]
 //   baseline / candidate  build labels as recorded on the rows (`build`), or a
 //                         `since..until` ISO window for rows written before the
 //                         label existed (e.g. 2026-09-04T12:05:36Z..2026-09-04T12:30:00Z)
-//   cats                  comma-separated categories to judge (default all)
+//   cats                  comma-separated categories to judge (default all;
+//                         pass "" to keep the default and give a lane)
+//   lane                  the lane whose rows are judged (default combo; a
+//                         hosted run is judged with `hosted`)
 // Model: JUDGE_MODEL (default claude-opus-5). Concurrency: CX_BENCH_CONCURRENCY.
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { query } from "@anthropic-ai/claude-agent-sdk";
-import { RESULTS, record } from "./lanes.mjs";
+import { RESULTS, record, laneDef } from "./lanes.mjs";
 
-const [repoArg, baselineArg, candidateArg, resultsArg, catsArg] = process.argv.slice(2);
+const [repoArg, baselineArg, candidateArg, resultsArg, catsArg, laneArg] = process.argv.slice(2);
 if (!repoArg || !baselineArg || !candidateArg) {
-  console.error("usage: node judge.mjs <repoDir> <baseline> <candidate> [results.jsonl] [cats]");
+  console.error("usage: node judge.mjs <repoDir> <baseline> <candidate> [results.jsonl] [cats] [lane=combo]");
   process.exit(1);
 }
 const repoDir = resolve(repoArg);
 const resultsFile = resultsArg ? resolve(resultsArg) : join(RESULTS, "questions.jsonl");
 const cats = catsArg ? new Set(catsArg.split(",")) : null;
+const laneWanted = laneArg || "combo";
+try {
+  laneDef(laneWanted); // an unknown lane is a usage error, not an empty judgment
+} catch (err) {
+  console.error(`error: ${err.message}`);
+  process.exit(1);
+}
 const JUDGE_MODEL = process.env.JUDGE_MODEL ?? "claude-opus-5";
 const CONC = Number(process.env.CX_BENCH_CONCURRENCY ?? 4);
 
@@ -37,7 +47,7 @@ const rows = readFileSync(resultsFile, "utf8")
   .split("\n")
   .filter(Boolean)
   .map((l) => JSON.parse(l))
-  .filter((r) => r.lane === "combo" && !r.error && r.answer && (!cats || cats.has(r.cat)));
+  .filter((r) => r.lane === laneWanted && !r.error && r.answer && (!cats || cats.has(r.cat)));
 
 /** Runs of one build grouped by question, in the order they were recorded. */
 function byQuestion(pick) {
@@ -72,7 +82,7 @@ for (const [key, b] of base) {
 }
 // JUDGE_LIMIT caps the pairs, for a smoke run before spending on the whole set.
 if (process.env.JUDGE_LIMIT) pairs.length = Math.min(pairs.length, Number(process.env.JUDGE_LIMIT));
-console.log(`judge=${JUDGE_MODEL}  baseline=${baselineArg}  candidate=${candidateArg}  pairs=${pairs.length}`);
+console.log(`judge=${JUDGE_MODEL}  lane=${laneWanted}  baseline=${baselineArg}  candidate=${candidateArg}  pairs=${pairs.length}`);
 
 const system =
   `You are judging two answers to a question about the repository checked out at ${repoDir}. ` +
@@ -136,6 +146,7 @@ async function judge(pair) {
     cat: pair.cat,
     q: pair.q,
     rep: pair.rep,
+    lane: laneWanted,
     baseline: baselineArg,
     candidate: candidateArg,
     judge: JUDGE_MODEL,

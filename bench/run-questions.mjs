@@ -13,24 +13,36 @@
 //
 // Usage: node run-questions.mjs [repoPath] [lanes] [questionsFile]
 //   repoPath      the indexed repo (or $CX_BENCH_REPO); `cx index <repo>` first
-//   lanes         "files,combo" (default) - comma-separated of files|combo|cx
+//   lanes         "files,combo" (default) - comma-separated lane names from the
+//                 table in lanes.mjs (files|cx|combo|hosted|hosted-agent); the
+//                 hosted lanes need CX_DB_URL and INFINO_API_KEY set and the
+//                 repo loaded into that database first (load-hosted.mjs)
 //   questionsFile path to a questions JSON (default questions/infino.json)
 // Model is set in lanes.mjs (BENCH_MODEL, default claude-sonnet-4-6).
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { runLane, record, MODEL, BENCH } from "./lanes.mjs";
+import { runLane, record, checkLaneEnv, LANES, MODEL, BENCH } from "./lanes.mjs";
 
 const [repoArg, lanesArg, questionsArg] = process.argv.slice(2);
 const repoPath = repoArg ?? process.env.CX_BENCH_REPO;
 if (!repoPath) {
   console.error("usage: node run-questions.mjs [repoPath] [lanes=files,combo] [questionsFile]");
   console.error("  index the repo first: cx index <repoPath>   (or set CX_BENCH_REPO)");
+  console.error(`  lanes: ${Object.keys(LANES).join("|")}; hosted lanes need CX_DB_URL + INFINO_API_KEY`);
   console.error("  questionsFile defaults to questions/infino.json; see bench/questions/");
   process.exit(1);
 }
 const repoDir = resolve(repoPath);
 const indexDir = process.env.CX_INDEX_DIR ?? join(repoDir, ".infino");
 const lanes = (lanesArg ?? "files,combo").split(",").map((s) => s.trim());
+// An unknown lane or a hosted lane without its credentials fails here, before
+// the first paid model call, instead of on every question.
+try {
+  for (const lane of lanes) checkLaneEnv(lane);
+} catch (err) {
+  console.error(`error: ${err.message}`);
+  process.exit(1);
+}
 const questionsFile = questionsArg ?? process.env.CX_BENCH_QUESTIONS ?? join(BENCH, "questions", "infino.json");
 const questions = JSON.parse(readFileSync(questionsFile, "utf8"));
 
@@ -56,27 +68,31 @@ async function worker() {
     const job = jobs[cursor++];
     const r = await runLane({ lane: job.lane, prompt: job.q, system, repoDir, indexDir });
     record("questions.jsonl", { q: job.i, cat: job.cat, lane: job.lane, repo: repoDir, ...r, answer: r.answer.slice(0, 1500) });
-    results.push({ ...job, tokens: r.tokens, cost: r.costUsd ?? 0, calls: r.calls, wallMs: r.wallMs, error: r.error });
+    results.push({ ...job, tokens: r.tokens, cost: r.costUsd ?? 0, calls: r.calls, wallMs: r.wallMs, cxTookMs: r.cxTookMs, error: r.error });
     done++;
-    console.log(`(${done}/${jobs.length}) [${job.lane}] Q${job.i} ${job.cat} - ${r.tokens.toLocaleString()} tok, ${r.calls} calls, ${(r.wallMs / 1000).toFixed(1)}s${r.error ? " ERR" : ""}`);
+    console.log(
+      `(${done}/${jobs.length}) [${job.lane}] Q${job.i} ${job.cat} - ${r.tokens.toLocaleString()} tok, ${r.calls} calls, ` +
+        `${(r.wallMs / 1000).toFixed(1)}s${r.cxTookMs ? ` (cx ${r.cxTookMs}ms)` : ""}${r.error ? " ERR" : ""}`,
+    );
   }
 }
 await Promise.all(Array.from({ length: CONC }, () => worker()));
 
-// Summary: per-category and blended, combo vs files, on three axes -
-// tokens, tool calls (round-trips), and wall time. Fewer tool calls is the
-// robust latency proxy; wall time is the direct measure but only meaningful
-// run sequentially (CX_BENCH_CONCURRENCY=1), since a pool contends for CPU
-// and the API and inflates each run's clock.
+// Summary: per-category and blended, every other lane against the first lane
+// given (the default order puts files first, so the default reads "combo vs
+// files"; "combo,hosted" reads hosted against the local server), on three
+// axes - tokens, tool calls (round-trips), and wall time. Fewer tool calls is
+// the robust latency proxy; wall time is the direct measure but only
+// meaningful run sequentially (CX_BENCH_CONCURRENCY=1), since a pool contends
+// for CPU and the API and inflates each run's clock.
 const byq = {};
 for (const r of results) (byq[r.i] = byq[r.i] || { cat: r.cat })[r.lane] = r;
-const k = (n) => (n >= 1000 ? (n / 1000).toFixed(1) + "k" : String(Math.round(n)));
-const bucket = (pred) => {
+const bucket = (baseLane, candLane, pred) => {
   const acc = { fTok: 0, cTok: 0, fCall: 0, cCall: 0, fMs: 0, cMs: 0 };
-  for (const q of Object.values(byq)) if (pred(q.cat) && q.files && q.combo) {
-    acc.fTok += q.files.tokens; acc.cTok += q.combo.tokens;
-    acc.fCall += q.files.calls; acc.cCall += q.combo.calls;
-    acc.fMs += q.files.wallMs; acc.cMs += q.combo.wallMs;
+  for (const q of Object.values(byq)) if (pred(q.cat) && q[baseLane] && q[candLane]) {
+    acc.fTok += q[baseLane].tokens; acc.cTok += q[candLane].tokens;
+    acc.fCall += q[baseLane].calls; acc.cCall += q[candLane].calls;
+    acc.fMs += q[baseLane].wallMs; acc.cMs += q[candLane].wallMs;
   }
   return acc;
 };
@@ -89,10 +105,11 @@ const line = (label, b) =>
   `${label.padEnd(14)} tokens ${fmtPct(b.fTok, b.cTok, "tokens").padEnd(18)} | ` +
   `tool calls ${b.fCall}->${b.cCall} (${fmtPct(b.fCall, b.cCall, "calls")}) | ` +
   `time ${(b.fMs / 1000).toFixed(0)}s->${(b.cMs / 1000).toFixed(0)}s (${fmtPct(b.fMs, b.cMs, "time")})`;
-if (lanes.includes("files") && lanes.includes("combo")) {
-  console.log("\n=== summary: combo vs files ===");
-  console.log(line("aggregation", bucket((c) => c === "aggregation")));
-  console.log(line("comprehension", bucket((c) => c === "comprehension")));
-  console.log(line("blended", bucket(() => true)));
-  if (CONC > 1) console.log(`\n(time is indicative only: run with CX_BENCH_CONCURRENCY=1 for clean latency; tool-call count is the concurrency-independent latency proxy)`);
+const [baseLane, ...candLanes] = lanes;
+for (const candLane of candLanes) {
+  console.log(`\n=== summary: ${candLane} vs ${baseLane} ===`);
+  console.log(line("aggregation", bucket(baseLane, candLane, (c) => c === "aggregation")));
+  console.log(line("comprehension", bucket(baseLane, candLane, (c) => c === "comprehension")));
+  console.log(line("blended", bucket(baseLane, candLane, () => true)));
 }
+if (candLanes.length && CONC > 1) console.log(`\n(time is indicative only: run with CX_BENCH_CONCURRENCY=1 for clean latency; tool-call count is the concurrency-independent latency proxy)`);

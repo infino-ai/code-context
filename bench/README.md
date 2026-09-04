@@ -2,7 +2,8 @@
 
 Real agent runs (Claude Agent SDK) comparing **stock file tools** against the
 same agent with the **code-context MCP added** - same model, same turn budget,
-hermetic lanes. The only variable is whether the agent has the index.
+hermetic lanes. The only variable is whether the agent has the index, and,
+for the hosted lanes, where that index lives.
 
 Needs: Node ≥ 20 and `ANTHROPIC_API_KEY` in the environment. Everything writes
 under `bench/.work/` (gitignored).
@@ -37,14 +38,62 @@ The win is largest on a codebase the model does not already know from training
 (a private repo), where the file-tools baseline has to explore rather than
 recall; on a well-known open-source repo the baseline can shortcut from memory.
 
+## Lanes
+
+The lane table lives in `lanes.mjs` (`LANES`); an unknown lane name is an
+error, not a silent fall-through to the files lane. Every lane shares the same
+hermetic base and differs only in the toolset and, for the hosted pair, in
+where the server's index lives.
+
+| lane           | kind   | built-in tools            | MCP server | server env (on top of `CX_ROOT`, `CX_INDEX_DIR`, `CX_AUTO_SYNC=0`)                                                                  | needs in your env                 |
+| -------------- | ------ | ------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------- |
+| `files`        | local  | Glob, Grep, Read, LS, Bash | no         | -                                                                                                                                    | -                                 |
+| `cx`           | local  | Read                      | yes        | -                                                                                                                                    | -                                 |
+| `combo`        | local  | Glob, Grep, Read, LS, Bash | yes        | -                                                                                                                                    | -                                 |
+| `hosted`       | hosted | Glob, Grep, Read, LS, Bash | yes        | `CX_DB_URL`, `INFINO_API_KEY` (passed through), `CX_AUTO_INDEX=0`, `CX_EMBED_PROVIDER` (from your env, default `local`)                | `CX_DB_URL`, `INFINO_API_KEY`     |
+| `hosted-agent` | hosted | Glob, Grep, Read, LS, Bash | yes        | as `hosted` plus `CX_RETRIEVAL_AGENT=1`                                                                                              | `CX_DB_URL`, `INFINO_API_KEY`     |
+
+`combo` is what installing the MCP server actually produces in a real client;
+`hosted` is the same agent and the same three tools with the index in a
+platform database (`CX_DB_URL` is `https://host/<database>`, the shape the
+engine's own URI parser accepts); `hosted-agent` adds the `retrieval_agent`
+tool, one question answered by the platform's own agent loop.
+A hosted lane fails before the first paid model call when `CX_DB_URL` or
+`INFINO_API_KEY` is missing. Auto-index is off in the hosted lanes: loading a
+repo into the database is a separate, metered step (below), never something a
+question triggers. The key is passed to the server by name only; no script
+here reads or prints it, and results record `dbHost` (the host) and nothing
+else of the URL.
+
+Getting a hosted database ready:
+
+```bash
+export CX_DB_URL=https://<host>/<database> INFINO_API_KEY=...
+node load-hosted.mjs /path/to/repo              # cx index --db $CX_DB_URL --json <repo>, timed -> .work/results/index-build.jsonl
+node load-hosted.mjs /path/to/repo local        # the same CLI against .infino/, for the comparison row
+node warm-hosted.mjs                            # POST /v1/list_tables until 200; prints rtt and whether a cold start was seen
+node run-questions.mjs /path/to/repo combo,hosted
+```
+
+`load-hosted.mjs` runs the server build's own CLI (`dist/cli.js`, or
+`CX_BENCH_CLI`) with the `--db` flag hosted mode adds to `cx index`. A CLI
+that does not have the flag yet fails with commander's "unknown option" line,
+which the record keeps verbatim (`error`) rather than pretending a build
+happened. `warm-hosted.mjs` exists because a cold database answers `503`
+(worker spawning, `Retry-After: 5`) or `529` (no capacity, `Retry-After: 600`)
+until a worker is live, and a question landing on that would bill the spawn to
+the model's clock; it honours `Retry-After`, gives up after 120 s, and reports
+the round trip of the first `200` and every status it saw on the way.
+
 Lane design notes (they matter for fairness):
 
 - `settingSources: []` + `strictMcpConfig: true` keep your user-level plugins,
-  MCP servers, and CLAUDE.md out of both lanes.
-- `tools: [...]` pins the built-in set exactly (both lanes include Bash, since
-  real Claude Code has it); the MCP server is registered with `alwaysLoad: true`
-  so its tools are present in the turn-1 prompt, not deferred behind tool search.
-- Both lanes get the same minimal system prompt; neither is taught which tool to
+  MCP servers, and CLAUDE.md out of every lane.
+- `tools: [...]` pins the built-in set exactly (every lane but `cx` includes
+  Bash, since real Claude Code has it); the MCP server is registered with
+  `alwaysLoad: true` so its tools are present in the turn-1 prompt, not
+  deferred behind tool search.
+- All lanes get the same minimal system prompt; none is taught which tool to
   prefer.
 - Token totals count input + cache writes + cache reads + output; cost uses the
   API's per-run accounting.
@@ -54,19 +103,90 @@ Lane design notes (they matter for fairness):
   build with `CX_BENCH_CLI=/path/to/other/dist/cli.js` and label it with
   `CX_BENCH_BUILD=<name>`; both land on every result row, so one
   `questions.jsonl` can hold every variant.
+- The run summary compares every other lane against the first lane given, so
+  the default `files,combo` reads "combo vs files" and `combo,hosted` reads
+  the hosted server against the local one.
 
-Reading a multi-build results file (all default to `.work/results/questions.jsonl`;
-a build is its `CX_BENCH_BUILD` label, or `since..until` ISO timestamps for rows
-recorded before the label existed):
+## What a result row carries
+
+Every row in `.work/results/questions.jsonl` has the question (`q`, `cat`,
+`repo`), the lane (`lane`, `laneKind` = `local`|`hosted`, `dbHost` = the
+platform host for a hosted lane, else `null`), the build (`build`, `cli`,
+`model`), the run totals (`tokens`, `usage`, `costUsd`, `wallMs`, `calls`,
+`answer`, `error`, `ts`) and the tool trace:
+
+- `toolCalls` - the tool names in call order, code-context tools as
+  `cx:find` / `cx:search` / `cx:sql` (unchanged; every reader keys on it).
+- `toolDetails` - one object per call, same order: `{ name, tookMs, usage }`
+  plus `isError: true` when the tool returned an error. `tookMs` is the
+  server-side `took_ms` the code-context result carries (engine work plus
+  query embedding, no transport) and `usage` is its one-line receipt
+  (`returned ~1.2k tokens | 8 chunks / 5 files | invoked 3x this session
+  (...)`); both are `null` for built-in tools and for a result that was not
+  JSON.
+- `cxTookMs` - the sum of `tookMs` over the code-context calls of the run:
+  the engine's share of the wall clock, comparable between local and hosted
+  since the tool result has the same shape in both. Hosted-only telemetry
+  (round trip, platform tokens) is not in the tool result the model sees - it
+  goes to the server's usage ledger - so it is not on the row either.
+
+The harness reads the SDK's user-role messages for this: a `tool_result`
+block answers each `tool_use` by id, and for an MCP tool the message also
+carries the server's structured output as `tool_use_result`
+(`{content:[{type:"text",text}]}`), which is preferred over the block text.
+
+Build records (`.work/results/index-build.jsonl`, from `load-hosted.mjs`):
+`{ side: "hosted"|"local", repo, dbHost, cli, build, wallMs, exitCode, error, ts }`
+plus every field of the CLI's `--json` output (`files`, `chunks`, `vectors`,
+`indexMs`, `embedMs`, ... for a full build; the sync outcome for an
+incremental one).
+
+## Reading a multi-build results file
+
+All default to `.work/results/questions.jsonl`; a build is its `CX_BENCH_BUILD`
+label, or `since..until` ISO timestamps for rows recorded before the label
+existed. Every reader filters to one lane: `compare-builds.mjs` takes it as
+the third positional (default `combo`), `judge.mjs` as the sixth (default
+`combo`; pass `""` for the cats slot to keep the default there). Run a reader
+once per lane to put a hosted run next to the local one.
 
 ```bash
-node compare-builds.mjs "" V0,V3          # per set: tokens, cost, calls, first tool; CX_MD=1 for markdown, CX_DETAIL=1 per question
+node compare-builds.mjs "" V0,V3          # per set: tokens, cost, calls, cx ms, first tool; CX_MD=1 for markdown, CX_DETAIL=1 per question
+node compare-builds.mjs "" V3 hosted      # the same table for the hosted lane's rows
 node cite-check.mjs /path/to/repo "" V0,V3  # every cited path:line exists, is in bounds, and names an identifier found nearby
 node judge.mjs /path/to/repo V0 V3          # blind pairwise judge (claude-opus-5, Read/Grep/Glob on the repo) -> .work/results/judge.jsonl
+node judge.mjs /path/to/repo V3 V3 "" "" hosted   # judge the hosted lane's rows (verdicts record `lane`)
 node judge-report.mjs                       # wins, ties, unsupported claims and confidence per set for each judged pair
 ```
 
-The judge sees both answers in random order and returns a winner, a
-confidence, and how many claims each answer makes that the code does not
-support; `JUDGE_LIMIT=n` caps the pairs for a smoke run. Judging costs about
-a quarter of a dollar per pair.
+The `cx ms` column is the sum over questions of the median `cxTookMs`; rows
+from before it was recorded count as 0. The judge sees both answers in random
+order and returns a winner, a confidence, and how many claims each answer
+makes that the code does not support; `JUDGE_LIMIT=n` caps the pairs for a
+smoke run. Judging costs about a quarter of a dollar per pair.
+
+## Caveats to state in any local-vs-hosted report
+
+1. **The engine version is a lane attribute.** The local lanes run the
+   `@infino-ai/infino` Node binding this checkout links (engine 0.5.5 at the
+   time of writing), while the platform worker links engine 0.5.12. A gap in
+   `cxTookMs` or in hit ranking between `combo` and `hosted` can be the engine
+   version, not the transport; say which versions the run used.
+2. **The platform's read-token header is not engine work.** The
+   `x-infino-read-tokens` figure the platform meters folds in RAM rent for the
+   database's idle time, so it moves with how long the worker sat between
+   calls, not only with what a query did. Report it as cost, never as a
+   latency or work proxy; the work proxy is `took_ms`, which the tool result
+   carries the same way in both lanes.
+
+## Tests
+
+`harness-tests.mjs` covers the lane table, the SDK tool-result parsing, the
+warm-up loop and the build record, with fetch and spawn injected (no model,
+no network, no engine). It uses Node's built-in runner, since it imports
+`lanes.mjs` (which needs the agent SDK from `bench/node_modules`) and the
+root `npm test` runs without bench's dependencies:
+
+```bash
+cd bench && npm install && node --test harness-tests.mjs
+```
