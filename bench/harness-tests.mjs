@@ -53,8 +53,8 @@ function withHostedEnv(fn, extra = {}) {
 
 // --- lane table ---------------------------------------------------------------
 
-test("the lane table names exactly the five lanes and an unknown lane throws", () => {
-  assert.deepEqual(Object.keys(LANES).sort(), ["combo", "cx", "files", "hosted", "hosted-agent"]);
+test("the lane table names exactly the six lanes and an unknown lane throws", () => {
+  assert.deepEqual(Object.keys(LANES).sort(), ["agent-only", "combo", "cx", "files", "hosted", "hosted-agent"]);
   assert.throws(() => laneDef("cobmo"), /unknown lane "cobmo"/);
   assert.throws(() => laneOptions("cobmo", "/r", "/r/.infino"), /unknown lane/);
 });
@@ -95,6 +95,17 @@ test("CX_BENCH_EMBED_PROVIDER passes through as --embed-provider; hosted-agent a
     const args = laneOptions("hosted-agent", "/r", "/r/.infino").mcpServers["code-context"].args;
     assert.deepEqual(args.slice(1), ["mcp", "--db", FAKE_URL, "--api-key-file", FAKE_KEY_FILE, "--embed-provider", "local", "--retrieval-agent"]);
   }, { CX_BENCH_EMBED_PROVIDER: "local" });
+});
+
+test("agent-only keeps Read and retrieval_agent and hides the three retrieval tools", () => {
+  withHostedEnv(() => {
+    const opts = laneOptions("agent-only", "/r", "/r/.infino");
+    assert.deepEqual(opts.tools, ["Read"]);
+    assert.deepEqual(opts.disallowedTools, ["mcp__code-context__find", "mcp__code-context__search", "mcp__code-context__sql"]);
+    assert.equal(opts.mcpServers["code-context"].args.includes("--retrieval-agent"), true);
+    assert.equal(laneOptions("hosted-agent", "/r", "/r/.infino").disallowedTools, undefined);
+    assert.equal(laneOptions("combo", "/r", "/r/.infino").disallowedTools, undefined);
+  });
 });
 
 test("hostedFlags is the one place the server's hosted command line is built", () => {

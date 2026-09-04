@@ -27,6 +27,9 @@ const STOCK_TOOLS = ["Glob", "Grep", "Read", "LS", "Bash"];
  * short `cx:<tool>` form so they stay readable and comparable across builds. */
 const CX_TOOL_PREFIX = "mcp__code-context__";
 const CX_SHORT_PREFIX = "cx:";
+/** The three retrieval tools, hidden from the model in the agent-only lane
+ * so that every retrieval has to go through `retrieval_agent`. */
+const CX_RETRIEVAL_TOOLS = ["find", "search", "sql"];
 /** The embedding provider a hosted lane's server uses when the caller does
  * not pick one: the product default - the platform embeds - since the hosted
  * lanes measure the hosted product as shipped. CX_BENCH_EMBED_PROVIDER=local
@@ -76,6 +79,7 @@ export function hostedFlags(env = process.env) {
  *   mcp       whether the code-context server is attached
  *   env       server env for the MCP lanes (repoDir, indexDir) => object
  *   args      extra flags for the server command line (env) => string[]
+ *   disallowedTools  MCP tool names the SDK removes from the model's context
  *   requires  harness env vars that must be set before the lane can run
  *
  *   files      - stock file tools only
@@ -84,7 +88,11 @@ export function hostedFlags(env = process.env) {
  *                produces in a real client
  *   hosted     - combo, but the server talks to a platform database
  *   hosted-agent - hosted plus the retrieval_agent tool (the platform's own
- *                  agent loop) */
+ *                  agent loop)
+ *   agent-only - Read plus retrieval_agent alone: find, search and sql are
+ *                hidden, so every retrieval goes through the platform's agent.
+ *                Measures that agent's answers and cost in isolation - not how
+ *                often a model would choose it (hosted-agent measures that). */
 export const LANES = {
   files: { kind: "local", tools: STOCK_TOOLS, mcp: false, requires: [] },
   cx: { kind: "local", tools: ["Read"], mcp: true, env: mcpEnvBase, requires: [] },
@@ -96,6 +104,15 @@ export const LANES = {
     mcp: true,
     env: mcpEnvBase,
     args: (env) => [...hostedFlags(env), "--retrieval-agent"],
+    requires: HOSTED_REQUIRES,
+  },
+  "agent-only": {
+    kind: "hosted",
+    tools: ["Read"],
+    mcp: true,
+    env: mcpEnvBase,
+    args: (env) => [...hostedFlags(env), "--retrieval-agent"],
+    disallowedTools: CX_RETRIEVAL_TOOLS.map((tool) => `${CX_TOOL_PREFIX}${tool}`),
     requires: HOSTED_REQUIRES,
   },
 };
@@ -138,6 +155,10 @@ export function laneOptions(lane, repoDir, indexDir) {
   if (!def.mcp) return hermetic;
   return {
     ...hermetic,
+    // The SDK drops disallowed tools from the model's context entirely (not a
+    // permission denial the model would see), which is what makes a forced
+    // lane a fair measurement: the hidden tools cost no prompt text either.
+    ...(def.disallowedTools ? { disallowedTools: def.disallowedTools } : {}),
     mcpServers: {
       "code-context": {
         command: "node",

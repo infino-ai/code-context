@@ -52,12 +52,15 @@ where the server's index lives.
 | `combo`        | local  | Glob, Grep, Read, LS, Bash | yes        | -                                                                                                                      | -                                        |
 | `hosted`       | hosted | Glob, Grep, Read, LS, Bash | yes        | `--db $CX_BENCH_DB_URL --api-key-file $CX_BENCH_KEY_FILE --embed-provider platform` (`CX_BENCH_EMBED_PROVIDER` overrides the provider) | `CX_BENCH_DB_URL`, `CX_BENCH_KEY_FILE`  |
 | `hosted-agent` | hosted | Glob, Grep, Read, LS, Bash | yes        | as `hosted` plus `--retrieval-agent`                                                                                   | `CX_BENCH_DB_URL`, `CX_BENCH_KEY_FILE`  |
+| `agent-only`   | hosted | Read                      | yes        | as `hosted-agent`, with `find`, `search` and `sql` removed from the model's context (the SDK's `disallowedTools`)      | `CX_BENCH_DB_URL`, `CX_BENCH_KEY_FILE`  |
 
 `combo` is what installing the MCP server actually produces in a real client;
 `hosted` is the same agent and the same three tools with the index in a
 platform database (`CX_BENCH_DB_URL` is `https://host/<database>`, the shape
 the engine's own URI parser accepts); `hosted-agent` adds the `retrieval_agent`
-tool, one question answered by the platform's own agent loop.
+tool, one question answered by the platform's own agent loop, and measures
+whether the model picks it; `agent-only` leaves it as the only retrieval tool
+and measures its answers and cost in isolation.
 A hosted lane fails before the first paid model call when `CX_BENCH_DB_URL` or
 `CX_BENCH_KEY_FILE` is missing. The server is configured by its command line
 alone (the `CX_BENCH_*` names are the harness's, never read by `cx`), and the

@@ -11,7 +11,9 @@
 //   cats                  comma-separated categories to judge (default all;
 //                         pass "" to keep the default and give a lane)
 //   lane                  the lane whose rows are judged (default combo; a
-//                         hosted run is judged with `hosted`)
+//                         hosted run is judged with `hosted`), or two lanes as
+//                         `baselineLane,candidateLane` when the builds ran in
+//                         different lanes (e.g. `hosted,agent-only`)
 // Model: JUDGE_MODEL (default claude-opus-5). Concurrency: CX_BENCH_CONCURRENCY.
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -26,9 +28,12 @@ if (!repoArg || !baselineArg || !candidateArg) {
 const repoDir = resolve(repoArg);
 const resultsFile = resultsArg ? resolve(resultsArg) : join(RESULTS, "questions.jsonl");
 const cats = catsArg ? new Set(catsArg.split(",")) : null;
-const laneWanted = laneArg || "combo";
+// One lane for both builds, or `baselineLane,candidateLane`.
+const [baseLane, candLane = baseLane] = (laneArg || "combo").split(",");
+const laneWanted = baseLane === candLane ? baseLane : `${baseLane},${candLane}`;
 try {
-  laneDef(laneWanted); // an unknown lane is a usage error, not an empty judgment
+  laneDef(baseLane); // an unknown lane is a usage error, not an empty judgment
+  laneDef(candLane);
 } catch (err) {
   console.error(`error: ${err.message}`);
   process.exit(1);
@@ -47,12 +52,13 @@ const rows = readFileSync(resultsFile, "utf8")
   .split("\n")
   .filter(Boolean)
   .map((l) => JSON.parse(l))
-  .filter((r) => r.lane === laneWanted && !r.error && r.answer && (!cats || cats.has(r.cat)));
+  .filter((r) => (r.lane === baseLane || r.lane === candLane) && !r.error && r.answer && (!cats || cats.has(r.cat)));
 
-/** Runs of one build grouped by question, in the order they were recorded. */
-function byQuestion(pick) {
+/** Runs of one build in one lane grouped by question, in the order they were
+ * recorded. */
+function byQuestion(pick, lane) {
   const out = new Map();
-  for (const r of rows.filter(pick)) {
+  for (const r of rows.filter((r) => r.lane === lane && pick(r))) {
     const key = `${r.cat} ${r.q}`;
     if (!out.has(key)) out.set(key, { cat: r.cat, q: r.q, text: r.question, runs: [] });
     out.get(key).runs.push(r);
@@ -60,8 +66,8 @@ function byQuestion(pick) {
   return out;
 }
 
-const base = byQuestion(selector(baselineArg));
-const cand = byQuestion(selector(candidateArg));
+const base = byQuestion(selector(baselineArg), baseLane);
+const cand = byQuestion(selector(candidateArg), candLane);
 
 // Question text comes from the question files; the result rows carry only the
 // index. Load every shipped set once and look the text up by (cat, q).
