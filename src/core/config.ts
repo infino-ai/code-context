@@ -38,12 +38,14 @@ export const DEFAULT_DB_TIMEOUT_MS = DEFAULT_TIMEOUT_MS;
 /** Default cold-start budget: likewise the client's own default. */
 export const DEFAULT_DB_COLD_START_SECS = DEFAULT_COLD_START_SECS;
 
-/** Default turn cap for `retrieval_agent`: enough for a few search turns and
- * an answer; more turns mostly buy cost. */
-export const DEFAULT_RETRIEVAL_AGENT_MAX_TURNS = 8;
+/** Default turn cap for `subagent`: a few search turns and a statement.
+ * Measured against 8: half the inner tokens per call and a much shorter tail
+ * for the same rate of empty results - the outer agent, not the inner loop,
+ * decides how far to go. */
+export const DEFAULT_SUBAGENT_MAX_TURNS = 4;
 
-/** Default wall clock for `retrieval_agent`, in seconds. */
-export const DEFAULT_RETRIEVAL_AGENT_MAX_WALL_SECS = 120;
+/** Default wall clock for `subagent`, in seconds. */
+export const DEFAULT_SUBAGENT_MAX_WALL_SECS = 120;
 
 /** Spellings that turn a boolean env flag off (`CX_AUTO_INDEX=0`, ...). */
 const OFF_VALUES = ["0", "false", "no"];
@@ -58,7 +60,7 @@ export type EmbedProvider = "local" | "platform";
 /** The default provider for a hosted target. */
 export const DEFAULT_HOSTED_EMBED_PROVIDER: EmbedProvider = "platform";
 
-export interface RetrievalAgentSettings {
+export interface SubagentSettings {
   /** Whether the MCP server registers the tool. Off unless asked: every tool
    * in the list is prompt text on every turn. */
   enabled: boolean;
@@ -79,12 +81,12 @@ export interface HostedSettings {
   coldStartSecs: number;
   /** The FTS analyzer `cx index --db` creates the content index with. */
   analyzer: Analyzer;
-  retrievalAgent: RetrievalAgentSettings;
+  subagent: SubagentSettings;
 }
 
 /** The hosted flags as commander parses them: camelCase of `--db`,
  * `--api-key-file`, `--embed-provider`, `--db-timeout-ms`, `--cold-start-secs`,
- * `--analyzer`, `--retrieval-agent`, `--agent-max-turns`, `--agent-max-wall-secs`.
+ * `--analyzer`, `--subagent`, `--subagent-max-turns`, `--subagent-max-wall-secs`.
  * Every value is the raw string (or the bare boolean); validation is here, in
  * one place, so a bad value is an error at startup and not on the first call. */
 export interface HostedFlags {
@@ -94,9 +96,9 @@ export interface HostedFlags {
   dbTimeoutMs?: string;
   coldStartSecs?: string;
   analyzer?: string;
-  retrievalAgent?: boolean;
-  agentMaxTurns?: string;
-  agentMaxWallSecs?: string;
+  subagent?: boolean;
+  subagentMaxTurns?: string;
+  subagentMaxWallSecs?: string;
 }
 
 /** The flags that mean nothing without --db, by their command-line spelling. */
@@ -106,9 +108,9 @@ const HOSTED_ONLY_FLAGS: Array<[keyof HostedFlags, string]> = [
   ["dbTimeoutMs", "--db-timeout-ms"],
   ["coldStartSecs", "--cold-start-secs"],
   ["analyzer", "--analyzer"],
-  ["retrievalAgent", "--retrieval-agent"],
-  ["agentMaxTurns", "--agent-max-turns"],
-  ["agentMaxWallSecs", "--agent-max-wall-secs"],
+  ["subagent", "--subagent"],
+  ["subagentMaxTurns", "--subagent-max-turns"],
+  ["subagentMaxWallSecs", "--subagent-max-wall-secs"],
 ];
 
 /** A positive-integer flag value, or its default when the flag was not given.
@@ -149,10 +151,10 @@ export function hostedSettingsFromFlags(flags: HostedFlags, env: NodeJS.ProcessE
     timeoutMs: positiveIntFlag("--db-timeout-ms", flags.dbTimeoutMs, DEFAULT_DB_TIMEOUT_MS),
     coldStartSecs: positiveIntFlag("--cold-start-secs", flags.coldStartSecs, DEFAULT_DB_COLD_START_SECS),
     analyzer,
-    retrievalAgent: {
-      enabled: flags.retrievalAgent === true,
-      maxTurns: positiveIntFlag("--agent-max-turns", flags.agentMaxTurns, DEFAULT_RETRIEVAL_AGENT_MAX_TURNS),
-      maxWallSecs: positiveIntFlag("--agent-max-wall-secs", flags.agentMaxWallSecs, DEFAULT_RETRIEVAL_AGENT_MAX_WALL_SECS),
+    subagent: {
+      enabled: flags.subagent === true,
+      maxTurns: positiveIntFlag("--subagent-max-turns", flags.subagentMaxTurns, DEFAULT_SUBAGENT_MAX_TURNS),
+      maxWallSecs: positiveIntFlag("--subagent-max-wall-secs", flags.subagentMaxWallSecs, DEFAULT_SUBAGENT_MAX_WALL_SECS),
     },
   };
 }
@@ -206,17 +208,17 @@ export function hostedAnalyzer(): Analyzer {
   return hosted?.analyzer ?? HOSTED_DEFAULT_ANALYZER;
 }
 
-/** Whether the hosted `retrieval_agent` tool is registered (--retrieval-agent). */
-export function retrievalAgentEnabled(): boolean {
-  return hosted?.retrievalAgent.enabled ?? false;
+/** Whether the hosted `subagent` tool is registered (--subagent). */
+export function subagentEnabled(): boolean {
+  return hosted?.subagent.enabled ?? false;
 }
 
-export function retrievalAgentMaxTurns(): number {
-  return hosted?.retrievalAgent.maxTurns ?? DEFAULT_RETRIEVAL_AGENT_MAX_TURNS;
+export function subagentMaxTurns(): number {
+  return hosted?.subagent.maxTurns ?? DEFAULT_SUBAGENT_MAX_TURNS;
 }
 
-export function retrievalAgentMaxWallSecs(): number {
-  return hosted?.retrievalAgent.maxWallSecs ?? DEFAULT_RETRIEVAL_AGENT_MAX_WALL_SECS;
+export function subagentMaxWallSecs(): number {
+  return hosted?.subagent.maxWallSecs ?? DEFAULT_SUBAGENT_MAX_WALL_SECS;
 }
 
 /** Whether a first query on an unindexed repo builds the index (CX_AUTO_INDEX,

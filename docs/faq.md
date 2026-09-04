@@ -38,10 +38,11 @@ comes from a file or from `INFINO_API_KEY`, never from the command line, and
 `.infino/` in the repo stays as a small sidecar for the manifest and the
 usage ledger. Because a hosted table is shared, nothing builds or re-syncs
 it as a side effect of a query: `cx index --db` is the explicit load, re-run
-to sync. With `cx mcp --db ... --retrieval-agent` a fourth tool joins,
-`retrieval_agent`, which hands one question to the platform and returns the
-answer with cited `path:line` places. The README's hosted section has the
-flag table.
+to sync. With `cx mcp --db ... --subagent` a fourth tool joins, `subagent`,
+which hands a question or task to the platform's retrieval agent and returns
+the rows it retrieved - exact `path:line` places with the code, plus counts
+and rankings - for the coding agent to compose from; never a written summary.
+The README's hosted section has the flag table.
 
 ### How fast is it usable after indexing starts?
 

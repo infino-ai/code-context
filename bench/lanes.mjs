@@ -28,7 +28,7 @@ const STOCK_TOOLS = ["Glob", "Grep", "Read", "LS", "Bash"];
 const CX_TOOL_PREFIX = "mcp__code-context__";
 const CX_SHORT_PREFIX = "cx:";
 /** The three retrieval tools, hidden from the model in the agent-only lane
- * so that every retrieval has to go through `retrieval_agent`. */
+ * so that every retrieval has to go through `subagent`. */
 const CX_RETRIEVAL_TOOLS = ["find", "search", "sql"];
 /** The built-in tool that spawns subagents, and the built-in read-only
  * exploration subagent the explore lanes override: a programmatic agent
@@ -70,9 +70,9 @@ const exploreOnIndex = {
  * so the outer agent, not the platform's ladder, decides how far to go. */
 const exploreOnPlatform = {
   description: EXPLORE_DESCRIPTION,
-  tools: [`${CX_TOOL_PREFIX}retrieval_agent`, "Read"],
+  tools: [`${CX_TOOL_PREFIX}subagent`, "Read"],
   prompt:
-    "You explore this repository by calling retrieval_agent with the question, at most twice (rephrase " +
+    "You explore this repository by calling subagent with the question, at most twice (rephrase " +
     "once if the first call returns no answer). Return its answer with the places it found cited " +
     "path:line; if there is still no answer, return what it found and say so. The caller will not see " +
     "your tool results.",
@@ -93,8 +93,8 @@ export const DEFAULT_HOSTED_EMBED_PROVIDER = "platform";
 export const BENCH_DB_URL = "CX_BENCH_DB_URL";
 export const BENCH_KEY_FILE = "CX_BENCH_KEY_FILE";
 export const BENCH_EMBED_PROVIDER = "CX_BENCH_EMBED_PROVIDER";
-/** Optional turn cap for retrieval_agent in the agent lanes, passed through as
- * the server's --agent-max-turns; unset leaves the server's default. */
+/** Optional turn cap for subagent in the agent lanes, passed through as
+ * the server's --subagent-max-turns; unset leaves the server's default. */
 export const BENCH_AGENT_MAX_TURNS = "CX_BENCH_AGENT_MAX_TURNS";
 
 /** The env a hosted lane needs before it can run. */
@@ -122,11 +122,11 @@ export function hostedFlags(env = process.env) {
   ];
 }
 
-/** The server flags that add retrieval_agent to a hosted lane, with the turn
+/** The server flags that add subagent to a hosted lane, with the turn
  * cap when the harness names one. */
 export function agentFlags(env = process.env) {
   const cap = env[BENCH_AGENT_MAX_TURNS];
-  return ["--retrieval-agent", ...(cap ? ["--agent-max-turns", cap] : [])];
+  return ["--subagent", ...(cap ? ["--subagent-max-turns", cap] : [])];
 }
 
 /** The lane table. Each lane is the identical hermetic base plus:
@@ -146,9 +146,9 @@ export function agentFlags(env = process.env) {
  *   combo      - both, which is what installing the MCP server actually
  *                produces in a real client
  *   hosted     - combo, but the server talks to a platform database
- *   hosted-agent - hosted plus the retrieval_agent tool (the platform's own
+ *   hosted-agent - hosted plus the subagent tool (the platform's own
  *                  agent loop)
- *   agent-only - Read plus retrieval_agent alone: find, search and sql are
+ *   agent-only - Read plus subagent alone: find, search and sql are
  *                hidden, so every retrieval goes through the platform's agent.
  *                Measures that agent's answers and cost in isolation - not how
  *                often a model would choose it (hosted-agent measures that).
@@ -157,7 +157,11 @@ export function agentFlags(env = process.env) {
  *   index-explore    - stock-explore plus the local MCP server, with Explore
  *                      overridden to run on code-context's tools (Haiku inside)
  *   platform-explore - the same over the hosted server, with Explore
- *                      overridden to run on retrieval_agent alone */
+ *                      overridden to run on subagent alone
+ *   find-subagent    - the owner's surface: stock tools, find, and subagent,
+ *                      with search and sql hidden. Exact-text questions have
+ *                      find; everything that spans the repo has the platform's
+ *                      agent, which returns the rows it retrieved */
 export const LANES = {
   files: { kind: "local", tools: STOCK_TOOLS, mcp: false, requires: [] },
   cx: { kind: "local", tools: ["Read"], mcp: true, env: mcpEnvBase, requires: [] },
@@ -196,6 +200,15 @@ export const LANES = {
     env: mcpEnvBase,
     args: (env) => [...hostedFlags(env), ...agentFlags(env)],
     agents: { [EXPLORE]: exploreOnPlatform },
+    requires: HOSTED_REQUIRES,
+  },
+  "find-subagent": {
+    kind: "hosted",
+    tools: STOCK_TOOLS,
+    mcp: true,
+    env: mcpEnvBase,
+    args: (env) => [...hostedFlags(env), ...agentFlags(env)],
+    disallowedTools: ["search", "sql"].map((tool) => `${CX_TOOL_PREFIX}${tool}`),
     requires: HOSTED_REQUIRES,
   },
 };

@@ -18,15 +18,15 @@ import {
   DEFAULT_DB_TIMEOUT_MS,
   DEFAULT_DB_COLD_START_SECS,
   DEFAULT_HOSTED_EMBED_PROVIDER,
-  DEFAULT_RETRIEVAL_AGENT_MAX_TURNS,
-  DEFAULT_RETRIEVAL_AGENT_MAX_WALL_SECS,
+  DEFAULT_SUBAGENT_MAX_TURNS,
+  DEFAULT_SUBAGENT_MAX_WALL_SECS,
   TABLE,
   configureHosted,
   hostedSettingsFromFlags,
   hostedAnalyzer,
-  retrievalAgentMaxTurns,
-  retrievalAgentMaxWallSecs,
-  retrievalAgentEnabled,
+  subagentMaxTurns,
+  subagentMaxWallSecs,
+  subagentEnabled,
   autoIndexEnabled,
   autoSyncEnabled,
   embedProvider,
@@ -156,10 +156,10 @@ describe("hosted settings", () => {
     expect(isHosted()).toBe(false);
     expect(hostedTarget()).toBeNull();
     expect(() => hostedSettingsFromFlags({ embedProvider: "platform" }, {})).toThrow(/--embed-provider needs --db <url>/);
-    expect(() => hostedSettingsFromFlags({ retrievalAgent: true }, {})).toThrow(/--retrieval-agent needs --db <url>/);
+    expect(() => hostedSettingsFromFlags({ subagent: true }, {})).toThrow(/--subagent needs --db <url>/);
     expect(() => hostedSettingsFromFlags({ analyzer: "standard" }, {})).toThrow(/--analyzer needs --db <url>/);
     // commander hands an unset boolean flag through as undefined or false; neither is a stray
-    expect(hostedSettingsFromFlags({ retrievalAgent: false }, {})).toBeNull();
+    expect(hostedSettingsFromFlags({ subagent: false }, {})).toBeNull();
   });
 
   it("builds the target from --db with the key from INFINO_API_KEY", () => {
@@ -220,18 +220,18 @@ describe("hosted settings", () => {
     expect(() => settingsFor({ analyzer: "icu" })).toThrow(/--analyzer must be "ascii_lower" or "standard"/);
   });
 
-  it("keeps the retrieval_agent tool off by default and reads its caps from the flags", () => {
+  it("keeps the subagent tool off by default and reads its caps from the flags", () => {
     hostedMode();
-    expect(retrievalAgentEnabled()).toBe(false);
-    expect(retrievalAgentMaxTurns()).toBe(DEFAULT_RETRIEVAL_AGENT_MAX_TURNS);
-    expect(retrievalAgentMaxWallSecs()).toBe(DEFAULT_RETRIEVAL_AGENT_MAX_WALL_SECS);
-    expect(DEFAULT_RETRIEVAL_AGENT_MAX_TURNS).toBe(8);
-    expect(DEFAULT_RETRIEVAL_AGENT_MAX_WALL_SECS).toBe(120);
-    hostedMode({ retrievalAgent: true, agentMaxTurns: "3", agentMaxWallSecs: "30" });
-    expect(retrievalAgentEnabled()).toBe(true);
-    expect(retrievalAgentMaxTurns()).toBe(3);
-    expect(retrievalAgentMaxWallSecs()).toBe(30);
-    expect(() => settingsFor({ agentMaxTurns: "-1" })).toThrow(/--agent-max-turns must be a positive integer/);
+    expect(subagentEnabled()).toBe(false);
+    expect(subagentMaxTurns()).toBe(DEFAULT_SUBAGENT_MAX_TURNS);
+    expect(subagentMaxWallSecs()).toBe(DEFAULT_SUBAGENT_MAX_WALL_SECS);
+    expect(DEFAULT_SUBAGENT_MAX_TURNS).toBe(4);
+    expect(DEFAULT_SUBAGENT_MAX_WALL_SECS).toBe(120);
+    hostedMode({ subagent: true, subagentMaxTurns: "3", subagentMaxWallSecs: "30" });
+    expect(subagentEnabled()).toBe(true);
+    expect(subagentMaxTurns()).toBe(3);
+    expect(subagentMaxWallSecs()).toBe(30);
+    expect(() => settingsFor({ subagentMaxTurns: "-1" })).toThrow(/--subagent-max-turns must be a positive integer/);
   });
 
   it("forces auto-index and auto-sync off for a hosted target whatever the env says", () => {

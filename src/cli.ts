@@ -20,8 +20,8 @@ import {
   API_KEY_ENV,
   DEFAULT_DB_TIMEOUT_MS,
   DEFAULT_DB_COLD_START_SECS,
-  DEFAULT_RETRIEVAL_AGENT_MAX_TURNS,
-  DEFAULT_RETRIEVAL_AGENT_MAX_WALL_SECS,
+  DEFAULT_SUBAGENT_MAX_TURNS,
+  DEFAULT_SUBAGENT_MAX_WALL_SECS,
   configureHosted,
   hostedSettingsFromFlags,
   type HostedFlags,
@@ -73,8 +73,8 @@ Examples:
   cx mcp                              serve the MCP tools (find/search/sql) over stdio
   cx index --db https://api.platform.infino.ws/my-repo --api-key-file ~/.infino/key
                                       load the repo into a hosted database; the platform embeds it
-  cx mcp --db https://api.platform.infino.ws/my-repo --api-key-file ~/.infino/key --retrieval-agent
-                                      serve find/search/sql over the hosted index, plus retrieval_agent`,
+  cx mcp --db https://api.platform.infino.ws/my-repo --api-key-file ~/.infino/key --subagent
+                                      serve find/search/sql over the hosted index, plus the subagent tool`,
   );
 
 hostedOptions(
@@ -172,9 +172,9 @@ hostedOptions(
     .description("serve the MCP tools (find / search / sql) over stdio; with --db, over a hosted database")
     .option("-C, --path <dir>", "repo root (default: current directory)"),
 )
-  .option("--retrieval-agent", "with --db: also register retrieval_agent, one question answered by the platform's agent")
-  .option("--agent-max-turns <n>", `turn cap for retrieval_agent (default ${DEFAULT_RETRIEVAL_AGENT_MAX_TURNS})`)
-  .option("--agent-max-wall-secs <n>", `wall-clock cap for retrieval_agent, in seconds (default ${DEFAULT_RETRIEVAL_AGENT_MAX_WALL_SECS})`)
+  .option("--subagent", "with --db: also register subagent, a question or task in plain language answered with the rows the platform's agent retrieved")
+  .option("--subagent-max-turns <n>", `turn cap for one subagent call (default ${DEFAULT_SUBAGENT_MAX_TURNS})`)
+  .option("--subagent-max-wall-secs <n>", `wall-clock cap for one subagent call, in seconds (default ${DEFAULT_SUBAGENT_MAX_WALL_SECS})`)
   .action(async (opts: { path?: string } & HostedFlags) => {
     applyHosted(opts);
     const { serveMcp } = await import("./mcp/server.js");

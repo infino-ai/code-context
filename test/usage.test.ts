@@ -8,7 +8,7 @@ import {
   findEntry,
   searchEntry,
   sqlEntry,
-  retrievalAgentEntry,
+  subagentEntry,
   withPlatform,
   formatReceipt,
   recordUsage,
@@ -129,57 +129,62 @@ describe("sql receipt", () => {
   });
 });
 
-describe("retrieval_agent receipt", () => {
+describe("subagent receipt", () => {
   const answered: RetrievalAgentResult = {
     question: "which files?",
-    answer: "3 files",
-    hits: [{ path: "src/a.ts", startLine: 10, endLine: 30, text: "export function a() {" }],
+    sql: "SELECT path, COUNT(*) AS n FROM token_match('chunks','content','compaction') GROUP BY path",
+    hits: [{ path: "src/a.ts", startLine: 10, endLine: 30, content: "export function a() {\n}" }],
+    rows: [{ path: "src/a.ts", n: 3 }],
+    hitsTotal: 1,
+    rowsTotal: 1,
     queries: [{ tool: "query_sql", sql: "SELECT path, start_line, end_line, content FROM chunks LIMIT 3" }],
     turns: 4,
   };
   const spend: RetrievalAgentSpend = { promptTokens: 12_345, completionTokens: 210 };
 
-  it("counts the answer and hits as what was returned, and records the loop's spend", () => {
-    const entry = retrievalAgentEntry(answered, spend);
-    expect(entry.tool).toBe("retrieval_agent");
+  it("counts the statement, hits and rows as what was returned, records the places, and the loop's spend", () => {
+    const entry = subagentEntry(answered, spend);
+    expect(entry.tool).toBe("subagent");
     expect(entry.query).toBe("which files?");
-    expect(entry.returnedTokens).toBe(estTokens(JSON.stringify({ answer: answered.answer, hits: answered.hits })));
+    expect(entry.returnedTokens).toBe(estTokens(JSON.stringify({ sql: answered.sql, hits: answered.hits, rows: answered.rows })));
+    expect(entry.hits).toEqual([{ path: "src/a.ts", startLine: 10, endLine: 30 }]);
+    expect(entry.rows).toBe(1);
     expect(entry.agentTurns).toBe(4);
     expect(entry.agentPromptTokens).toBe(12_345);
     expect(entry.agentCompletionTokens).toBe(210);
-    // No row/hit fields of the other tools leak in, and the queries are not
-    // counted as returned tokens twice over (their places are the hits).
-    expect(entry.rows).toBeUndefined();
-    expect(entry.hits).toBeUndefined();
-    expect(JSON.stringify(entry)).not.toContain("FROM chunks");
+    // The ledger points at places; neither the queries nor the code leak into it.
+    expect(JSON.stringify(entry)).not.toContain("FROM chunks LIMIT 3");
+    expect(JSON.stringify(entry)).not.toContain("export function a");
   });
 
-  it("prints the returned tokens, the turns, and the prompt/completion tokens", () => {
-    const line = formatReceipt(retrievalAgentEntry(answered, spend));
-    expect(line).toMatch(/^returned ~\d+ tokens \| 4 turns \| 12\.3k prompt \/ 210 completion tokens$/);
+  it("prints the returned tokens, the hits and rows, the turns, and the prompt/completion tokens", () => {
+    const line = formatReceipt(subagentEntry(answered, spend));
+    expect(line).toMatch(/^returned ~\d+ tokens \| 1 hit \/ 1 row \| 4 turns \| 12\.3k prompt \/ 210 completion tokens$/);
   });
 
   it("singularizes one turn and accumulates into the session", () => {
     const session = newSession();
-    const line = formatReceipt(retrievalAgentEntry({ ...answered, turns: 1 }, spend), session);
+    const line = formatReceipt(subagentEntry({ ...answered, turns: 1 }, spend), session);
     expect(line).toMatch(/\| 1 turn \|/);
     expect(line).toMatch(/invoked 1x this session/);
     expect(session.queries).toBe(1);
   });
 
-  it("counts a no-answer result by its hits alone", () => {
-    const entry = retrievalAgentEntry({ ...answered, answer: null, error: "ran out of turns - fall back to search or sql" }, spend);
-    expect(entry.returnedTokens).toBe(estTokens(JSON.stringify({ answer: null, hits: answered.hits })));
+  it("counts a no-answer result by the facts it still carries", () => {
+    const { sql: _none, ...noStatement } = answered;
+    const entry = subagentEntry({ ...noStatement, error: "the retrieval agent ran out of turns - the hits and rows below are what it retrieved before stopping" }, spend);
+    expect(entry.returnedTokens).toBe(estTokens(JSON.stringify({ hits: answered.hits, rows: answered.rows })));
   });
 
   it("round-trips through the ledger", () => {
     const dir = mkdtempSync(join(tmpdir(), "cx-agent-ledger-"));
     try {
-      recordUsage(dir, retrievalAgentEntry(answered, spend));
+      recordUsage(dir, subagentEntry(answered, spend));
       const [entry] = readUsage(dir);
-      expect(entry.tool).toBe("retrieval_agent");
+      expect(entry.tool).toBe("subagent");
       expect(entry.agentTurns).toBe(4);
       expect(entry.agentPromptTokens).toBe(12_345);
+      expect(entry.hits).toEqual([{ path: "src/a.ts", startLine: 10, endLine: 30 }]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

@@ -51,15 +51,16 @@ where the server's index lives.
 | `cx`           | local  | Read                      | yes        | -                                                                                                                      | -                                        |
 | `combo`        | local  | Glob, Grep, Read, LS, Bash | yes        | -                                                                                                                      | -                                        |
 | `hosted`       | hosted | Glob, Grep, Read, LS, Bash | yes        | `--db $CX_BENCH_DB_URL --api-key-file $CX_BENCH_KEY_FILE --embed-provider platform` (`CX_BENCH_EMBED_PROVIDER` overrides the provider) | `CX_BENCH_DB_URL`, `CX_BENCH_KEY_FILE`  |
-| `hosted-agent` | hosted | Glob, Grep, Read, LS, Bash | yes        | as `hosted` plus `--retrieval-agent`                                                                                   | `CX_BENCH_DB_URL`, `CX_BENCH_KEY_FILE`  |
+| `hosted-agent` | hosted | Glob, Grep, Read, LS, Bash | yes        | as `hosted` plus `--subagent`                                                                                          | `CX_BENCH_DB_URL`, `CX_BENCH_KEY_FILE`  |
 | `agent-only`   | hosted | Read                      | yes        | as `hosted-agent`, with `find`, `search` and `sql` removed from the model's context (the SDK's `disallowedTools`)      | `CX_BENCH_DB_URL`, `CX_BENCH_KEY_FILE`  |
 
 | `stock-explore`    | local  | Glob, Grep, Read, LS, Bash, Agent | no  | - (the built-in Explore subagent)                                                                             | -                                        |
 | `index-explore`    | local  | Glob, Grep, Read, LS, Bash, Agent | yes | `Explore` overridden: `find`, `search`, `sql`, Read, Haiku inside                                             | -                                        |
-| `platform-explore` | hosted | Glob, Grep, Read, LS, Bash, Agent | yes | as `hosted-agent` (with the turn cap), `Explore` overridden: `retrieval_agent`, Read, Haiku inside            | `CX_BENCH_DB_URL`, `CX_BENCH_KEY_FILE`  |
+| `platform-explore` | hosted | Glob, Grep, Read, LS, Bash, Agent | yes | as `hosted-agent` (with the turn cap), `Explore` overridden: `subagent`, Read, Haiku inside                   | `CX_BENCH_DB_URL`, `CX_BENCH_KEY_FILE`  |
+| `find-subagent`    | hosted | Glob, Grep, Read, LS, Bash        | yes | as `hosted-agent`, with `search` and `sql` removed from the model's context: `find` and `subagent` remain      | `CX_BENCH_DB_URL`, `CX_BENCH_KEY_FILE`  |
 
 The agent lanes pass `CX_BENCH_AGENT_MAX_TURNS`, when set, through as the
-server's `--agent-max-turns`, to measure the agent under a tighter turn cap.
+server's `--subagent-max-turns`, to measure the agent under a tighter turn cap.
 The explore lanes leave the main agent as a real session has it (stock tools
 plus the Agent tool, and in the index lanes the three MCP tools too) and
 change only what the read-only `Explore` subagent runs on; rows record
@@ -69,10 +70,11 @@ inside them), so delegation is read off the rows.
 `combo` is what installing the MCP server actually produces in a real client;
 `hosted` is the same agent and the same three tools with the index in a
 platform database (`CX_BENCH_DB_URL` is `https://host/<database>`, the shape
-the engine's own URI parser accepts); `hosted-agent` adds the `retrieval_agent`
-tool, one question answered by the platform's own agent loop, and measures
-whether the model picks it; `agent-only` leaves it as the only retrieval tool
-and measures its answers and cost in isolation.
+the engine's own URI parser accepts); `hosted-agent` adds the `subagent`
+tool, a question or task handed to the platform's own agent loop, which
+returns the rows it retrieved, and measures whether the model picks it;
+`agent-only` leaves it as the only retrieval tool and measures its answers
+and cost in isolation; `find-subagent` pairs it with `find` alone.
 A hosted lane fails before the first paid model call when `CX_BENCH_DB_URL` or
 `CX_BENCH_KEY_FILE` is missing. The server is configured by its command line
 alone (the `CX_BENCH_*` names are the harness's, never read by `cx`), and the

@@ -1,24 +1,27 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: Copyright The Infino Authors
 //
-// The retrieval_agent tool's logic, without an MCP transport: how a platform
-// response becomes the tool result (answer, no-answer fallback, hits and
-// queries distilled from the transcript, the spend kept beside it) and what
-// runRetrievalAgent sends the client. No network.
+// The subagent tool's logic, without an MCP transport: how a platform
+// response becomes the tool result (facts only - the statement, the hits and
+// the aggregate rows read from the statement's result and the transcript;
+// never the inner model's prose), the no-answer reporting, and what
+// runRetrievalAgent sends and runs. No network.
 
 import { describe, expect, it } from "vitest";
 import {
   runRetrievalAgent,
   retrievalAgentRunFrom,
+  statementOf,
   stepsFrom,
-  hitsFrom,
+  factsFrom,
   MAX_HITS,
-  HIT_TEXT_CHARS,
+  MAX_ROWS,
+  HIT_CONTENT_CHARS,
   TERMINATE_ANSWERED,
   type RetrievalAgentResult,
 } from "../src/core/retrieval-agent.js";
 
-// --- fixtures: the platform's AskResponse and transcript shapes ------------------
+// --- fixtures: the platform's response and transcript shapes ------------------------
 
 /** A tool-calling assistant message in the OpenAI shape the loop records. */
 const toolCall = (id: string, name: string, args: unknown) => ({
@@ -47,10 +50,13 @@ const chunkRows = (n: number) => ({
   ...(n > 25 ? { note: `${n} rows total; first 25 shown - aggregate in SQL instead` } : {}),
 });
 
-/** A complete `answered` response, as the platform returns it. */
+/** The statement a sql-mode loop submits, as the platform serializes it in `answer`. */
+const STATEMENT = "SELECT path, COUNT(*) AS n FROM token_match('chunks','content','compaction') GROUP BY path ORDER BY n DESC";
+
+/** A complete sql-mode `answered` response, as the platform returns it. */
 function answered(overrides: Record<string, unknown> = {}) {
   return {
-    answer: "3 files",
+    answer: JSON.stringify({ sql: STATEMENT }),
     terminate: "answered",
     turns: 3,
     answer_retries: 0,
@@ -64,52 +70,72 @@ function answered(overrides: Record<string, unknown> = {}) {
       { role: "user", content: "which files mention compaction?" },
       toolCall("c1", "query_sql", { sql: "SELECT path, start_line, end_line, content FROM chunks LIMIT 3" }),
       toolResult("c1", chunkRows(3)),
-      toolCall("c2", "final_answer", { answer: "3 files" }),
+      toolCall("c2", "final_answer", { answer: JSON.stringify({ sql: STATEMENT }) }),
       toolResult("c2", { ok: true }),
     ],
     ...overrides,
   };
 }
 
+/** The rows the statement returns when run. */
+const STATEMENT_ROWS = [
+  { path: "src/f1.ts", n: 7 },
+  { path: "src/f0.ts", n: 2 },
+];
+
 const QUESTION = "which files mention compaction?";
 
 // --- retrievalAgentRunFrom ------------------------------------------------------------
 
 describe("retrievalAgentRunFrom", () => {
-  it("returns the question, the answer, the hits and the queries, shaped like the other tools", () => {
-    const { result } = retrievalAgentRunFrom(QUESTION, answered());
+  it("returns the statement, the hits from the transcript with their content, the statement's rows, and the queries - and no prose", () => {
+    const { result } = retrievalAgentRunFrom(QUESTION, answered(), { statementRows: STATEMENT_ROWS });
     expect(result).toEqual({
       question: QUESTION,
-      answer: "3 files",
+      sql: STATEMENT,
       hits: [
-        { path: "src/f0.ts", startLine: 1, endLine: 9, text: "fn f0() {" },
-        { path: "src/f1.ts", startLine: 11, endLine: 19, text: "fn f1() {" },
-        { path: "src/f2.ts", startLine: 21, endLine: 29, text: "fn f2() {" },
+        { path: "src/f0.ts", startLine: 1, endLine: 9, content: "fn f0() {\n  body\n}" },
+        { path: "src/f1.ts", startLine: 11, endLine: 19, content: "fn f1() {\n  body\n}" },
+        { path: "src/f2.ts", startLine: 21, endLine: 29, content: "fn f2() {\n  body\n}" },
       ],
+      rows: STATEMENT_ROWS,
+      hitsTotal: 3,
+      rowsTotal: 2,
       queries: [{ tool: "query_sql", sql: "SELECT path, start_line, end_line, content FROM chunks LIMIT 3" }],
       turns: 3,
     });
     expect(result.error).toBeUndefined();
+    expect(Object.keys(result).sort()).toEqual(["hits", "hitsTotal", "queries", "question", "rows", "rowsTotal", "sql", "turns"]);
   });
 
-  it("keeps the loop's spend beside the result, not in it, and drops the platform's own fields", () => {
+  it("keeps the loop's spend beside the result, not in it, and drops the platform's own fields and the transcript", () => {
     const { result, spend } = retrievalAgentRunFrom(QUESTION, answered());
     expect(spend).toEqual({ promptTokens: 1200, completionTokens: 80 });
     const asRecord = result as RetrievalAgentResult & Record<string, unknown>;
-    for (const dropped of ["model", "prompt_tokens", "completion_tokens", "evidence", "terminate", "transcript", "usage", "answer_retries"]) {
+    for (const dropped of ["answer", "model", "prompt_tokens", "completion_tokens", "terminate", "transcript", "usage", "answer_retries"]) {
       expect(asRecord[dropped]).toBeUndefined();
     }
     expect(JSON.stringify(result)).not.toContain("the whole system prompt");
-    expect(Object.keys(result).sort()).toEqual(["answer", "hits", "queries", "question", "turns"]);
   });
 
-  it("is ok (not an error) with answer null and a reason when the loop hit its turn cap", () => {
-    const { result } = retrievalAgentRunFrom(QUESTION, answered({ answer: null, terminate: "turn_cap", turns: 8 }));
-    expect(result.answer).toBeNull();
+  it("puts the statement's rows first when they name places, ahead of the transcript's", () => {
+    const fromStatement = [chunkRow(9, "from the statement"), chunkRow(0, "seen first here, so this content wins")];
+    const { result } = retrievalAgentRunFrom(QUESTION, answered(), { statementRows: fromStatement });
+    expect(result.hits.map((h) => `${h.path} ${h.content}`)).toEqual([
+      "src/f9.ts from the statement",
+      "src/f0.ts seen first here, so this content wins",
+      "src/f1.ts fn f1() {\n  body\n}",
+      "src/f2.ts fn f2() {\n  body\n}",
+    ]);
+    expect(result.rows).toEqual([]);
+  });
+
+  it("returns the facts found on the way, with a reason, when the loop hit its turn cap", () => {
+    const { result } = retrievalAgentRunFrom(QUESTION, answered({ answer: null, terminate: "turn_cap", turns: 4 }));
+    expect(result.sql).toBeUndefined();
     expect(result.error).toMatch(/ran out of turns/);
-    expect(result.error).toMatch(/fall back to search or sql/);
-    expect(result.turns).toBe(8);
-    // The hits and queries still come back: what it found is useful without an answer.
+    expect(result.error).toMatch(/what it retrieved before stopping/);
+    expect(result.turns).toBe(4);
     expect(result.hits).toHaveLength(3);
     expect(result.queries).toHaveLength(1);
   });
@@ -117,27 +143,29 @@ describe("retrievalAgentRunFrom", () => {
   it("names the wall cap and carries the endpoint's own words on an error termination", () => {
     expect(retrievalAgentRunFrom(QUESTION, answered({ answer: null, terminate: "wall_cap" })).result.error).toMatch(/ran out of time/);
     const failed = retrievalAgentRunFrom(QUESTION, answered({ answer: null, terminate: "error", error: "401 from the model host" })).result;
-    expect(failed.answer).toBeNull();
-    expect(failed.error).toBe("the retrieval agent's model endpoint failed: 401 from the model host - fall back to search or sql");
+    expect(failed.error).toBe(
+      "the retrieval agent's model endpoint failed: 401 from the model host - the hits and rows below are what it retrieved before stopping",
+    );
   });
 
-  it("drops an answer that arrives with a non-answered terminate rather than trusting it", () => {
-    // The platform never sends this pair, but a stale answer with a cap
-    // termination must not be shown as if it were accepted.
-    const { result } = retrievalAgentRunFrom(QUESTION, answered({ answer: "stale", terminate: "turn_cap" }));
-    expect(result.answer).toBeNull();
-    expect(result.error).toBeDefined();
-  });
-
-  it("reports an answered loop that sent no text instead of inventing one", () => {
-    const { result } = retrievalAgentRunFrom(QUESTION, answered({ answer: null }));
-    expect(result.answer).toBeNull();
-    expect(result.error).toMatch(/reported an answer but sent none/);
+  it("reports a statement that failed to run, keeping the transcript's facts", () => {
+    const { result } = retrievalAgentRunFrom(QUESTION, answered(), { statementError: "the statement failed to run: no such column n" });
+    expect(result.sql).toBe(STATEMENT);
+    expect(result.error).toMatch(/failed to run: no such column n/);
+    expect(result.hits).toHaveLength(3);
   });
 
   it("describes an unknown terminate value verbatim", () => {
     const { result } = retrievalAgentRunFrom(QUESTION, answered({ answer: null, terminate: "budget_exceeded" }));
     expect(result.error).toMatch(/"budget_exceeded"/);
+  });
+
+  it("has no statement when the loop answered in prose (text mode, or a sql-mode loop that wrote a paragraph)", () => {
+    const { result } = retrievalAgentRunFrom(QUESTION, answered({ answer: "Compaction works by first deciding ..." }));
+    expect(result.sql).toBeUndefined();
+    expect(result.error).toBeUndefined();
+    expect(JSON.stringify(result)).not.toContain("Compaction works by");
+    expect(result.hits).toHaveLength(3);
   });
 
   it("throws on a body that is not an agent response", () => {
@@ -148,8 +176,9 @@ describe("retrievalAgentRunFrom", () => {
 
   it("tolerates a response without a transcript (the server left it out)", () => {
     const { transcript: _dropped, ...noTranscript } = answered();
-    const { result } = retrievalAgentRunFrom(QUESTION, noTranscript);
-    expect(result.answer).toBe("3 files");
+    const { result } = retrievalAgentRunFrom(QUESTION, noTranscript, { statementRows: STATEMENT_ROWS });
+    expect(result.sql).toBe(STATEMENT);
+    expect(result.rows).toEqual(STATEMENT_ROWS);
     expect(result.hits).toEqual([]);
     expect(result.queries).toEqual([]);
   });
@@ -166,102 +195,97 @@ describe("retrievalAgentRunFrom", () => {
   });
 });
 
-// --- hitsFrom -------------------------------------------------------------------------------
+// --- statementOf ------------------------------------------------------------------------------
 
-describe("hitsFrom", () => {
-  const steps = (transcript: unknown[]) => stepsFrom(transcript);
-
-  it("makes one hit per row carrying path, start_line and end_line, text = the content's first line", () => {
-    const hits = hitsFrom(steps([toolCall("c1", "query_sql", { sql: "SELECT ..." }), toolResult("c1", { rows: [chunkRow(4, "first line\nsecond line")] })]));
-    expect(hits).toEqual([{ path: "src/f4.ts", startLine: 41, endLine: 49, text: "first line" }]);
-  });
-
-  it("cuts a hit's text at HIT_TEXT_CHARS", () => {
-    const long = "x".repeat(HIT_TEXT_CHARS * 3);
-    const [hit] = hitsFrom(steps([toolCall("c1", "query_sql", { sql: "S" }), toolResult("c1", { rows: [chunkRow(0, long)] })]));
-    expect(hit.text).toHaveLength(HIT_TEXT_CHARS);
-    expect(hit.text).toBe("x".repeat(HIT_TEXT_CHARS));
-  });
-
-  it("renders the other scalar columns compactly when a row has no content (an aggregate)", () => {
-    const [hit] = hitsFrom(
-      steps([
-        toolCall("c1", "query_sql", { sql: "SELECT path, start_line, end_line, symbol, lang, COUNT(*) AS n ..." }),
-        toolResult("c1", { rows: [{ path: "src/a.rs", start_line: 5, end_line: 40, symbol: "merge", lang: "rs", n: 7, embedding: [0.1, 0.2], meta: { k: 1 } }] }),
-      ]),
-    );
-    // Vectors and nested objects are not scalar and stay out of the text.
-    expect(hit).toEqual({ path: "src/a.rs", startLine: 5, endLine: 40, text: "symbol=merge, lang=rs, n=7" });
-  });
-
-  it("gives an empty text to a row with only the place columns", () => {
-    const [hit] = hitsFrom(steps([toolCall("c1", "query_sql", { sql: "S" }), toolResult("c1", { rows: [{ path: "a.ts", start_line: 1, end_line: 2 }] })]));
-    expect(hit).toEqual({ path: "a.ts", startLine: 1, endLine: 2, text: "" });
-  });
-
-  it("ignores rows without a path or a line range - the bm25 tool's _id/text/score rows, aggregates by path only", () => {
-    const hits = hitsFrom(
-      steps([
-        toolCall("s1", "bm25_search", { query: "compaction merge", k: 5, column: "content" }),
-        toolResult("s1", { rows: [{ _id: 12, text: "fn merge()", score: 1.5 }] }),
-        toolCall("q1", "query_sql", { sql: "SELECT path, COUNT(*) AS n FROM chunks GROUP BY path" }),
-        toolResult("q1", { rows: [{ path: "src/a.rs", n: 3 }, { path: "src/b.rs", start_line: "7", end_line: 9 }] }),
-        toolCall("q2", "query_sql", { sql: "SELECT COUNT(*) FROM chunks" }),
-        toolResult("q2", { rows: [{ "COUNT(*)": 5527 }] }),
-      ]),
-    );
-    expect(hits).toEqual([]);
-  });
-
-  it("dedupes by path and start_line, keeping the first appearance", () => {
-    const hits = hitsFrom(
-      steps([
-        toolCall("q1", "query_sql", { sql: "A" }),
-        toolResult("q1", { rows: [chunkRow(1, "from the first query"), chunkRow(2)] }),
-        toolCall("q2", "query_sql", { sql: "B" }),
-        toolResult("q2", { rows: [chunkRow(1, "from the second query"), { ...chunkRow(1), start_line: 99, content: "another chunk of f1" }] }),
-      ]),
-    );
-    expect(hits).toEqual([
-      { path: "src/f1.ts", startLine: 11, endLine: 19, text: "from the first query" },
-      { path: "src/f2.ts", startLine: 21, endLine: 29, text: "fn f2() {" },
-      { path: "src/f1.ts", startLine: 99, endLine: 19, text: "another chunk of f1" },
-    ]);
-  });
-
-  it("caps the list at MAX_HITS across results, in transcript order", () => {
-    const hits = hitsFrom(
-      steps([
-        toolCall("q1", "query_sql", { sql: "A" }),
-        toolResult("q1", chunkRows(25)),
-        toolCall("q2", "query_sql", { sql: "B" }),
-        toolResult("q2", { rows: [chunkRow(100)] }),
-      ]),
-    );
-    expect(MAX_HITS).toBe(20);
-    expect(hits).toHaveLength(MAX_HITS);
-    expect(hits[0].path).toBe("src/f0.ts");
-    expect(hits[MAX_HITS - 1].path).toBe(`src/f${MAX_HITS - 1}.ts`);
-    expect(hits.some((h) => h.path === "src/f100.ts")).toBe(false);
-  });
-
-  it("reads nothing from a failed call or a non-JSON tool body", () => {
-    const hits = hitsFrom(
-      steps([
-        toolCall("q1", "query_sql", { sql: "SELECT * FROM nope" }),
-        toolResult("q1", { error: "table 'nope' not found" }),
-        toolCall("q2", "query_sql", { sql: "SELECT 1" }),
-        toolResult("q2", "engine said something odd"),
-      ]),
-    );
-    expect(hits).toEqual([]);
+describe("statementOf", () => {
+  it("reads the sql out of an answered sql-mode response and nothing else", () => {
+    expect(statementOf(answered())).toBe(STATEMENT);
+    expect(statementOf(answered({ answer: "just words" }))).toBeUndefined();
+    expect(statementOf(answered({ answer: JSON.stringify({ sql: "" }) }))).toBeUndefined();
+    expect(statementOf(answered({ answer: JSON.stringify({ text: "no sql key" }) }))).toBeUndefined();
+    expect(statementOf(answered({ terminate: "turn_cap" }))).toBeUndefined();
+    expect(statementOf(answered({ answer: null }))).toBeUndefined();
+    expect(statementOf(null)).toBeUndefined();
   });
 });
 
-// --- stepsFrom (the queries) --------------------------------------------------------------
+// --- factsFrom --------------------------------------------------------------------------------
+
+describe("factsFrom", () => {
+  const rows = (...lists: unknown[][]) => factsFrom(lists);
+
+  it("makes one hit per row carrying path, start_line and end_line, with the whole content and the descriptors", () => {
+    const { hits } = rows([{ ...chunkRow(4, "first line\nsecond line"), symbol: "f4", lang: "ts" }]);
+    expect(hits).toEqual([{ path: "src/f4.ts", startLine: 41, endLine: 49, content: "first line\nsecond line", symbol: "f4", lang: "ts" }]);
+  });
+
+  it("cuts a hit's content at HIT_CONTENT_CHARS, the same cap a search hit has", () => {
+    const long = "x".repeat(HIT_CONTENT_CHARS * 2);
+    const { hits } = rows([chunkRow(0, long)]);
+    expect(HIT_CONTENT_CHARS).toBe(4000);
+    expect(hits[0].content).toHaveLength(HIT_CONTENT_CHARS);
+  });
+
+  it("gives empty content to a row with only the place columns - the citation is the fact", () => {
+    const { hits } = rows([{ path: "a.ts", start_line: 1, end_line: 2 }]);
+    expect(hits).toEqual([{ path: "a.ts", startLine: 1, endLine: 2, content: "" }]);
+  });
+
+  it("keeps rows that name no place as aggregate rows, scalar cells only", () => {
+    const facts = rows([
+      { path: "src/a.rs", n: 3, embedding: [0.1, 0.2], meta: { k: 1 } },
+      { path: "src/b.rs", start_line: "7", end_line: 9 },
+      { "COUNT(*)": 5527 },
+    ]);
+    expect(facts.hits).toEqual([]);
+    expect(facts.rows).toEqual([{ path: "src/a.rs", n: 3 }, { path: "src/b.rs", start_line: "7", end_line: 9 }, { "COUNT(*)": 5527 }]);
+    expect(facts.rowsTotal).toBe(3);
+  });
+
+  it("ignores rows with nothing scalar, and the bm25 tool's _id/text/score rows become aggregate rows, not hits", () => {
+    const facts = rows([{ embedding: [1, 2] }, null, "garbage", { _id: 12, text: "fn merge()", score: 1.5 }]);
+    expect(facts.hits).toEqual([]);
+    expect(facts.rows).toEqual([{ _id: 12, text: "fn merge()", score: 1.5 }]);
+  });
+
+  it("dedupes hits by path and start_line, keeping the first appearance, across lists in order", () => {
+    const facts = rows(
+      [chunkRow(1, "from the first list"), chunkRow(2)],
+      [chunkRow(1, "from the second list"), { ...chunkRow(1), start_line: 99, content: "another chunk of f1" }],
+    );
+    expect(facts.hits.map((h) => `${h.path}:${h.startLine} ${h.content}`)).toEqual([
+      "src/f1.ts:11 from the first list",
+      "src/f2.ts:21 fn f2() {\n  body\n}",
+      "src/f1.ts:99 another chunk of f1",
+    ]);
+    expect(facts.hitsTotal).toBe(3);
+  });
+
+  it("dedupes identical aggregate rows", () => {
+    const facts = rows([{ path: "a", n: 1 }], [{ path: "a", n: 1 }, { path: "a", n: 2 }]);
+    expect(facts.rows).toEqual([{ path: "a", n: 1 }, { path: "a", n: 2 }]);
+    expect(facts.rowsTotal).toBe(2);
+  });
+
+  it("caps hits at MAX_HITS and rows at MAX_ROWS while counting everything seen", () => {
+    const manyHits = Array.from({ length: MAX_HITS + 5 }, (_, i) => chunkRow(i));
+    const manyRows = Array.from({ length: MAX_ROWS + 3 }, (_, i) => ({ path: `p${i}`, n: i }));
+    const facts = rows(manyHits, manyRows);
+    expect(MAX_HITS).toBe(50);
+    expect(MAX_ROWS).toBe(100);
+    expect(facts.hits).toHaveLength(MAX_HITS);
+    expect(facts.hitsTotal).toBe(MAX_HITS + 5);
+    expect(facts.rows).toHaveLength(MAX_ROWS);
+    expect(facts.rowsTotal).toBe(MAX_ROWS + 3);
+    expect(facts.hits[0].path).toBe("src/f0.ts");
+    expect(facts.hits[MAX_HITS - 1].path).toBe(`src/f${MAX_HITS - 1}.ts`);
+  });
+});
+
+// --- stepsFrom (the queries and their rows) --------------------------------------------------
 
 describe("stepsFrom", () => {
-  it("records the query of a search tool and the sql of query_sql, one field each, without rows", () => {
+  it("records the query of a search tool and the sql of query_sql, one field each, without rows in the queries", () => {
     const { result } = retrievalAgentRunFrom(
       QUESTION,
       answered({
@@ -281,6 +305,8 @@ describe("stepsFrom", () => {
       { tool: "query_sql", sql: "SELECT COUNT(*) FROM chunks" },
     ]);
     expect(JSON.stringify(result.queries)).not.toContain("5527");
+    // ... but the rows those queries returned are the facts.
+    expect(result.rows).toEqual([{ _id: 1, text: "a", score: 1.5 }, { "COUNT(*)": 5527 }]);
   });
 
   it("leaves final_answer out - the answer is not a query", () => {
@@ -293,9 +319,17 @@ describe("stepsFrom", () => {
     expect(steps.map((s) => s.query.tool)).toEqual(["query_sql"]);
   });
 
-  it("lists a failed call's query and gives it no rows", () => {
-    const [step] = stepsFrom([toolCall("q1", "query_sql", { sql: "SELECT * FROM nope" }), toolResult("q1", { error: "table 'nope' not found" })]);
-    expect(step).toEqual({ query: { tool: "query_sql", sql: "SELECT * FROM nope" }, rows: [] });
+  it("lists a failed call's query and gives it no rows; a non-JSON body yields none either", () => {
+    const steps = stepsFrom([
+      toolCall("q1", "query_sql", { sql: "SELECT * FROM nope" }),
+      toolResult("q1", { error: "table 'nope' not found" }),
+      toolCall("q2", "query_sql", { sql: "SELECT 1" }),
+      toolResult("q2", "engine said something odd"),
+    ]);
+    expect(steps).toEqual([
+      { query: { tool: "query_sql", sql: "SELECT * FROM nope" }, rows: [] },
+      { query: { tool: "query_sql", sql: "SELECT 1" }, rows: [] },
+    ]);
   });
 
   it("pairs results by tool_call_id, not by position, and survives a missing result", () => {
@@ -346,21 +380,48 @@ describe("stepsFrom", () => {
 // --- runRetrievalAgent ----------------------------------------------------------------------
 
 describe("runRetrievalAgent", () => {
-  it("asks for the transcript with the contract and budget, and returns the distilled run", async () => {
+  it("asks with the contract and budget, runs the statement, and leads the result with its rows", async () => {
     const sent: unknown[] = [];
+    const ran: string[] = [];
     const hosted = {
       ask: async (req: unknown) => {
         sent.push(req);
         return answered();
       },
+      querySql: async (sql: string) => {
+        ran.push(sql);
+        return STATEMENT_ROWS;
+      },
     };
-    const { result, spend } = await runRetrievalAgent(hosted, { question: "which files?", answer: "scalar" }, { maxTurns: 6, maxWallSecs: 90 });
-    expect(sent).toEqual([{ question: "which files?", answer: "scalar", max_turns: 6, max_wall_secs: 90, include_transcript: true }]);
+    const { result, spend } = await runRetrievalAgent(hosted, { question: "which files?", answer: "sql" }, { maxTurns: 4, maxWallSecs: 90 });
+    expect(sent).toEqual([{ question: "which files?", answer: "sql", max_turns: 4, max_wall_secs: 90, include_transcript: true }]);
+    expect(ran).toEqual([STATEMENT]);
     expect(result.question).toBe("which files?");
-    expect(result.answer).toBe("3 files");
+    expect(result.sql).toBe(STATEMENT);
+    expect(result.rows).toEqual(STATEMENT_ROWS);
     expect(result.hits).toHaveLength(3);
     expect(spend).toEqual({ promptTokens: 1200, completionTokens: 80 });
     expect((result as unknown as Record<string, unknown>).transcript).toBeUndefined();
+  });
+
+  it("runs no statement when the loop produced none, and reports one that fails without losing the transcript's facts", async () => {
+    const ran: string[] = [];
+    const prose = { ask: async () => answered({ answer: "words" }), querySql: async (sql: string) => (ran.push(sql), []) };
+    const fromProse = await runRetrievalAgent(prose, { question: "q", answer: "text" }, { maxTurns: 4, maxWallSecs: 90 });
+    expect(ran).toEqual([]);
+    expect(fromProse.result.sql).toBeUndefined();
+    expect(fromProse.result.hits).toHaveLength(3);
+
+    const failing = {
+      ask: async () => answered(),
+      querySql: async () => {
+        throw new Error("query_sql: server returned 400: no such function token_match");
+      },
+    };
+    const { result } = await runRetrievalAgent(failing, { question: "q", answer: "sql" }, { maxTurns: 4, maxWallSecs: 90 });
+    expect(result.sql).toBe(STATEMENT);
+    expect(result.error).toMatch(/failed to run: query_sql: server returned 400/);
+    expect(result.hits).toHaveLength(3);
   });
 
   it("propagates the client's error for a terminal platform failure", async () => {
@@ -368,7 +429,8 @@ describe("runRetrievalAgent", () => {
       ask: async () => {
         throw new Error("ask: server returned 501: ask is not configured on this deployment");
       },
+      querySql: async () => [],
     };
-    await expect(runRetrievalAgent(hosted, { question: "q", answer: "text" }, { maxTurns: 8, maxWallSecs: 120 })).rejects.toThrow(/501/);
+    await expect(runRetrievalAgent(hosted, { question: "q", answer: "sql" }, { maxTurns: 4, maxWallSecs: 120 })).rejects.toThrow(/501/);
   });
 });

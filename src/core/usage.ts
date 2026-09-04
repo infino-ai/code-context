@@ -40,7 +40,7 @@ export const receiptEnabled = (): boolean =>
  * it doesn't duplicate the repo. */
 export interface UsageEntry {
   ts: string;
-  tool: "find" | "search" | "sql" | "retrieval_agent";
+  tool: "find" | "search" | "sql" | "subagent";
   query: string;
   returnedTokens: number;
   /** search only: whole-file size of the distinct files the hits came from. */
@@ -55,9 +55,9 @@ export interface UsageEntry {
   rows?: number;
   /** sql only: a truncated preview of the returned rows (the answer itself). */
   rowsPreview?: string;
-  /** retrieval_agent only: what the platform's agent spent on the question -
-   * its turns and tokens. The platform bills these; the receipt shows them,
-   * the tool result does not. */
+  /** subagent only: what the platform's agent spent on the question - its
+   * turns and tokens. The platform bills these; the receipt shows them, the
+   * tool result does not. */
   agentTurns?: number;
   agentPromptTokens?: number;
   agentCompletionTokens?: number;
@@ -128,15 +128,18 @@ export function sqlEntry(query: string, rows: Array<Record<string, unknown>>): U
   };
 }
 
-/** A retrieval_agent call returns an answer and the hits behind it, so what
- * it cost the outer agent is those two serialized; the loop's own spend
- * (turns, tokens) is the platform's meter and rides beside it in the ledger. */
-export function retrievalAgentEntry(result: RetrievalAgentResult, spend: RetrievalAgentSpend): UsageEntry {
+/** A subagent call returns facts - the statement, the hits and the aggregate
+ * rows - so what it cost the outer agent is those serialized; the hits are
+ * recorded as places like a search's, and the loop's own spend (turns,
+ * tokens) is the platform's meter and rides beside them in the ledger. */
+export function subagentEntry(result: RetrievalAgentResult, spend: RetrievalAgentSpend): UsageEntry {
   return {
     ts: new Date().toISOString(),
-    tool: "retrieval_agent",
+    tool: "subagent",
     query: result.question,
-    returnedTokens: estTokens(jsonify({ answer: result.answer, hits: result.hits })),
+    returnedTokens: estTokens(jsonify({ sql: result.sql, hits: result.hits, rows: result.rows })),
+    hits: result.hits.map((h) => ({ path: h.path, startLine: h.startLine, endLine: h.endLine })),
+    rows: result.rows.length,
     agentTurns: result.turns,
     agentPromptTokens: spend.promptTokens,
     agentCompletionTokens: spend.completionTokens,
@@ -182,11 +185,13 @@ export function formatReceipt(entry: UsageEntry, session?: SessionUsage): string
     // The repo-wide count, not just the lines returned: a cut result still
     // tells the reader how many matches exist.
     parts.push(`returned ~${fmtTokens(entry.returnedTokens)} tokens | ${plural(entry.matches ?? hits.length, "match", "matches")} / ${plural(files, "file", "files")}`);
-  } else if (entry.tool === "retrieval_agent") {
-    // The inner agent's spend beside what came back: the platform bills the
-    // turns and tokens, so the caller sees what one question cost there.
+  } else if (entry.tool === "subagent") {
+    // What came back, then the inner agent's spend beside it: the platform
+    // bills the turns and tokens, so the caller sees what one question cost there.
+    const hits = entry.hits ?? [];
     parts.push(
-      `returned ~${fmtTokens(entry.returnedTokens)} tokens | ${plural(entry.agentTurns ?? 0, "turn", "turns")} | ` +
+      `returned ~${fmtTokens(entry.returnedTokens)} tokens | ${plural(hits.length, "hit", "hits")} / ${plural(entry.rows ?? 0, "row", "rows")} | ` +
+        `${plural(entry.agentTurns ?? 0, "turn", "turns")} | ` +
         `${fmtTokens(entry.agentPromptTokens ?? 0)} prompt / ${fmtTokens(entry.agentCompletionTokens ?? 0)} completion tokens`,
     );
   } else {

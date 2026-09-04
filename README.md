@@ -203,9 +203,13 @@ file state, the usage ledger).
 Two things change from the local index. A hosted table is shared, so nothing
 builds or re-syncs it as a side effect of a query: loading is the explicit
 `cx index --db` step, re-run to sync. And a fourth MCP tool is available when
-you ask for it, `cx mcp --db ... --retrieval-agent`: `retrieval_agent` hands
-one question to the platform and returns the answer with the places it
-found, cited `path:line`, in the same shape as a `search` result.
+you ask for it, `cx mcp --db ... --subagent`: `subagent` hands a question or
+task in plain language to the platform's retrieval agent and returns the
+facts it retrieved - rows with exact `path`, `start_line`, `end_line` and the
+code, in the shape of `search` hits, plus aggregate rows and the SQL whose
+rows answer the question - never a summary. The coding agent composes the
+answer from the rows and cites them; `find` stays beside it for every
+occurrence of an exact string.
 
 Everything hosted is a command-line flag, on every command that can reach a
 hosted database:
@@ -218,7 +222,7 @@ hosted database:
 | `--analyzer <ascii_lower\|standard>` | `ascii_lower` | `cx index` only: the full-text analyzer the table is created with. `ascii_lower` splits code identifiers on `.`, `_`, and `::`, which is what makes `find` complete on code |
 | `--db-timeout-ms <n>` | 60000 | per-request timeout |
 | `--cold-start-secs <n>` | 120 | how long to keep retrying while the database is not yet ready, before giving up |
-| `--retrieval-agent` | off | `cx mcp` only: also register `retrieval_agent`; `--agent-max-turns` (8) and `--agent-max-wall-secs` (120) cap one call |
+| `--subagent` | off | `cx mcp` only: also register `subagent`; `--subagent-max-turns` (4) and `--subagent-max-wall-secs` (120) cap one call |
 
 As an MCP server the flags go in `args`:
 
@@ -371,7 +375,7 @@ cx status                 what the index holds, how fresh, vector readiness
 cx usage                  ledger of queries run and what each returned  (-n, --all, --clear, --json)
 cx mcp                    serve the MCP tools over stdio
 cx <command> --db <url>   the same command over a hosted index on infino-platform  (--api-key-file, --embed-provider;
-                          index: --analyzer; mcp: --retrieval-agent)
+                          index: --analyzer; mcp: --subagent)
 ```
 
 `cx usage` reads the local ledger at `.infino/usage.jsonl` - every `find` /

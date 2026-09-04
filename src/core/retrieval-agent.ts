@@ -1,31 +1,36 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: Copyright The Infino Authors
 //
-// The `retrieval_agent` door, hosted mode only: one question handed to the
-// platform's own agent (`POST /v1/ask/{database}`), which answers it over the
-// chunks table. This file turns the platform's response into what the outer
-// agent sees, shaped like the other retrieval tools so it can cite from it:
-// the answer, the HITS (path, line range, a line of text - the places the
-// inner agent's queries touched, distilled from the transcript), and the
-// QUERIES it ran (statements and search terms, without their rows). The
-// loop's own spend (turns, tokens) is not part of the tool result: it travels
-// beside it to the usage ledger. The whole transcript is never returned: it
-// is paid for on every later turn of the outer agent and says nothing the
-// hits and queries do not.
+// The `subagent` tool, hosted mode only: one question or task handed to the
+// platform's retrieval agent (`POST /v1/ask/{database}`), which searches the
+// chunks table and, in the default `sql` answer mode, submits one statement
+// whose rows answer the question. What comes back to the outer agent is
+// FACTS and only facts: the rows the loop retrieved and the rows its
+// statement returns, each with its exact path, start_line, end_line and the
+// code (the shape of a search hit), plus any aggregate rows (counts,
+// rankings) and the queries that produced them. Nothing the inner model
+// wrote is returned: a summary in the tool result becomes the outer agent's
+// answer verbatim, and the judge finds what it asserted "matches no
+// verifiable metric" - the rows are what it can verify and cite. The loop's
+// own spend (turns, tokens) travels beside the result to the usage ledger;
+// the transcript itself is never returned.
 
-import type { HostedDb } from "./hosted.js";
+import type { HostedDb, RowRecord } from "./hosted.js";
 
-/** Hits kept in one result. The platform caps a tool result at 25 rows and
- * the inner agent may run several; twenty cited places is the top of any
- * ranking and more than a search call returns. */
-export const MAX_HITS = 20;
+/** Place-naming rows kept in one result: the same ceiling as search's `k`;
+ * more than that is a survey, and the statement's rows come first. */
+export const MAX_HITS = 50;
 
-/** Characters kept of a hit's text: the first line of the chunk, cut so a
- * result of MAX_HITS hits stays a few hundred tokens. */
-export const HIT_TEXT_CHARS = 120;
+/** Aggregate rows (a count or rank per path) kept in one result: small rows,
+ * so a longer list still costs less than a few hits. */
+export const MAX_ROWS = 100;
+
+/** Characters kept of a hit's content: search's own cap on a chunk, so a
+ * subagent hit reads exactly like a search hit. */
+export const HIT_CONTENT_CHARS = 4000;
 
 /** The platform's `terminate` value for a loop that submitted an accepted
- * answer (`TerminateReason::Answered`, serialized snake_case). */
+ * answer (serialized snake_case). */
 export const TERMINATE_ANSWERED = "answered";
 
 /** The inner agent's answer-submission tool: a call to it is the answer, not
@@ -38,29 +43,30 @@ const ROLE_ASSISTANT = "assistant";
 const ROLE_TOOL = "tool";
 
 /** The row columns a hit is built from: the chunks table's path and line
- * range, and its text. A row without the first three is not a place in the
- * code and contributes no hit. */
+ * range, its text, and the two descriptors search hits also carry. */
 const COL_PATH = "path";
 const COL_START_LINE = "start_line";
 const COL_END_LINE = "end_line";
 const COL_CONTENT = "content";
-
-/** Separator between the scalar columns of a row rendered as a hit's text
- * when the row carries no content column (an aggregate: a count, a sum). */
-const COLUMN_SEPARATOR = ", ";
+const COL_SYMBOL = "symbol";
+const COL_LANG = "lang";
 
 /** Why a loop ended without an answer, in the outer agent's terms: each maps a
- * platform `terminate` value to the reason and the fallback. */
+ * platform `terminate` value to the reason. */
 const NO_ANSWER_REASONS: Record<string, string> = {
-  turn_cap: "the retrieval agent ran out of turns without an answer",
-  wall_cap: "the retrieval agent ran out of time without an answer",
+  turn_cap: "the retrieval agent ran out of turns",
+  wall_cap: "the retrieval agent ran out of time",
   error: "the retrieval agent's model endpoint failed",
 };
 
-/** What the outer agent is told to do when there is no answer. */
-const FALLBACK_HINT = "fall back to search or sql";
+/** What the outer agent is told when the loop did not finish: the rows are
+ * still what it found on the way. */
+const NO_ANSWER_HINT = "the hits and rows below are what it retrieved before stopping";
 
-/** The answer contract, as the platform's `AskRequest.answer` spells it. */
+/** The answer contract, as the platform's ask request spells it. `sql` (the
+ * default) asks for one statement whose rows answer the question; `text` lets
+ * the loop reason toward a written answer, which is then discarded here - the
+ * rows it retrieved on the way are the result either way. */
 export type RetrievalAgentAnswerType = "text" | "scalar" | "sql";
 
 export interface RetrievalAgentRequest {
@@ -75,34 +81,42 @@ export interface RetrievalAgentBudget {
   maxWallSecs: number;
 }
 
-/** One place the inner agent's queries touched: the same path and line range
- * a search hit carries, so the outer agent cites it as path:line, plus one
- * line of text saying what is there. */
+/** One place the loop retrieved: a search hit's shape, so the outer agent
+ * cites it as path:line and answers from the content. */
 export interface RetrievalAgentHit {
   path: string;
   startLine: number;
   endLine: number;
-  text: string;
+  content: string;
+  symbol?: string;
+  lang?: string;
 }
 
 /** One query the inner agent ran: the tool, and the statement (query_sql) or
- * the search terms (the search tools). Rows are not repeated here - the
- * places they named are the hits. */
+ * the search terms (the search tools). */
 export interface RetrievalAgentQuery {
   tool: string;
   sql?: string;
   query?: string;
 }
 
-/** What the `retrieval_agent` tool returns to the outer agent. */
+/** What the `subagent` tool returns to the outer agent: facts. */
 export interface RetrievalAgentResult {
   question: string;
-  /** The answer in the requested shape, or null when the loop ended without one. */
-  answer: string | null;
+  /** The statement whose rows answer the question, when the loop produced one. */
+  sql?: string;
+  /** Rows naming a place in the code, the statement's first, then the loop's
+   * retrievals in transcript order; one per path:start_line, the first MAX_HITS. */
   hits: RetrievalAgentHit[];
+  /** Rows that name no place - aggregates such as a count or a rank per path -
+   * with their scalar columns as returned; the first MAX_ROWS. */
+  rows: RowRecord[];
+  /** Distinct hits and rows seen before the caps. */
+  hitsTotal: number;
+  rowsTotal: number;
   queries: RetrievalAgentQuery[];
   turns: number;
-  /** Present when `answer` is null: why, and what to do instead. */
+  /** Present when the loop did not finish (or its statement failed): why. */
   error?: string;
 }
 
@@ -133,19 +147,30 @@ interface TranscriptToolCall {
 }
 
 /** One tool call paired with the rows of its result, as read from the
- * transcript before it is split into the queries and the hits. */
+ * transcript before it is split into the queries and the facts. */
 export interface TranscriptStep {
   query: RetrievalAgentQuery;
   rows: unknown[];
 }
 
+/** The facts in a set of row lists, split into hits and aggregate rows. */
+export interface Facts {
+  hits: RetrievalAgentHit[];
+  rows: RowRecord[];
+  hitsTotal: number;
+  rowsTotal: number;
+}
+
 /** Hand the platform's retrieval agent one question over the hosted
- * database. The transcript is requested so the hits and queries can be read
- * from it, and dropped again here. Retryable platform states are handled
- * inside the client; a terminal failure (no agent configured, bad key)
- * surfaces as its error. */
+ * database and return what it retrieved. The transcript is requested so the
+ * rows can be read from it, and dropped again here. When the loop answers
+ * with a statement, the statement is run and its rows lead the result; a
+ * statement that fails to run is reported in `error` and the transcript's
+ * rows still come back. Retryable platform states are handled inside the
+ * client; a terminal failure (no agent configured, bad key) surfaces as its
+ * error. */
 export async function runRetrievalAgent(
-  hosted: Pick<HostedDb, "ask">,
+  hosted: Pick<HostedDb, "ask" | "querySql">,
   request: RetrievalAgentRequest,
   budget: RetrievalAgentBudget,
 ): Promise<RetrievalAgentRun> {
@@ -156,31 +181,62 @@ export async function runRetrievalAgent(
     max_wall_secs: budget.maxWallSecs,
     include_transcript: true,
   });
-  return retrievalAgentRunFrom(request.question, response);
+  const sql = statementOf(response);
+  let statementRows: unknown[] = [];
+  let statementError: string | undefined;
+  if (sql !== undefined) {
+    try {
+      statementRows = await hosted.querySql(sql);
+    } catch (err) {
+      statementError = `the statement failed to run: ${(err as Error).message}`;
+    }
+  }
+  return retrievalAgentRunFrom(request.question, response, { statementRows, statementError });
 }
 
-/** The run for one platform response. A loop that ended without an accepted
- * answer is still a result, not a tool error: `answer` is null and `error`
- * says why, so the outer agent falls back to search/sql instead of treating
- * the call as broken - and the hits it found on the way still come back. A
- * body that is not an agent response at all (no `terminate`) is the one
- * thing that throws. */
-export function retrievalAgentRunFrom(question: string, response: unknown): RetrievalAgentRun {
+/** The statement a `sql`-mode loop submitted, when the response carries one:
+ * the platform serializes it as the JSON text `{"sql": "..."}` in `answer`. A
+ * loop that answered in prose instead (or did not answer) has none. */
+export function statementOf(response: unknown): string | undefined {
+  const body = asRecord(response);
+  if (body.terminate !== TERMINATE_ANSWERED || typeof body.answer !== "string") return undefined;
+  try {
+    const parsed = asRecord(JSON.parse(body.answer));
+    return typeof parsed.sql === "string" && parsed.sql.length > 0 ? parsed.sql : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The run for one platform response, plus the rows of its statement when one
+ * was run. A loop that ended without an accepted answer is still a result,
+ * not a tool error: `error` says why and the rows it found on the way still
+ * come back. A body that is not an agent response at all (no `terminate`) is
+ * the one thing that throws. */
+export function retrievalAgentRunFrom(
+  question: string,
+  response: unknown,
+  executed: { statementRows?: unknown[]; statementError?: string } = {},
+): RetrievalAgentRun {
   const body = asRecord(response);
   if (typeof body.terminate !== "string") {
-    throw new Error("retrieval_agent: the platform's response is not an agent result (no `terminate` field)");
+    throw new Error("subagent: the platform's response is not an agent result (no `terminate` field)");
   }
   const terminate = body.terminate;
-  const answer = typeof body.answer === "string" ? body.answer : null;
   const steps = stepsFrom(Array.isArray(body.transcript) ? body.transcript : []);
+  const sql = statementOf(body);
+  const facts = factsFrom([executed.statementRows ?? [], ...steps.map((s) => s.rows)]);
   const result: RetrievalAgentResult = {
     question,
-    answer: terminate === TERMINATE_ANSWERED ? answer : null,
-    hits: hitsFrom(steps),
+    ...(sql !== undefined ? { sql } : {}),
+    ...facts,
     queries: steps.map((s) => s.query),
     turns: numberField(body.turns),
   };
-  if (result.answer === null) result.error = noAnswerMessage(terminate, body.error);
+  const problems: string[] = [];
+  if (terminate !== TERMINATE_ANSWERED) problems.push(noAnswerMessage(terminate, body.error));
+  if (executed.statementError) problems.push(executed.statementError);
+  if (problems.length > 0) result.error = `${problems.join("; ")} - ${NO_ANSWER_HINT}`;
   const spend: RetrievalAgentSpend = {
     promptTokens: numberField(body.prompt_tokens),
     completionTokens: numberField(body.completion_tokens),
@@ -188,58 +244,75 @@ export function retrievalAgentRunFrom(question: string, response: unknown): Retr
   return { result, spend };
 }
 
-/** Why there is no answer, for the outer agent: the platform's reason for the
- * way the loop ended, the endpoint's own words when it failed, and the
- * fallback. An `answered` loop with no text is reported as such rather than
- * invented. */
+/** Why the loop did not finish: the platform's reason for the way it ended
+ * and, when the endpoint itself failed, its words. */
 function noAnswerMessage(terminate: string, detail: unknown): string {
-  const reason =
-    terminate === TERMINATE_ANSWERED
-      ? "the retrieval agent reported an answer but sent none"
-      : (NO_ANSWER_REASONS[terminate] ?? `the retrieval agent ended with "${terminate}" and no answer`);
+  const reason = NO_ANSWER_REASONS[terminate] ?? `the retrieval agent ended with "${terminate}"`;
   const words = typeof detail === "string" && detail.length > 0 ? `: ${detail}` : "";
-  return `${reason}${words} - ${FALLBACK_HINT}`;
+  return `${reason}${words}`;
 }
 
-/** The hits in a transcript: every row of every tool result that names a
- * place in the code (path + start_line + end_line; a row without them yields
- * none), in transcript order, one per path:start_line, the first MAX_HITS. */
-export function hitsFrom(steps: TranscriptStep[]): RetrievalAgentHit[] {
+/** The facts in row lists, in order: every row that names a place in the
+ * code (path + start_line + end_line) becomes a hit with its content, one per
+ * path:start_line; every other row with a scalar column becomes an aggregate
+ * row, one per distinct set of scalar cells. Both lists are capped, and the
+ * totals count what was seen. */
+export function factsFrom(rowLists: unknown[][]): Facts {
   const hits: RetrievalAgentHit[] = [];
-  const seen = new Set<string>();
-  for (const step of steps) {
-    for (const raw of step.rows) {
+  const rows: RowRecord[] = [];
+  const seenHits = new Set<string>();
+  const seenRows = new Set<string>();
+  for (const list of rowLists) {
+    for (const raw of list) {
       const hit = hitFromRow(raw);
-      if (!hit) continue;
-      const key = `${hit.path}:${hit.startLine}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      hits.push(hit);
-      if (hits.length === MAX_HITS) return hits;
+      if (hit) {
+        const key = `${hit.path}:${hit.startLine}`;
+        if (seenHits.has(key)) continue;
+        seenHits.add(key);
+        if (hits.length < MAX_HITS) hits.push(hit);
+        continue;
+      }
+      const row = scalarRow(raw);
+      if (row === null) continue;
+      const key = JSON.stringify(row);
+      if (seenRows.has(key)) continue;
+      seenRows.add(key);
+      if (rows.length < MAX_ROWS) rows.push(row);
     }
   }
-  return hits;
+  return { hits, rows, hitsTotal: seenHits.size, rowsTotal: seenRows.size };
 }
 
 /** A row as a hit, or null when it does not name a place in the code. The
- * text is the row's content when it has one (its first line), else the
- * row's other scalar columns rendered `name=value` - an aggregate row's
- * count or sum is what the agent found there. */
+ * content is cut at HIT_CONTENT_CHARS like a search hit's; a row with the
+ * place columns and no content is a hit with empty content (the citation is
+ * the fact). */
 function hitFromRow(raw: unknown): RetrievalAgentHit | null {
   const row = asRecord(raw);
   const path = row[COL_PATH];
   const startLine = row[COL_START_LINE];
   const endLine = row[COL_END_LINE];
   if (typeof path !== "string" || !isFiniteNumber(startLine) || !isFiniteNumber(endLine)) return null;
-  const content = row[COL_CONTENT];
-  const text =
-    typeof content === "string"
-      ? content.split("\n", 1)[0] ?? ""
-      : Object.entries(row)
-          .filter(([name, value]) => ![COL_PATH, COL_START_LINE, COL_END_LINE, COL_CONTENT].includes(name) && isScalar(value))
-          .map(([name, value]) => `${name}=${String(value)}`)
-          .join(COLUMN_SEPARATOR);
-  return { path, startLine, endLine, text: text.slice(0, HIT_TEXT_CHARS) };
+  const content = typeof row[COL_CONTENT] === "string" ? (row[COL_CONTENT] as string).slice(0, HIT_CONTENT_CHARS) : "";
+  const hit: RetrievalAgentHit = { path, startLine, endLine, content };
+  if (typeof row[COL_SYMBOL] === "string" && row[COL_SYMBOL] !== "") hit.symbol = row[COL_SYMBOL] as string;
+  if (typeof row[COL_LANG] === "string" && row[COL_LANG] !== "") hit.lang = row[COL_LANG] as string;
+  return hit;
+}
+
+/** The scalar cells of a row (vectors and nested objects dropped), or null
+ * when nothing scalar is left. */
+function scalarRow(raw: unknown): RowRecord | null {
+  const row = asRecord(raw);
+  const out: RowRecord = {};
+  let any = false;
+  for (const [name, value] of Object.entries(row)) {
+    if (isScalar(value) || value === null) {
+      out[name] = value;
+      any = true;
+    }
+  }
+  return any ? out : null;
 }
 
 /** The tool calls in a transcript: every tool call of every assistant message
@@ -286,7 +359,7 @@ function parseArguments(raw: unknown): Record<string, unknown> {
 
 /** The rows of one tool result. The platform renders a result as
  * `{"rows": [...], "note"?}` and a failed call as `{"error": "..."}`; a
- * body of any other shape has no rows a hit could be read from. */
+ * body of any other shape has no rows a fact could be read from. */
 function rowsOf(content: string): unknown[] {
   try {
     const parsed = asRecord(JSON.parse(content));
@@ -303,7 +376,7 @@ function asRecord(value: unknown): Record<string, unknown> {
 
 const isFiniteNumber = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
 
-/** A value that renders as itself in a hit's text: a string, number or boolean. */
+/** A value that is a fact on its own: a string, number or boolean. */
 const isScalar = (value: unknown): value is string | number | boolean =>
   typeof value === "string" || typeof value === "number" || typeof value === "boolean";
 

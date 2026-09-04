@@ -42,9 +42,9 @@ import {
   hostedLabel,
   autoIndexEnabled as autoIndexSetting,
   autoSyncEnabled as autoSyncSetting,
-  retrievalAgentEnabled,
-  retrievalAgentMaxTurns,
-  retrievalAgentMaxWallSecs,
+  subagentEnabled,
+  subagentMaxTurns,
+  subagentMaxWallSecs,
 } from "../core/config.js";
 import { runRetrievalAgent } from "../core/retrieval-agent.js";
 import { readManifest, type Manifest } from "../core/manifest.js";
@@ -56,7 +56,7 @@ import {
   findEntry,
   searchEntry,
   sqlEntry,
-  retrievalAgentEntry,
+  subagentEntry,
   withPlatform,
   formatReceipt,
   recordUsage,
@@ -228,11 +228,11 @@ export async function serveMcp(rootPath?: string): Promise<void> {
       (stats.vectors === "building" ? " and vectors are backfilling in the background" : ""),
   });
 
-  // The hosted `retrieval_agent` tool (--retrieval-agent, default off). Its
-  // routing line joins the instructions only when the tool is registered: the
-  // instructions are prompt text on every turn, and a line for a tool that is
-  // not there would cost tokens and steer toward nothing.
-  const retrievalAgent = retrievalAgentEnabled();
+  // The hosted `subagent` tool (--subagent, default off). Its routing line
+  // joins the instructions only when the tool is registered: the instructions
+  // are prompt text on every turn, and a line for a tool that is not there
+  // would cost tokens and steer toward nothing.
+  const subagent = subagentEnabled();
 
   const server = new McpServer(
     { name: "code-context", version: "0.1.2" },
@@ -242,8 +242,8 @@ export async function serveMcp(rootPath?: string): Promise<void> {
         "- find - every line containing an exact string, where you would grep.\n" +
         "- search - how does X work, where is Y handled, code by meaning.\n" +
         "- sql - counts, rankings, and aggregates across the repo.\n" +
-        (retrievalAgent
-          ? "- retrieval_agent - one question answered by the platform's agent with path:line evidence: counts, rankings, which files, where something is handled.\n"
+        (subagent
+          ? "- subagent - a question or task in plain language; returns the rows it retrieved (facts with path:line and the code), not an answer: compose from them. Spawn several in parallel for independent questions.\n"
           : "") +
         "Hits carry the code: when a hit answers the question, answer from it and cite path:line " +
         "without re-reading the file or re-checking with grep; Read a file only for a hit marked " +
@@ -461,23 +461,30 @@ export async function serveMcp(rootPath?: string): Promise<void> {
     },
   );
 
-  if (retrievalAgent) {
+  if (subagent) {
     server.registerTool(
-      "retrieval_agent",
+      "subagent",
       {
-        title: "Retrieval agent over the hosted index",
+        title: "Retrieval subagent over the hosted index",
         description:
-          "Hands one question about the code to the platform's retrieval agent and returns the answer " +
-          "with the places it found, cited path:line. Use it for questions that would take several " +
-          "find, search or sql calls: counts, which files or symbols, rankings, where something is " +
-          "handled. Not for reading or explaining a file you already know: Read it. The result " +
-          "includes a 'usage' field, a one-line receipt of what the call cost.",
+          "A read-only retrieval subagent over the repository index. Give it a question or task in " +
+          "plain language; it searches the index itself and returns the facts it retrieved - rows with " +
+          "exact path, start_line, end_line and the code, in the shape of search hits, plus aggregate " +
+          "rows (counts, rankings) and the SQL whose rows answer the question - never a summary. Use it " +
+          "for how does X work, where is Y handled, which files or symbols, counts and rankings; spawn " +
+          "several in parallel for independent questions instead of exploring the code yourself. For " +
+          "every occurrence of an exact string use find; for a file you already know, Read it. Answer " +
+          "from the rows and cite path:line. The result includes a 'usage' field, a one-line receipt of " +
+          "what the call cost.",
         inputSchema: {
-          question: z.string().min(1).describe("The question, in plain language, about the indexed code."),
+          question: z.string().min(1).describe("The question or task, in plain language, about the indexed code."),
           answer: z
-            .enum(["text", "scalar", "sql"])
-            .default("text")
-            .describe("The answer's shape: plain text (default), a single scalar, or one SQL statement whose rows answer it."),
+            .enum(["sql", "text", "scalar"])
+            .default("sql")
+            .describe(
+              "How the agent closes: sql (default) submits one statement whose rows answer the question and those rows lead the result; " +
+                "text or scalar let it reason toward a written answer, which is not returned - the rows it retrieved are.",
+            ),
           path: z
             .string()
             .optional()
@@ -496,7 +503,7 @@ export async function serveMcp(rootPath?: string): Promise<void> {
         }
         // Only the hosted default root has a retrieval agent behind it; a
         // local repo (any `path` other than the default root) does not.
-        if (!ctx.hosted) return fail("retrieval_agent needs a hosted index: serve with --db");
+        if (!ctx.hosted) return fail("subagent needs a hosted index: serve with --db");
         // The same readiness check the other tools make: without a chunks
         // table the platform would spend the whole cold-start budget on
         // "no table described yet" before saying anything useful.
@@ -510,15 +517,15 @@ export async function serveMcp(rootPath?: string): Promise<void> {
         try {
           const t0 = performance.now();
           // The spend (turns, tokens) goes to the ledger and the receipt only;
-          // the result the model sees is answer, hits, queries.
+          // the result the model sees is the facts: sql, hits, rows, queries.
           const { result, spend } = await runRetrievalAgent(
             ctx.hosted,
             { question, answer },
-            { maxTurns: retrievalAgentMaxTurns(), maxWallSecs: retrievalAgentMaxWallSecs() },
+            { maxTurns: subagentMaxTurns(), maxWallSecs: subagentMaxWallSecs() },
           );
           let usage: string | undefined;
           if (receiptOn) {
-            const entry = withPlatform(retrievalAgentEntry(result, spend), ctx);
+            const entry = withPlatform(subagentEntry(result, spend), ctx);
             recordUsage(ctx.dir, entry);
             usage = formatReceipt(entry, session);
           }
@@ -528,7 +535,7 @@ export async function serveMcp(rootPath?: string): Promise<void> {
             ...(usage ? { usage } : {}),
           });
         } catch (err) {
-          return fail(`retrieval_agent failed: ${(err as Error).message}`);
+          return fail(`subagent failed: ${(err as Error).message}`);
         }
       },
     );

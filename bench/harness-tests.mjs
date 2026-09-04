@@ -53,12 +53,13 @@ function withHostedEnv(fn, extra = {}) {
 
 // --- lane table ---------------------------------------------------------------
 
-test("the lane table names exactly the nine lanes and an unknown lane throws", () => {
+test("the lane table names exactly the ten lanes and an unknown lane throws", () => {
   assert.deepEqual(Object.keys(LANES).sort(), [
     "agent-only",
     "combo",
     "cx",
     "files",
+    "find-subagent",
     "hosted",
     "hosted-agent",
     "index-explore",
@@ -100,21 +101,33 @@ test("combo and hosted share the built-in tools; hosted configures the server by
   }, { CX_BENCH_EMBED_PROVIDER: undefined });
 });
 
-test("CX_BENCH_EMBED_PROVIDER passes through as --embed-provider; hosted-agent adds --retrieval-agent", () => {
+test("CX_BENCH_EMBED_PROVIDER passes through as --embed-provider; hosted-agent adds --subagent", () => {
   withHostedEnv(() => {
     const args = laneOptions("hosted-agent", "/r", "/r/.infino").mcpServers["code-context"].args;
-    assert.deepEqual(args.slice(1), ["mcp", "--db", FAKE_URL, "--api-key-file", FAKE_KEY_FILE, "--embed-provider", "local", "--retrieval-agent"]);
+    assert.deepEqual(args.slice(1), ["mcp", "--db", FAKE_URL, "--api-key-file", FAKE_KEY_FILE, "--embed-provider", "local", "--subagent"]);
   }, { CX_BENCH_EMBED_PROVIDER: "local" });
 });
 
-test("agent-only keeps Read and retrieval_agent and hides the three retrieval tools", () => {
+test("agent-only keeps Read and subagent and hides the three retrieval tools", () => {
   withHostedEnv(() => {
     const opts = laneOptions("agent-only", "/r", "/r/.infino");
     assert.deepEqual(opts.tools, ["Read"]);
     assert.deepEqual(opts.disallowedTools, ["mcp__code-context__find", "mcp__code-context__search", "mcp__code-context__sql"]);
-    assert.equal(opts.mcpServers["code-context"].args.includes("--retrieval-agent"), true);
+    assert.equal(opts.mcpServers["code-context"].args.includes("--subagent"), true);
     assert.equal(laneOptions("hosted-agent", "/r", "/r/.infino").disallowedTools, undefined);
     assert.equal(laneOptions("combo", "/r", "/r/.infino").disallowedTools, undefined);
+  });
+});
+
+test("find-subagent keeps the stock tools, find and subagent, and hides search and sql", () => {
+  withHostedEnv(() => {
+    const opts = laneOptions("find-subagent", "/r", "/r/.infino");
+    assert.deepEqual(opts.tools, ["Glob", "Grep", "Read", "LS", "Bash"]);
+    assert.deepEqual(opts.disallowedTools, ["mcp__code-context__search", "mcp__code-context__sql"]);
+    assert.equal(opts.agents, undefined);
+    const args = opts.mcpServers["code-context"].args;
+    assert.equal(args.at(-1), "--subagent");
+    assert.equal(args.includes("--db"), true);
   });
 });
 
@@ -133,10 +146,10 @@ test("the explore lanes add the Agent tool and override Explore; stock keeps the
 
   withHostedEnv(() => {
     const platform = laneOptions("platform-explore", "/r", "/r/.infino");
-    assert.deepEqual(platform.agents.Explore.tools, ["mcp__code-context__retrieval_agent", "Read"]);
+    assert.deepEqual(platform.agents.Explore.tools, ["mcp__code-context__subagent", "Read"]);
     assert.equal(platform.agents.Explore.description, index.agents.Explore.description);
     const args = platform.mcpServers["code-context"].args;
-    assert.deepEqual(args.slice(-3), ["--retrieval-agent", "--agent-max-turns", "4"]);
+    assert.deepEqual(args.slice(-3), ["--subagent", "--subagent-max-turns", "4"]);
   }, { CX_BENCH_AGENT_MAX_TURNS: "4" });
   assert.equal(laneOptions("combo", "/r", "/r/.infino").agents, undefined);
 });
@@ -154,17 +167,17 @@ test("foldToolMessage counts calls made inside subagents and records the subagen
   assert.equal(acc.toolDetails[3].inSubagent, undefined);
 });
 
-test("CX_BENCH_AGENT_MAX_TURNS passes through as --agent-max-turns on the agent lanes only", () => {
+test("CX_BENCH_AGENT_MAX_TURNS passes through as --subagent-max-turns on the agent lanes only", () => {
   withHostedEnv(() => {
     const only = laneOptions("agent-only", "/r", "/r/.infino").mcpServers["code-context"].args;
-    assert.deepEqual(only.slice(-3), ["--retrieval-agent", "--agent-max-turns", "4"]);
+    assert.deepEqual(only.slice(-3), ["--subagent", "--subagent-max-turns", "4"]);
     const withAgent = laneOptions("hosted-agent", "/r", "/r/.infino").mcpServers["code-context"].args;
-    assert.deepEqual(withAgent.slice(-3), ["--retrieval-agent", "--agent-max-turns", "4"]);
-    assert.equal(laneOptions("hosted", "/r", "/r/.infino").mcpServers["code-context"].args.includes("--agent-max-turns"), false);
+    assert.deepEqual(withAgent.slice(-3), ["--subagent", "--subagent-max-turns", "4"]);
+    assert.equal(laneOptions("hosted", "/r", "/r/.infino").mcpServers["code-context"].args.includes("--subagent-max-turns"), false);
   }, { CX_BENCH_AGENT_MAX_TURNS: "4" });
   withHostedEnv(() => {
     const only = laneOptions("agent-only", "/r", "/r/.infino").mcpServers["code-context"].args;
-    assert.equal(only.at(-1), "--retrieval-agent");
+    assert.equal(only.at(-1), "--subagent");
   }, { CX_BENCH_AGENT_MAX_TURNS: undefined });
 });
 

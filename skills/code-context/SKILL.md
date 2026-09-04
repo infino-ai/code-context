@@ -114,16 +114,19 @@ GROUP BY path ORDER BY lines DESC LIMIT 15
   `cx index --db <url> --api-key-file <path>` from a shell is the explicit
   load, and it is the user's step, not yours.
 
-## retrieval_agent (hosted index only, when present)
+## subagent (hosted index only, when present)
 
-When the server was started with `--retrieval-agent` a fourth tool is
-registered: `retrieval_agent` hands one question to the platform and returns
-`answer` and `hits` (`path`, `startLine`-`endLine`, a text snippet: the places
-it found, in the shape of a `search` result). Use it for a question that
-would take several `find`, `search`, or `sql` calls of your own - counts,
-which files or symbols, rankings, where something is handled. Not for reading
-or explaining a file you already know: Read it. Like the other tools, its
-result carries a one-line `usage` receipt.
+When the server was started with `--subagent` a fourth tool is registered:
+`subagent` hands a question or task in plain language to the platform's
+retrieval agent and returns the facts it retrieved, never a summary: `hits`
+(`path`, `startLine`-`endLine`, `content` - the shape of a `search` hit),
+`rows` (aggregates: a count or rank per path), and `sql` (the statement whose
+rows answer the question, when there is one). Use it for how does X work,
+where is Y handled, which files or symbols, counts and rankings; spawn
+several in parallel for independent questions instead of exploring the code
+yourself. For every occurrence of an exact string use `find`; for a file you
+already know, Read it. Answer from the rows and cite `path:line`. Like the
+other tools, its result carries a one-line `usage` receipt.
 
 ## Reading results honestly
 

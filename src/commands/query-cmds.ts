@@ -300,9 +300,14 @@ export async function usageCmd(opts: UsageCmdOptions): Promise<void> {
       );
       const locs = hits.slice(0, 5).map((h) => `${h.path}:${h.startLine}`);
       if (locs.length) console.log(green(`            ${locs.join("  ")}${hits.length > 5 ? dim(`  (+${hits.length - 5} more)`) : ""}`));
-    } else if (e.tool === "retrieval_agent") {
-      // A retrieval_agent call has no rows of its own: what it cost is the inner agent's turns on the platform.
-      console.log(`${dim(clock)}  ${bold(tool)}  ${q}  ${dim(`-> ${e.agentTurns ?? 0} turns | ~${fmtTokens(e.returnedTokens)} tok`)}`);
+    } else if (e.tool === "subagent") {
+      // What the platform's agent retrieved, and what it spent getting there.
+      const hits = e.hits ?? [];
+      console.log(
+        `${dim(clock)}  ${bold(tool)}  ${q}  ${dim(`-> ${hits.length} hits / ${e.rows ?? 0} rows | ${e.agentTurns ?? 0} turns | ~${fmtTokens(e.returnedTokens)} tok`)}`,
+      );
+      const locs = hits.slice(0, 5).map((h) => `${h.path}:${h.startLine}-${h.endLine}`);
+      if (locs.length) console.log(green(`            ${locs.join("  ")}${hits.length > 5 ? dim(`  (+${hits.length - 5} more)`) : ""}`));
     } else {
       console.log(
         `${dim(clock)}  ${bold(tool)}  ${q}  ${dim(`-> ${e.rows ?? 0} rows | ~${fmtTokens(e.returnedTokens)} tok`)}`,
