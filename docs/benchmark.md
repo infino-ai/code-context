@@ -293,7 +293,7 @@ and V2's 31, at the lowest tokens of the three (191k against 232k and
 302k). Telling the model what the result reports is what steers; asking it
 to relay the receipt was never the active part.
 
-### Cost: a tenth off, reproducibly
+### Cost: ten percent fewer tokens, reproducibly
 
 Sums over questions of the per-question median; two passes each of V0 and V3:
 
