@@ -9,7 +9,9 @@
 
 import { appendFileSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { jsonify, type FindResult, type SearchResult } from "./searcher.js";
+import { jsonify, hostedTelemetry, type FindResult, type SearchResult } from "./searcher.js";
+import type { RetrievalAgentResult, RetrievalAgentSpend } from "./retrieval-agent.js";
+import type { HostedDb } from "./hosted.js";
 
 /** Rough tokens-per-char - the standard heuristic for English + code. Kept
  * deliberately simple: usage reports `~` figures, not a billed count. */
@@ -38,7 +40,7 @@ export const receiptEnabled = (): boolean =>
  * it doesn't duplicate the repo. */
 export interface UsageEntry {
   ts: string;
-  tool: "find" | "search" | "sql";
+  tool: "find" | "search" | "sql" | "retrieval_agent";
   query: string;
   returnedTokens: number;
   /** search only: whole-file size of the distinct files the hits came from. */
@@ -53,6 +55,21 @@ export interface UsageEntry {
   rows?: number;
   /** sql only: a truncated preview of the returned rows (the answer itself). */
   rowsPreview?: string;
+  /** retrieval_agent only: what the platform's agent spent on the question -
+   * its model turns and tokens, the model that answered, the escalation rung
+   * it answered from and the table card tier it read. The platform bills
+   * these; the receipt shows them, the tool result does not. */
+  agentTurns?: number;
+  agentPromptTokens?: number;
+  agentCompletionTokens?: number;
+  agentModel?: string;
+  agentRung?: number;
+  agentCardTier?: string;
+  /** Hosted mode only: what the platform call behind this query cost - the
+   * round trip of the answering request and the tokens the platform metered
+   * (from its response headers, when present). Lives in the ledger, never in
+   * the tool result, so the model sees the same shape in both modes. */
+  platform?: { rttMs: number; readTokens?: number; writeTokens?: number };
 }
 
 /** Best-effort sum of the on-disk size (as tokens) of the distinct files the
@@ -115,6 +132,37 @@ export function sqlEntry(query: string, rows: Array<Record<string, unknown>>): U
   };
 }
 
+/** A retrieval_agent call returns an answer and the hits behind it, so what
+ * it cost the outer agent is those two serialized; the loop's own spend
+ * (turns, tokens, model, rung, card tier) is the platform's meter and rides
+ * beside it in the ledger. */
+export function retrievalAgentEntry(result: RetrievalAgentResult, spend: RetrievalAgentSpend): UsageEntry {
+  return {
+    ts: new Date().toISOString(),
+    tool: "retrieval_agent",
+    query: result.question,
+    returnedTokens: estTokens(jsonify({ answer: result.answer, hits: result.hits })),
+    agentTurns: result.turns,
+    agentPromptTokens: spend.promptTokens,
+    agentCompletionTokens: spend.completionTokens,
+    agentModel: result.model,
+    agentRung: spend.rung,
+    agentCardTier: spend.cardTier,
+  };
+}
+
+/** Attach the platform telemetry of the hosted call that answered this entry's
+ * query (its round trip and the tokens the platform metered) - read right
+ * after the query, while the client's last call is that query's. A no-op for a
+ * local handle. Ledger-only: the receipt and the tool result the model sees
+ * are the same in both modes. Shared by the MCP server and the CLI so the two
+ * ledgers record the same shape. */
+export function withPlatform(entry: UsageEntry, source: { hosted?: HostedDb }): UsageEntry {
+  const platform = hostedTelemetry(source);
+  if (platform) entry.platform = platform;
+  return entry;
+}
+
 // --- the one-line receipt ----------------------------------------------------
 
 /** 1203 -> "1.2k", 300 -> "300". */
@@ -142,6 +190,13 @@ export function formatReceipt(entry: UsageEntry, session?: SessionUsage): string
     // The repo-wide count, not just the lines returned: a cut result still
     // tells the reader how many matches exist.
     parts.push(`returned ~${fmtTokens(entry.returnedTokens)} tokens | ${plural(entry.matches ?? hits.length, "match", "matches")} / ${plural(files, "file", "files")}`);
+  } else if (entry.tool === "retrieval_agent") {
+    // The inner agent's spend beside what came back: the platform bills the
+    // turns and tokens, so the caller sees what one question cost there.
+    parts.push(
+      `returned ~${fmtTokens(entry.returnedTokens)} tokens | ${plural(entry.agentTurns ?? 0, "turn", "turns")} | ` +
+        `${fmtTokens(entry.agentPromptTokens ?? 0)} prompt / ${fmtTokens(entry.agentCompletionTokens ?? 0)} completion tokens on ${entry.agentModel ?? "?"}`,
+    );
   } else {
     parts.push(`returned ~${fmtTokens(entry.returnedTokens)} tokens | ${plural(entry.rows ?? 0, "row", "rows")}`);
   }

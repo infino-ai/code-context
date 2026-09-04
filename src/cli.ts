@@ -5,9 +5,19 @@
 // code-context / cx - local code search for AI coding agents.
 
 import { Command } from "commander";
-import { indexCmd } from "./commands/index-cmd.js";
+import { indexCmd, type IndexCmdOptions } from "./commands/index-cmd.js";
 import { findCmd, searchCmd, sqlCmd, statusCmd, usageCmd } from "./commands/query-cmds.js";
-import { DEFAULT_SEARCH_K, DEFAULT_FIND_LIMIT, MAX_FIND_LIMIT } from "./core/config.js";
+import { DEFAULT_SEARCH_K, DEFAULT_FIND_LIMIT, MAX_FIND_LIMIT, DB_URL_ENV, API_KEY_ENV } from "./core/config.js";
+
+/** Help text shared by every command that takes `--db`. */
+const DB_OPTION_HELP = `hosted engine target, https://host/<database> (same as ${DB_URL_ENV}; the key comes from ${API_KEY_ENV})`;
+
+/** `--db <url>` is the flag form of CX_DB_URL: it sets that very variable, so
+ * every layer below reads one source of truth and the flag and the variable
+ * cannot disagree. */
+function applyDbOption(db?: string): void {
+  if (db !== undefined) process.env[DB_URL_ENV] = db;
+}
 
 const program = new Command();
 
@@ -52,8 +62,12 @@ program
   .option("-w, --watch", "keep watching the tree and sync on changes")
   .option("--no-embed", "keyword index only - skip the vector stage")
   .option("--max-files <n>", "cap on files indexed (default 20000)")
+  .option("--db <url>", DB_OPTION_HELP)
   .option("--json", "machine-readable stats")
-  .action(indexCmd);
+  .action(async (path: string | undefined, opts: IndexCmdOptions & { db?: string }) => {
+    applyDbOption(opts.db);
+    await indexCmd(path, opts);
+  });
 
 program
   .command("search")
@@ -101,7 +115,9 @@ program
   .command("mcp")
   .description("serve the MCP tools (find / search / sql) over stdio")
   .option("-C, --path <dir>", "repo root (default: current directory)")
-  .action(async (opts: { path?: string }) => {
+  .option("--db <url>", DB_OPTION_HELP)
+  .action(async (opts: { path?: string; db?: string }) => {
+    applyDbOption(opts.db);
     const { serveMcp } = await import("./mcp/server.js");
     await serveMcp(opts.path);
   });

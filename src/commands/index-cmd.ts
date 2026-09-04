@@ -6,12 +6,18 @@
 // otherwise or with --full. --watch keeps syncing on file changes. The
 // staged story prints as it happens: keyword search goes live first,
 // vectors follow.
+//
+// With --db <url> (or CX_DB_URL) the chunks table is loaded into a platform
+// database instead: the same walk and sidecar, one pass over the network, and
+// the platform-side cost (append calls, write tokens) in the printed and JSON
+// stats. This command is the only path that ever drops and reloads a hosted
+// table - see the indexer's hosted loader.
 
 import { watch } from "node:fs";
-import { openForIndexing } from "../core/context.js";
-import { indexRepoStaged, syncRepo, type IndexOptions, type SyncResult } from "../core/indexer.js";
+import { openForIndexingAsync } from "../core/context.js";
+import { hostedAnalyzer, indexRepoStaged, syncRepo, type IndexOptions, type IndexStats, type SyncResult } from "../core/indexer.js";
 import { createEmbedder, createIndexingEmbedder, embedderInfo } from "../core/embedder.js";
-import { DEFAULT_CAPS, INDEX_DIR_NAME } from "../core/config.js";
+import { DEFAULT_CAPS, INDEX_DIR_NAME, embedProvider } from "../core/config.js";
 import { bold, dim, green, yellow, fmtMs, fmtCount, progressLine, progressDone } from "../core/output.js";
 
 export interface IndexCmdOptions {
@@ -29,11 +35,24 @@ const PHASES: Record<string, string> = {
   "commit-text": "committing keyword index",
   embed: "embedding chunks",
   "commit-vectors": "committing vector index",
+  load: "loading the hosted table",
 };
 
+/** Debounce window for --watch: file events settle before a sync starts. */
+const WATCH_DEBOUNCE_MS = 2000;
+
+/** Languages listed in the summary line. */
+const LANGUAGES_SHOWN = 8;
+
 export async function indexCmd(path: string | undefined, opts: IndexCmdOptions): Promise<void> {
-  const { root, dir, db } = openForIndexing(path);
+  const target = await openForIndexingAsync(path);
+  const { root, dir, db, hosted } = target;
+  // Null under CX_EMBED_PROVIDER=platform (the platform embeds); undefined
+  // with --no-embed (no vectors at all). The indexer's `embedProvider` tells
+  // those two apart for a hosted load, so it is only set when vectors are on.
   const embedder = opts.embed === false ? undefined : createEmbedder();
+  const provider = hosted && opts.embed !== false ? embedProvider() : undefined;
+  const analyzer = hosted ? hostedAnalyzer() : undefined;
   const caps = {
     ...DEFAULT_CAPS,
     ...(opts.maxFiles ? { maxFiles: Number(opts.maxFiles) } : {}),
@@ -43,8 +62,11 @@ export async function indexCmd(path: string | undefined, opts: IndexCmdOptions):
   const baseOpts: IndexOptions = {
     root,
     db,
+    hosted,
     indexDirPath: dir,
     embedder,
+    embedProvider: provider,
+    analyzer,
     caps,
     onPhase: (p) => {
       phase = p;
@@ -59,7 +81,12 @@ export async function indexCmd(path: string | undefined, opts: IndexCmdOptions):
 
   if (!opts.json) {
     console.log(`${bold("code-context")} - indexing ${root}`);
-    console.log(dim(`index: ${dir} · embedder: ${embedder ? embedderInfo() : "off (--no-embed)"}`));
+    const embedding = opts.embed === false ? "off (--no-embed)" : embedderInfo();
+    console.log(
+      hosted
+        ? dim(`table: ${target.target} · sidecar: ${dir} · analyzer: ${analyzer} · embedder: ${embedding}`)
+        : dim(`index: ${dir} · embedder: ${embedding}`),
+    );
   }
 
   const once = async (): Promise<void> => {
@@ -85,9 +112,13 @@ export async function indexCmd(path: string | undefined, opts: IndexCmdOptions):
     if (!opts.json) {
       progressDone();
       const t = run.text;
+      // A hosted load is one pass, so `text` is already the finished table;
+      // a local build reports keyword-live here and vectors below.
       console.log(
         green("✓") +
-          ` keyword search live - ${fmtCount(t.chunks)} chunks from ${fmtCount(t.files)} files in ${fmtMs(t.indexMs)}`,
+          (hosted
+            ? ` loaded ${fmtCount(t.chunks)} chunks from ${fmtCount(t.files)} files into ${target.target} in ${fmtMs(t.indexMs)}${hostedCost(t)}`
+            : ` keyword search live - ${fmtCount(t.chunks)} chunks from ${fmtCount(t.files)} files in ${fmtMs(t.indexMs)}`),
       );
       if (t.truncatedFiles) {
         console.log(yellow(`! ${fmtCount(t.truncatedFiles)} files over the ${fmtCount(caps.maxFiles)}-file cap were skipped (raise with --max-files)`));
@@ -101,13 +132,18 @@ export async function indexCmd(path: string | undefined, opts: IndexCmdOptions):
     }
     progressDone();
     if (final.vectors === "ready") {
-      console.log(green("✓") + ` semantic search ready - vectors built in ${fmtMs(final.embedMs ?? 0)}`);
+      console.log(
+        green("✓") +
+          (final.embedMs === undefined
+            ? " semantic search ready - the platform embeds server-side"
+            : ` semantic search ready - vectors built in ${fmtMs(final.embedMs)}`),
+      );
     } else if (final.embedError) {
       console.log(yellow(`! vector stage failed (${final.embedError}) - keyword search stays live; re-run \`cx index\` to retry`));
     }
     const langs = Object.entries(final.languages)
       .sort((a, b) => b[1] - a[1])
-      .slice(0, 8)
+      .slice(0, LANGUAGES_SHOWN)
       .map(([lang, n]) => `${lang} ${fmtCount(n)}`)
       .join(" · ");
     if (langs) console.log(dim(`chunks by language: ${langs}`));
@@ -135,7 +171,7 @@ export async function indexCmd(path: string | undefined, opts: IndexCmdOptions):
       } finally {
         running = false;
       }
-    }, 2000);
+    }, WATCH_DEBOUNCE_MS);
   };
   watch(root, { recursive: true }, (_event, filename) => {
     const name = String(filename ?? "");
@@ -143,6 +179,15 @@ export async function indexCmd(path: string | undefined, opts: IndexCmdOptions):
     kick();
   });
   await new Promise(() => {}); // run until interrupted
+}
+
+/** ` (N appends, T write tokens)` for a hosted result, empty for a local one.
+ * Tokens print only when the platform metered them. */
+function hostedCost(stats: { hosted?: IndexStats["hosted"] }): string {
+  const h = stats.hosted;
+  if (!h) return "";
+  const appends = `${fmtCount(h.appendCalls)} append${h.appendCalls === 1 ? "" : "s"}`;
+  return dim(` (${appends}${h.writeTokens !== undefined ? `, ${h.writeTokens} write tokens` : ""})`);
 }
 
 function printSync(outcome: SyncResult, json?: boolean): void {
@@ -162,6 +207,7 @@ function printSync(outcome: SyncResult, json?: boolean): void {
   console.log(
     green("✓") +
       ` synced in ${fmtMs(outcome.tookMs)} - ${parts.join(", ")} ` +
-      dim(`(+${fmtCount(outcome.chunksAdded)}/-${fmtCount(outcome.chunksRemoved)} chunks, ${fmtCount(outcome.chunks)} total${outcome.vectors === "ready" ? ", vectors current" : ""})`),
+      dim(`(+${fmtCount(outcome.chunksAdded)}/-${fmtCount(outcome.chunksRemoved)} chunks, ${fmtCount(outcome.chunks)} total${outcome.vectors === "ready" ? ", vectors current" : ""})`) +
+      hostedCost(outcome),
   );
 }

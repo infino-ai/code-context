@@ -2,8 +2,13 @@
 // SPDX-FileCopyrightText: Copyright The Infino Authors
 //
 // `cx find` / `cx search` / `cx sql` / `cx status` / `cx usage` - the query commands.
+//
+// Every query command opens the index in either mode (openIndexAsync): the
+// local catalog, or the hosted chunks table when CX_DB_URL is set. The printed
+// results are the same; in hosted mode the usage ledger additionally records
+// what the platform call behind each query cost.
 
-import { openIndex, NoIndexError } from "../core/context.js";
+import { openIndexAsync, NoIndexError, type IndexHandle } from "../core/context.js";
 import { indexDir, resolveRoot } from "../core/config.js";
 import { createEmbedder, embedderInfo } from "../core/embedder.js";
 import { find, search, runSql, jsonify } from "../core/searcher.js";
@@ -12,6 +17,7 @@ import {
   findEntry,
   searchEntry,
   sqlEntry,
+  withPlatform,
   formatReceipt,
   recordUsage,
   readUsage,
@@ -39,17 +45,17 @@ export interface FindCmdOptions {
 
 /** `cx find` - every line containing the exact text, printed `path:line: text`
  * the way `grep -n` does, so it drops into the same habits and pipelines. */
-export function findCmd(text: string, opts: FindCmdOptions): void {
+export async function findCmd(text: string, opts: FindCmdOptions): Promise<void> {
   try {
-    const handle = openIndex(opts.path);
+    const handle = await openIndexAsync(opts.path);
     // `find` rejects a non-integer, so `--limit abc` is an error rather than an
     // empty listing; the raw string is converted here and validated there.
-    const result = find(handle, text, {
+    const result = await find(handle, text, {
       ignoreCase: opts.ignoreCase,
       limit: opts.limit === undefined ? undefined : Number(opts.limit),
     });
     if (receiptEnabled()) {
-      const entry = findEntry(result);
+      const entry = withPlatform(findEntry(result), handle);
       recordUsage(handle.dir, entry);
       console.error(dim(formatReceipt(entry)));
     }
@@ -80,10 +86,10 @@ export interface SearchCmdOptions {
 
 export async function searchCmd(query: string, opts: SearchCmdOptions): Promise<void> {
   try {
-    const handle = openIndex(opts.path);
+    const handle = await openIndexAsync(opts.path);
     const result = await search(handle, createEmbedder(), query, Number(opts.k));
     if (receiptEnabled()) {
-      const entry = searchEntry(result, handle.root);
+      const entry = withPlatform(searchEntry(result, handle.root), handle);
       recordUsage(handle.dir, entry);
       console.error(dim(formatReceipt(entry)));
     }
@@ -113,7 +119,7 @@ export interface SqlCmdOptions {
 
 export async function sqlCmd(statement: string, opts: SqlCmdOptions): Promise<void> {
   try {
-    const handle = openIndex(opts.path);
+    const handle = await openIndexAsync(opts.path);
     const embeds: Record<string, string> = {};
     for (const pair of opts.embed ?? []) {
       const eq = pair.indexOf("=");
@@ -122,7 +128,7 @@ export async function sqlCmd(statement: string, opts: SqlCmdOptions): Promise<vo
     }
     const rows = await runSql(handle, createEmbedder(), statement, embeds);
     if (receiptEnabled()) {
-      const entry = sqlEntry(statement, rows);
+      const entry = withPlatform(sqlEntry(statement, rows), handle);
       recordUsage(handle.dir, entry);
       console.error(dim(formatReceipt(entry)));
     }
@@ -143,10 +149,10 @@ export interface StatusCmdOptions {
   path?: string;
 }
 
-export function statusCmd(opts: StatusCmdOptions): void {
-  let handle;
+export async function statusCmd(opts: StatusCmdOptions): Promise<void> {
+  let handle: IndexHandle;
   try {
-    handle = openIndex(opts.path);
+    handle = await openIndexAsync(opts.path);
   } catch (err) {
     if (opts.hook) return; // a hook in an unindexed repo stays silent
     die(err);
@@ -165,6 +171,7 @@ export function statusCmd(opts: StatusCmdOptions): void {
     return;
   }
   console.log(`${bold("code-context")} - ${handle.root}`);
+  if (handle.hosted) console.log(`  table      ${handle.target}`);
   console.log(`  chunks     ${fmtCount(m.chunks)} from ${fmtCount(m.files)} files`);
   if (m.truncatedFiles) {
     console.log(
@@ -173,7 +180,12 @@ export function statusCmd(opts: StatusCmdOptions): void {
       ),
     );
   }
-  console.log(`  vectors    ${m.vectors}${m.embedder ? dim(`  (${m.embedder.provider} ${m.embedder.model}, ${m.embedder.dim}d)`) : ""}`);
+  // A platform-embedded column has no client-known width, so the `d` suffix
+  // prints only for a recorded one.
+  const embedderNote = m.embedder
+    ? dim(`  (${m.embedder.provider} ${m.embedder.model}${m.embedder.dim !== undefined ? `, ${m.embedder.dim}d` : ""})`)
+    : "";
+  console.log(`  vectors    ${m.vectors}${embedderNote}`);
   console.log(`  indexed    ${fmtAge(m.indexedAt)}${dim(` (keyword ${fmtMs(m.indexMs)}${m.embedMs ? `, vectors ${fmtMs(m.embedMs)}` : ""})`)}`);
   const langs = Object.entries(m.languages)
     .sort((a, b) => b[1] - a[1])
@@ -288,6 +300,9 @@ export async function usageCmd(opts: UsageCmdOptions): Promise<void> {
       );
       const locs = hits.slice(0, 5).map((h) => `${h.path}:${h.startLine}`);
       if (locs.length) console.log(green(`            ${locs.join("  ")}${hits.length > 5 ? dim(`  (+${hits.length - 5} more)`) : ""}`));
+    } else if (e.tool === "retrieval_agent") {
+      // A retrieval_agent call has no rows of its own: what it cost is the inner agent's turns on the platform.
+      console.log(`${dim(clock)}  ${bold(tool)}  ${q}  ${dim(`-> ${e.agentTurns ?? 0} turns | ~${fmtTokens(e.returnedTokens)} tok | ${e.agentModel ?? "?"}`)}`);
     } else {
       console.log(
         `${dim(clock)}  ${bold(tool)}  ${q}  ${dim(`-> ${e.rows ?? 0} rows | ~${fmtTokens(e.returnedTokens)} tok`)}`,

@@ -22,6 +22,18 @@
 //   - Failures leave the previous index standing. Chunk-spill errors abort
 //     before any drop; embed errors surface before pass B's drop; sync embeds
 //     before it deletes a single row.
+//
+// HOSTED mode (`cx index --db <url>`) keeps the sidecar exactly as above -
+// spills, file state and manifest are local files - but the chunks table
+// lives on a platform database reached through HostedDb. A hosted load is a
+// single pass, not staged: the text is embedded first (a model failure then
+// costs nothing, the previous table still serves), and only then is the table
+// dropped, created with both indexes and filled in APPEND_BATCH waves. Two
+// drop → create → append round trips over the network would double the cost
+// of every load for a keyword-live window nobody is waiting on - the loader
+// is a person at a terminal, not a query. Same-process atomicity does not
+// apply: other processes read the shared table, and the platform makes each
+// append one commit.
 
 import {
   appendFileSync,
@@ -46,10 +58,19 @@ import { createInterface } from "node:readline";
 import { join, relative, sep } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { IndexSpec, type Connection, type OptimizeOptions, type RowRecord } from "@infino-ai/infino";
-import { APPEND_BATCH, EMBED_BATCH, TABLE, DEFAULT_CAPS, type IndexCaps } from "./config.js";
+import { APPEND_BATCH, EMBED_BATCH, TABLE, DEFAULT_CAPS, type IndexCaps, type EmbedProvider } from "./config.js";
 import { walkRepo } from "./walker.js";
 import { shouldIndexFile, chunkFile, looksBinary, embedText, type Chunk } from "./chunker.js";
 import { readManifest, writeManifest, INDEX_FORMAT_VERSION, type Manifest, type VectorState } from "./manifest.js";
+import {
+  analyzerOf,
+  ENGINE_DEFAULT_ANALYZER,
+  HOSTED_DEFAULT_ANALYZER,
+  isAnalyzer,
+  type Analyzer,
+} from "./analyzer.js";
+import { EMBEDDING_COLUMN, PLATFORM_EMBEDDER_MODEL, PLATFORM_EMBEDDER_PROVIDER } from "./context.js";
+import { rowsToIpc, type HostedDb, type HostedIndexes, type JsonColumn } from "./hosted.js";
 import {
   diffFiles,
   emptyFileState,
@@ -83,18 +104,94 @@ const SPILL_READ_BUF_BYTES = 1 << 20;
 /** Bytes per f32 (vector-spill row stride is `dim * F32_BYTES`). */
 const F32_BYTES = 4;
 
+/** Paths named per DELETE predicate when a sync removes stale rows, so one
+ * predicate (and, hosted, one query string) stays a bounded size. */
+const DELETE_PATHS_PER_PREDICATE = 100;
+
+/** The FTS-indexed column of the chunks table. */
+const CONTENT_COLUMN = "content";
+
+/** Distance metric of the vector index, the same in both modes: the local
+ * model L2-normalizes, and cosine is what the platform indexes an embedding
+ * column with. */
+const VECTOR_METRIC = "cosine";
+
+/** The FTS analyzer a hosted load asks the platform for (`CX_FTS_ANALYZER`).
+ * Unset means HOSTED_DEFAULT_ANALYZER (`ascii_lower`, the one that finds code
+ * identifiers whole - see its comment), sent to the platform explicitly rather
+ * than left to the platform's bare-column default. The table's analyzer is
+ * fixed at create time and recorded in the manifest, so queries mirror the
+ * right one.
+ * Read by the hosted loader only: a local build cannot choose (the binding's
+ * bare `IndexSpec.fts(column)` takes the engine default). This belongs with
+ * the other environment names in config.ts; it lives here because the hosted
+ * loader is its only reader. */
+export const FTS_ANALYZER_ENV = "CX_FTS_ANALYZER";
+
+/** The analyzer a hosted load creates the `content` index with, from the
+ * environment. A misspelling is an error rather than a silent fall back: the
+ * name is sent to the platform and recorded, and a wrong one would make the
+ * client's indexable-token check disagree with the table forever. */
+export function hostedAnalyzer(): Analyzer {
+  const raw = process.env[FTS_ANALYZER_ENV];
+  if (raw === undefined || raw === "") return HOSTED_DEFAULT_ANALYZER;
+  if (!isAnalyzer(raw)) throw new Error(`${FTS_ANALYZER_ENV} must be "standard" or "ascii_lower", got "${raw}"`);
+  return raw;
+}
+
 export interface IndexOptions {
   root: string;
-  db: Connection;
+  /** The in-process engine connection (local mode). Exactly one of `db` /
+   * `hosted` is set - what openForIndexingAsync yields. */
+  db?: Connection;
+  /** The platform client (hosted mode): the chunks table lives on the
+   * database it addresses, and the index directory is only the sidecar. */
+  hosted?: HostedDb;
   /** Where the manifest is written (the index directory). */
   indexDirPath: string;
-  /** Omit for a keyword-only index (vectors can be added by re-indexing).
-   * The caller owns the embedder's lifecycle (dispose, when it has one). */
-  embedder?: Embedder;
+  /** Omit (or pass null - what createEmbedder() returns when the platform
+   * embeds server-side) for a keyword-only index; vectors can be added by
+   * re-indexing. The caller owns the embedder's lifecycle (dispose, when it
+   * has one). */
+  embedder?: Embedder | null;
+  /** Hosted only: who fills the `embedding` column. `platform` declares an
+   * embedding column the platform fills from `content` with its own model (no
+   * embedder runs here, and the rows are appended without the column);
+   * `local`, the default, sends the vectors `embedder` produces. With `local`
+   * and no embedder the table is keyword-only. A local build ignores this:
+   * the in-process engine has no server-side model. */
+  embedProvider?: EmbedProvider;
   caps?: IndexCaps;
-  onPhase?: (phase: "scan" | "chunk" | "commit-text" | "embed" | "commit-vectors") => void;
+  /** The FTS analyzer the `content` index is built with, recorded in the
+   * manifest so queries mirror the right one. Omit for a local build - the
+   * binding's bare `IndexSpec.fts(column)` takes the engine default
+   * (ENGINE_DEFAULT_ANALYZER), and this code does not ask for any other, so a
+   * local caller must not pass a different value. A hosted build sends the
+   * value to the platform explicitly (HOSTED_DEFAULT_ANALYZER when none is
+   * given - see hostedAnalyzer) and records what it sent. A sync whose value
+   * differs from the recorded one reports rebuild-required: the table's
+   * analyzer is fixed at create time. */
+  analyzer?: Analyzer;
+  /** `load` is the hosted single pass (drop, create, append waves); the other
+   * phases are shared by both modes. */
+  onPhase?: (phase: "scan" | "chunk" | "commit-text" | "embed" | "commit-vectors" | "load") => void;
   /** Progress within the current phase. */
   onProgress?: (done: number, total: number) => void;
+}
+
+/** What a hosted load or sync cost on the platform side, summed from the
+ * client's per-call telemetry. Lives in the stats (and so in `cx index --json`
+ * and the ledger), never in a tool result. */
+export interface HostedLoadStats {
+  /** Append requests made (one per APPEND_BATCH wave). */
+  appendCalls: number;
+  /** Write tokens the platform metered across the drop, create, delete and
+   * append calls, from its `x-infino-write-tokens` headers. Absent when no
+   * response carried the header - a missing meter is not a zero bill. */
+  writeTokens?: number;
+  /** Wall clock of the table writes (drop through the last append), ms;
+   * scanning, chunking and embedding are counted in indexMs / embedMs. */
+  loadWallMs: number;
 }
 
 export interface IndexStats {
@@ -106,10 +203,13 @@ export interface IndexStats {
   maxFiles: number;
   languages: Record<string, number>;
   vectors: VectorState;
+  /** Local: wall clock to keyword-live (stage 1). Hosted: the whole load. */
   indexMs: number;
   embedMs?: number;
   /** Present when the vector stage failed; the keyword index is still live. */
   embedError?: string;
+  /** Hosted mode only: the platform-side cost of the load. */
+  hosted?: HostedLoadStats;
 }
 
 const TEXT_SCHEMA = {
@@ -124,7 +224,9 @@ const TEXT_SCHEMA = {
 /** A staged run: `text` resolves when keyword search is live; `completion`
  * resolves when the vector stage lands (== `text` when there is no embedder).
  * `completion` never rejects - a vector-stage failure is recorded in the
- * stats (embedError) and the manifest, with the keyword index still live. */
+ * stats (embedError) and the manifest, with the keyword index still live.
+ * A hosted load is one pass, so `text` and `completion` carry the same,
+ * final stats. */
 export interface StagedIndexRun {
   text: IndexStats;
   completion: Promise<IndexStats>;
@@ -137,16 +239,133 @@ export async function indexRepo(opts: IndexOptions): Promise<IndexStats> {
 }
 
 /** Index in stages (MCP flow: reply once keyword search is live, let vectors
- * backfill in-process). */
+ * backfill in-process). Hosted: one pass, see loadHosted. */
 export async function indexRepoStaged(opts: IndexOptions): Promise<StagedIndexRun> {
-  const { root, db, indexDirPath, embedder, onPhase, onProgress } = opts;
+  const { root, indexDirPath, embedder, onPhase, onProgress } = opts;
   const caps = opts.caps ?? DEFAULT_CAPS;
   const t0 = performance.now();
+  // A contradictory hosted request is refused before any work: the platform
+  // fills an embedding column itself, so a local embedder has nothing to add
+  // and a caller passing both has misread one of the two switches.
+  if (opts.hosted && opts.embedProvider === "platform" && embedder) {
+    throw new Error("embedProvider is \"platform\" (the table's embedding column is filled server-side) but a local embedder was given - pass neither, or drop one");
+  }
 
   // Keep the index out of the user's commits before we write a byte of it.
   ensureIndexIgnored(root, indexDirPath);
 
-  // --- scan -----------------------------------------------------------------
+  const scanned = await scanToSpill(opts, caps);
+  if (opts.hosted) return loadHosted(opts, opts.hosted, scanned, caps, t0);
+
+  const db = localConnection(opts);
+  const analyzer = opts.analyzer ?? ENGINE_DEFAULT_ANALYZER;
+  const { spill, files, chunkCount, languages, fileState, truncatedFiles } = scanned;
+
+  // --- stage 1: swap in the keyword table -------------------------------------
+  // One synchronous block (drop → create → append waves; sync spill reads, no
+  // awaits) so same-process readers never observe a half-swapped table. From
+  // here until the completion promise exists (whose finally owns the spill),
+  // any throw must release it - a leaked name would pin the file in the
+  // liveSpills registry for the life of the process.
+  try {
+    onPhase?.("commit-text");
+    if (db.listTables().includes(TABLE)) db.dropTable(TABLE, true);
+    const textTable = db.createTable(TABLE, { ...TEXT_SCHEMA }, new IndexSpec().fts(CONTENT_COLUMN));
+    appendSpillSync(textTable, spill, chunkCount, undefined, onProgress);
+    if (!embedder) compact(textTable);
+    const indexMs = Math.round(performance.now() - t0);
+
+    const stats: IndexStats = {
+      files,
+      chunks: chunkCount,
+      ...(truncatedFiles > 0 ? { truncatedFiles } : {}),
+      maxFiles: caps.maxFiles,
+      languages,
+      vectors: embedder ? "building" : "none",
+      indexMs,
+    };
+    writeManifest(indexDirPath, toManifest(stats, analyzer));
+    writeFileState(indexDirPath, fileState);
+    if (!embedder) {
+      spill.release();
+      return { text: stats, completion: Promise.resolve(stats) };
+    }
+
+    // --- stage 2: embed, then swap in the hybrid table -------------------------
+    // A failure anywhere before the swap (model download, endpoint down, full
+    // disk) leaves the stage-1 keyword table live and the manifest honest -
+    // search degrades, indexing never fails. The swap itself is again one
+    // synchronous block. `completion` must never reject; its finally owns the
+    // spill from here on.
+    const completion = (async () => {
+      try {
+        onPhase?.("embed");
+        const tEmbed = performance.now();
+        const dim =
+          chunkCount === 0
+            ? await embedder.dim() // no chunks to embed - just size the schema
+            : await embedSpill(spill, embedder, chunkCount, onProgress);
+
+        onPhase?.("commit-vectors");
+        db.dropTable(TABLE, true);
+        const hybridTable = db.createTable(
+          TABLE,
+          { ...TEXT_SCHEMA, [EMBEDDING_COLUMN]: { vector: dim } },
+          new IndexSpec().fts(CONTENT_COLUMN).vector(EMBEDDING_COLUMN, dim, VECTOR_METRIC),
+        );
+        // Zero chunks ⇒ no vector spill was ever written; the empty table is
+        // already complete.
+        if (chunkCount > 0) appendSpillSync(hybridTable, spill, chunkCount, dim, onProgress);
+        compact(hybridTable);
+        stats.vectors = "ready";
+        stats.embedMs = Math.round(performance.now() - tEmbed);
+        writeManifest(indexDirPath, toManifest(stats, analyzer, localEmbedderInfo(embedder, dim)));
+      } catch (err) {
+        stats.vectors = "none";
+        stats.embedError = (err as Error).message;
+        try {
+          writeManifest(indexDirPath, toManifest(stats, analyzer));
+        } catch {
+          /* disk gone - nothing left to record on, and completion must not reject */
+        }
+      } finally {
+        spill.release();
+      }
+      return stats;
+    })();
+    return { text: { ...stats }, completion };
+  } catch (err) {
+    spill.release();
+    throw err;
+  }
+}
+
+/** The engine connection of a local build; a caller that set neither `db`
+ * nor `hosted` is named rather than left to a property of undefined. */
+function localConnection(opts: IndexOptions): Connection {
+  if (!opts.db) throw new Error("indexer: neither an engine connection (db) nor a hosted client was given - openForIndexingAsync yields one of the two");
+  return opts.db;
+}
+
+// --- scan + chunk ------------------------------------------------------------------
+
+/** What the walk produced: the chunk spill and the counts the stats need. */
+interface Scanned {
+  spill: Spill;
+  files: number;
+  chunkCount: number;
+  languages: Record<string, number>;
+  fileState: FileState;
+  truncatedFiles: number;
+}
+
+/** Walk the tree and spool every chunk to the spill. The whole tree spools
+ * before any table is touched, in either mode, so the previous index serves
+ * queries all through the walk, and a failure here (full disk, racing
+ * deletes) costs nothing - the spill is released and the error surfaces. */
+async function scanToSpill(opts: IndexOptions, caps: IndexCaps): Promise<Scanned> {
+  const { root, indexDirPath, onPhase, onProgress } = opts;
+
   onPhase?.("scan");
   const walked = walkRepo(root).filter(
     (f) => shouldIndexFile(f.path) && f.size <= caps.maxFileBytes,
@@ -154,10 +373,6 @@ export async function indexRepoStaged(opts: IndexOptions): Promise<StagedIndexRu
   const taken = walked.slice(0, caps.maxFiles);
   const truncatedFiles = walked.length - taken.length;
 
-  // --- chunk → spill ----------------------------------------------------------
-  // The whole tree spools to the chunk spill before any table is touched, so
-  // the previous index serves queries all through the walk, and a failure
-  // here (full disk, racing deletes) costs nothing.
   onPhase?.("chunk");
   mkdirSync(indexDirPath, { recursive: true });
   sweepStaleSpills(indexDirPath);
@@ -203,91 +418,156 @@ export async function indexRepoStaged(opts: IndexOptions): Promise<StagedIndexRu
     spill.release(); // previous index untouched - just clean up and surface
     throw err;
   }
+  return { spill, files, chunkCount, languages, fileState, truncatedFiles };
+}
 
-  // --- stage 1: swap in the keyword table -------------------------------------
-  // One synchronous block (drop → create → append waves; sync spill reads, no
-  // awaits) so same-process readers never observe a half-swapped table. From
-  // here until the completion promise exists (whose finally owns the spill),
-  // any throw must release it - a leaked name would pin the file in the
-  // liveSpills registry for the life of the process.
+// --- the hosted load -------------------------------------------------------------------
+
+/** Load the spilled chunks into the platform's chunks table in one pass:
+ * embed (local provider), then drop → create → append waves. Embedding runs
+ * before the drop so a model failure throws with the previous table intact
+ * and nothing spent on the network. The table gets the FTS index with the
+ * requested analyzer and, when there are vectors, either a client-vector
+ * column of the embedder's width with a cosine index or a platform-filled
+ * embedding column (which the platform indexes by itself - a vector entry
+ * naming it is a 400). Records a hosted manifest and the file state so a
+ * later `cx index --db` can sync incrementally. */
+async function loadHosted(
+  opts: IndexOptions,
+  hosted: HostedDb,
+  scanned: Scanned,
+  caps: IndexCaps,
+  t0: number,
+): Promise<StagedIndexRun> {
+  const { indexDirPath, embedder, onPhase, onProgress } = opts;
+  const provider: EmbedProvider = opts.embedProvider ?? "local";
+  const analyzer = opts.analyzer ?? HOSTED_DEFAULT_ANALYZER;
+  const { spill, files, chunkCount, languages, fileState, truncatedFiles } = scanned;
   try {
-    onPhase?.("commit-text");
-    if (db.listTables().includes(TABLE)) db.dropTable(TABLE, true);
-    const textTable = db.createTable(TABLE, { ...TEXT_SCHEMA }, new IndexSpec().fts("content"));
-    appendSpillSync(textTable, spill, chunkCount, undefined, onProgress);
-    if (!embedder) compact(textTable);
-    const indexMs = Math.round(performance.now() - t0);
-
     const stats: IndexStats = {
       files,
       chunks: chunkCount,
       ...(truncatedFiles > 0 ? { truncatedFiles } : {}),
       maxFiles: caps.maxFiles,
       languages,
-      vectors: embedder ? "building" : "none",
-      indexMs,
+      vectors: "none",
+      indexMs: 0,
     };
-    writeManifest(indexDirPath, toManifest(stats));
-    writeFileState(indexDirPath, fileState);
-    if (!embedder) {
-      spill.release();
-      return { text: stats, completion: Promise.resolve(stats) };
+
+    let dim: number | undefined;
+    if (provider === "local" && embedder) {
+      onPhase?.("embed");
+      const tEmbed = performance.now();
+      dim = chunkCount === 0 ? await embedder.dim() : await embedSpill(spill, embedder, chunkCount, onProgress);
+      stats.embedMs = Math.round(performance.now() - tEmbed);
+      // Zero chunks ⇒ no vector spill was ever written and nothing is appended.
+      if (chunkCount > 0) verifyVectorSpill(spill, chunkCount, dim);
     }
+    const platform = provider === "platform";
+    const columns = hostedColumns(platform ? { platform: true } : { dim });
+    const indexes = hostedIndexes(analyzer, dim !== undefined);
 
-    // --- stage 2: embed, then swap in the hybrid table -------------------------
-    // A failure anywhere before the swap (model download, endpoint down, full
-    // disk) leaves the stage-1 keyword table live and the manifest honest -
-    // search degrades, indexing never fails. The swap itself is again one
-    // synchronous block. `completion` must never reject; its finally owns the
-    // spill from here on.
-    const completion = (async () => {
-      try {
-        onPhase?.("embed");
-        const tEmbed = performance.now();
-        const dim =
-          chunkCount === 0
-            ? await embedder.dim() // no chunks to embed - just size the schema
-            : await embedSpill(spill, embedder, chunkCount, onProgress);
+    onPhase?.("load");
+    const tLoad = performance.now();
+    const meter = newHostedMeter();
+    // This is the ONLY place a hosted chunks table is ever dropped, and it
+    // runs only because the user typed `cx index --db <url>`: the table is
+    // shared by everyone the database serves, so a query, an auto-index or
+    // an auto-sync never replaces it (those switches are forced off for a
+    // hosted target) - an explicit reload is the one thing that does.
+    if ((await hosted.listTables()).includes(TABLE)) {
+      await hosted.dropTable(TABLE, true);
+      meterHostedCall(meter, hosted);
+    }
+    await hosted.createTable(TABLE, columns, indexes);
+    meterHostedCall(meter, hosted);
+    if (chunkCount > 0) await appendSpillHosted(hosted, spill, chunkCount, columns, dim, platform, meter, onProgress);
 
-        onPhase?.("commit-vectors");
-        db.dropTable(TABLE, true);
-        const hybridTable = db.createTable(
-          TABLE,
-          { ...TEXT_SCHEMA, embedding: { vector: dim } },
-          new IndexSpec().fts("content").vector("embedding", dim, "cosine"),
-        );
-        // Zero chunks ⇒ no vector spill was ever written; the empty table is
-        // already complete.
-        if (chunkCount > 0) appendSpillSync(hybridTable, spill, chunkCount, dim, onProgress);
-        compact(hybridTable);
-        stats.vectors = "ready";
-        stats.embedMs = Math.round(performance.now() - tEmbed);
-        writeManifest(
-          indexDirPath,
-          toManifest(stats, {
-            provider: embedder.provider,
-            model: embedder.model,
-            dim,
-            ...(embedder.dtype ? { dtype: embedder.dtype } : {}),
-          }),
-        );
-      } catch (err) {
-        stats.vectors = "none";
-        stats.embedError = (err as Error).message;
-        try {
-          writeManifest(indexDirPath, toManifest(stats));
-        } catch {
-          /* disk gone - nothing left to record on, and completion must not reject */
-        }
-      } finally {
-        spill.release();
-      }
-      return stats;
-    })();
-    return { text: { ...stats }, completion };
-  } catch (err) {
+    stats.hosted = { ...meter, loadWallMs: Math.round(performance.now() - tLoad) };
+    stats.vectors = platform || dim !== undefined ? "ready" : "none";
+    stats.indexMs = Math.round(performance.now() - t0);
+    const embedderInfo = platform
+      ? { provider: PLATFORM_EMBEDDER_PROVIDER, model: PLATFORM_EMBEDDER_MODEL }
+      : embedder && dim !== undefined
+        ? localEmbedderInfo(embedder, dim)
+        : undefined;
+    writeManifest(indexDirPath, toManifest(stats, analyzer, embedderInfo, "hosted"));
+    writeFileState(indexDirPath, fileState);
+    return { text: stats, completion: Promise.resolve(stats) };
+  } finally {
     spill.release();
-    throw err;
+  }
+}
+
+/** Running totals of a hosted load's platform calls; `loadWallMs` is added
+ * when the load ends. */
+type HostedMeter = Omit<HostedLoadStats, "loadWallMs">;
+
+const newHostedMeter = (): HostedMeter => ({ appendCalls: 0 });
+
+/** Fold the client's telemetry of the call that just completed into the
+ * meter: appends are counted, write tokens summed when the response carried
+ * the header. Called right after each write, while `lastCall()` is that call. */
+function meterHostedCall(meter: HostedMeter, hosted: HostedDb): void {
+  const info = hosted.lastCall();
+  if (!info) return;
+  if (info.op === "append") meter.appendCalls++;
+  if (info.writeTokens !== undefined) meter.writeTokens = (meter.writeTokens ?? 0) + info.writeTokens;
+}
+
+/** The chunks table's columns as the platform's `create_table` takes them:
+ * the text schema (the same spellings the local table uses), plus the vector
+ * column when there is one - client vectors of a known width, or an
+ * embedding column the platform fills from `content`. */
+function hostedColumns(vectors: { platform: true } | { dim?: number }): JsonColumn[] {
+  const columns: JsonColumn[] = Object.entries(TEXT_SCHEMA).map(([name, type]) => ({ name, type }));
+  if ("platform" in vectors) {
+    columns.push({ name: EMBEDDING_COLUMN, type: { type: "embedding", source: [CONTENT_COLUMN] } });
+  } else if (vectors.dim !== undefined) {
+    columns.push({ name: EMBEDDING_COLUMN, type: { type: "vector", dim: vectors.dim } });
+  }
+  return columns;
+}
+
+/** The index declarations of a hosted chunks table. The analyzer is always
+ * named, never left to the platform default, so the manifest records exactly
+ * what the table has. A vector index is declared only for a client-vector
+ * column: the platform indexes an embedding column by itself and rejects a
+ * caller's declaration for it. */
+function hostedIndexes(analyzer: Analyzer, clientVectors: boolean): HostedIndexes {
+  return {
+    fts: [{ column: CONTENT_COLUMN, analyzer }],
+    ...(clientVectors ? { vector: [{ column: EMBEDDING_COLUMN, metric: VECTOR_METRIC }] } : {}),
+  };
+}
+
+/** Replay a spill into the hosted table in APPEND_BATCH waves, each one
+ * append request (one platform commit). Client vectors ride an Arrow IPC
+ * stream, the only append encoding that carries a vector column; a
+ * platform-embedded table takes the JSON envelope with the rows minus the
+ * embedding column, which the platform fills. Async on purpose - there is no
+ * same-process atomicity to keep over the network. */
+async function appendSpillHosted(
+  hosted: HostedDb,
+  spill: Spill,
+  expectedRows: number,
+  columns: JsonColumn[],
+  dim: number | undefined,
+  platform: boolean,
+  meter: HostedMeter,
+  onProgress?: (done: number, total: number) => void,
+): Promise<void> {
+  let appended = 0;
+  for (const wave of spillWaves(spill, expectedRows, dim)) {
+    if (platform) {
+      await hosted.appendRows(TABLE, wave.rows.map(toTextRow));
+    } else {
+      // rowsToIpc takes the Float32Array views as they are - no boxing.
+      await hosted.appendIpc(TABLE, rowsToIpc(columns, waveRows(wave, dim, (v) => v)));
+    }
+    meterHostedCall(meter, hosted);
+    appended += wave.rows.length;
+    onProgress?.(appended, expectedRows);
   }
 }
 
@@ -405,39 +685,44 @@ function* readLinesSync(path: string): Generator<string> {
   }
 }
 
-/** Replay a spill into a table in APPEND_BATCH waves - synchronously, so the
- * caller's drop→create→append block stays atomic to same-process readers.
- * With `dim` set, each row is joined with its packed f32 vector from the
- * vector spill (same order, same count - verified, since a silently short
- * table is the one unrecoverable outcome). Only the in-flight wave is ever
- * resident; the engine binding takes number[] rows, so one wave is boxed
- * transiently - bounded, unlike the whole-corpus number[][] this replaces. */
-function appendSpillSync(
-  table: { append(rows: RowRecord[]): void },
-  spill: Spill,
-  expectedRows: number,
-  dim?: number,
-  onProgress?: (done: number, total: number) => void,
-): void {
-  const rows: Chunk[] = [];
-  let appended = 0;
+/** Refuse a vector spill whose size is not exactly `expectedRows` rows of
+ * `dim` floats: a silently short table is the one unrecoverable outcome, so
+ * the check runs before any table is touched. */
+function verifyVectorSpill(spill: Spill, expectedRows: number, dim: number): void {
+  const size = statSync(spill.vectorsPath).size;
+  if (size !== expectedRows * dim * F32_BYTES) {
+    throw new Error(
+      `vector spill holds ${size} bytes, expected ${expectedRows * dim * F32_BYTES} (${expectedRows} rows × ${dim}d)`,
+    );
+  }
+}
+
+/** One replay wave: up to APPEND_BATCH chunks and, when the build has
+ * vectors, their packed f32 rows in the same order (row j at
+ * `f32[j*dim .. (j+1)*dim)`). */
+interface SpillWave {
+  rows: Chunk[];
+  f32?: Float32Array;
+}
+
+/** Replay a spill in APPEND_BATCH waves. With `dim` set, each wave is joined
+ * with its packed f32 vectors from the vector spill (same order, same count -
+ * verified). The generator body is synchronous between yields, so the local
+ * consumer's drop→create→append block stays atomic to same-process readers,
+ * while the hosted consumer awaits a network round trip per wave. Only the
+ * in-flight wave is ever resident. */
+function* spillWaves(spill: Spill, expectedRows: number, dim?: number): Generator<SpillWave> {
   let fd = -1;
   if (dim !== undefined) {
+    verifyVectorSpill(spill, expectedRows, dim);
     fd = openSync(spill.vectorsPath, "r");
-    const size = fstatSync(fd).size;
-    if (size !== expectedRows * dim * F32_BYTES) {
-      closeSync(fd);
-      throw new Error(
-        `vector spill holds ${size} bytes, expected ${expectedRows * dim * F32_BYTES} (${expectedRows} rows × ${dim}d)`,
-      );
-    }
   }
   try {
-    const appendWave = () => {
-      if (rows.length === 0) return;
-      if (dim === undefined) {
-        table.append(rows.map(toTextRow));
-      } else {
+    let replayed = 0;
+    let rows: Chunk[] = [];
+    const wave = (): SpillWave => {
+      const out: SpillWave = { rows };
+      if (dim !== undefined) {
         const want = rows.length * dim * F32_BYTES;
         // Own ArrayBuffer (not the pooled Buffer.alloc) so the f32 view is
         // 4-byte aligned regardless of wave size.
@@ -449,28 +734,51 @@ function appendSpillSync(
           if (n === 0) throw new Error(`vector spill truncated (wanted ${want} more bytes)`);
           got += n;
         }
-        const f32 = new Float32Array(ab);
-        table.append(
-          rows.map((c, j) => ({
-            ...toTextRow(c),
-            embedding: Array.from(f32.subarray(j * dim, (j + 1) * dim)),
-          })),
-        );
+        out.f32 = new Float32Array(ab);
       }
-      appended += rows.length;
-      rows.length = 0;
-      onProgress?.(appended, expectedRows);
+      replayed += rows.length;
+      rows = [];
+      return out;
     };
     for (const line of readLinesSync(spill.chunksPath)) {
       rows.push(JSON.parse(line) as Chunk);
-      if (rows.length >= APPEND_BATCH) appendWave();
+      if (rows.length >= APPEND_BATCH) yield wave();
     }
-    appendWave();
-    if (appended !== expectedRows) {
-      throw new Error(`chunk spill replayed ${appended} rows, expected ${expectedRows}`);
+    if (rows.length > 0) yield wave();
+    if (replayed !== expectedRows) {
+      throw new Error(`chunk spill replayed ${replayed} rows, expected ${expectedRows}`);
     }
   } finally {
     if (fd >= 0) closeSync(fd);
+  }
+}
+
+/** A wave's rows as table rows: the text columns, plus the `embedding`
+ * column when the wave carries vectors. `vector` shapes each row's f32 view
+ * for the consumer - boxed to number[] for the engine binding, kept as the
+ * view for the Arrow IPC encoder. */
+function waveRows(wave: SpillWave, dim: number | undefined, vector: (v: Float32Array) => unknown): RowRecord[] {
+  const f32 = wave.f32;
+  if (dim === undefined || !f32) return wave.rows.map(toTextRow);
+  return wave.rows.map((c, j) => ({ ...toTextRow(c), [EMBEDDING_COLUMN]: vector(f32.subarray(j * dim, (j + 1) * dim)) }));
+}
+
+/** Replay a spill into a local table in APPEND_BATCH waves - synchronously,
+ * so the caller's drop→create→append block stays atomic to same-process
+ * readers. The engine binding takes number[] rows, so one wave is boxed
+ * transiently - bounded, unlike the whole-corpus number[][] this replaced. */
+function appendSpillSync(
+  table: { append(rows: RowRecord[]): void },
+  spill: Spill,
+  expectedRows: number,
+  dim?: number,
+  onProgress?: (done: number, total: number) => void,
+): void {
+  let appended = 0;
+  for (const wave of spillWaves(spill, expectedRows, dim)) {
+    table.append(waveRows(wave, dim, (v) => Array.from(v)));
+    appended += wave.rows.length;
+    onProgress?.(appended, expectedRows);
   }
 }
 
@@ -556,9 +864,13 @@ export interface SyncResult {
   truncatedFiles: number;
   vectors: VectorState;
   tookMs: number;
+  /** Hosted mode only: the platform-side cost of the deletes and appends. */
+  hosted?: HostedLoadStats;
 }
 
 export type SyncOutcome = SyncResult | { action: "rebuild-required"; reason: string };
+
+const rebuildRequired = (reason: string): SyncOutcome => ({ action: "rebuild-required", reason });
 
 /** Bring the index up to date with the working tree by re-chunking (and
  * re-embedding) only the files that changed since the last index or sync.
@@ -566,29 +878,62 @@ export type SyncOutcome = SyncResult | { action: "rebuild-required"; reason: str
  * correct (no prior state, an in-flight vector backfill, or an embedder that
  * no longer matches the index). Fresh chunks spool through spills and are
  * embedded BEFORE any stale row is deleted, so an embed failure (which throws)
- * leaves the index exactly as it was. */
+ * leaves the index exactly as it was.
+ *
+ * Hosted: the same diff against the sidecar's file state, applied to the
+ * platform table as delete-by-path-predicate plus append waves. It needs the
+ * file state the load from THIS machine wrote; a table loaded elsewhere (the
+ * sidecar then holds only a manifest synthesized from the server) has no
+ * diff base, and the outcome says so rather than guessing. */
 export async function syncRepo(opts: IndexOptions): Promise<SyncOutcome> {
-  const { root, db, indexDirPath, embedder, onPhase } = opts;
+  const { root, indexDirPath, embedder, onPhase } = opts;
+  const hosted = opts.hosted;
+  const provider: EmbedProvider = opts.embedProvider ?? "local";
   const caps = opts.caps ?? DEFAULT_CAPS;
   const t0 = performance.now();
 
   const manifest = readManifest(indexDirPath);
   const prev = readFileState(indexDirPath);
-  if (!manifest || !prev || !db.listTables().includes(TABLE)) {
-    return { action: "rebuild-required", reason: "no prior index state" };
+  if (!manifest) return rebuildRequired("no prior index state");
+  if (hosted) {
+    if (manifest.origin !== "hosted") {
+      return rebuildRequired(`the sidecar in ${indexDirPath} describes a local index, not the hosted table`);
+    }
+    if (!prev) {
+      return rebuildRequired(
+        `no file state for the hosted table in ${indexDirPath} (it was loaded from another machine, or the sidecar was removed) - only a full reload can bring it up to date`,
+      );
+    }
+    if (!(await hosted.listTables()).includes(TABLE)) return rebuildRequired(`no ${TABLE} table on the hosted target`);
+  } else {
+    if (manifest.origin === "hosted") return rebuildRequired(`the sidecar in ${indexDirPath} describes a hosted table, not a local index`);
+    if (!prev || !localConnection(opts).listTables().includes(TABLE)) return rebuildRequired("no prior index state");
   }
-  if (manifest.vectors === "building") {
-    return { action: "rebuild-required", reason: "vector backfill in progress" };
-  }
+  if (manifest.vectors === "building") return rebuildRequired("vector backfill in progress");
+
+  // Who fills the vectors is fixed by the table: a platform-embedded column
+  // takes no client vectors and a client-vector column takes no platform
+  // text, so a provider switch is a rebuild, as is a model switch.
   const hasVectors = manifest.vectors === "ready";
-  if (hasVectors && !embedder) {
-    return { action: "rebuild-required", reason: "index has vectors but no embedder is configured" };
+  const indexedPlatform = manifest.embedder?.provider === PLATFORM_EMBEDDER_PROVIDER;
+  if (hasVectors) {
+    if (indexedPlatform && provider !== "platform") {
+      return rebuildRequired(`embedder changed (index: ${PLATFORM_EMBEDDER_PROVIDER}, current: ${embedder?.model ?? "none"})`);
+    }
+    if (!indexedPlatform && provider === "platform") {
+      return rebuildRequired(`embedder changed (index: ${manifest.embedder?.model ?? "client vectors"}, current: ${PLATFORM_EMBEDDER_PROVIDER})`);
+    }
+    if (!indexedPlatform && !embedder) return rebuildRequired("index has vectors but no embedder is configured");
+    if (!indexedPlatform && embedder && manifest.embedder && manifest.embedder.model !== embedder.model) {
+      return rebuildRequired(`embedder changed (index: ${manifest.embedder.model}, current: ${embedder.model})`);
+    }
   }
-  if (hasVectors && embedder && manifest.embedder && manifest.embedder.model !== embedder.model) {
-    return {
-      action: "rebuild-required",
-      reason: `embedder changed (index: ${manifest.embedder.model}, current: ${embedder.model})`,
-    };
+  // The analyzer is fixed when the table is created; rows appended by a sync
+  // are tokenized with the table's, whatever the caller now wants. An absent
+  // recorded value falls back by where the table lives (see analyzerOf).
+  const recordedAnalyzer = analyzerOf(manifest);
+  if (opts.analyzer !== undefined && opts.analyzer !== recordedAnalyzer) {
+    return rebuildRequired(`analyzer changed (index: ${recordedAnalyzer}, current: ${opts.analyzer})`);
   }
 
   // Sweep crash leftovers on every sync, INCLUDING ones about to no-op: on an
@@ -676,35 +1021,53 @@ export async function syncRepo(opts: IndexOptions): Promise<SyncOutcome> {
     }
 
     // --- embed them (before ANY delete - a throw here must cost nothing) --------
+    // A platform-embedded table needs no vectors from here: the platform fills
+    // its column as the rows land.
     let dim: number | undefined;
-    if (hasVectors && embedder && chunksAdded > 0) {
+    if (hasVectors && !indexedPlatform && embedder && chunksAdded > 0) {
       onPhase?.("embed");
       dim = await embedSpill(spill, embedder, chunksAdded, opts.onProgress);
     }
 
-    // --- apply: one synchronous block of deletes + appends -------------------------
-    onPhase?.("commit-text");
-    const table = db.openTable(TABLE);
+    // --- apply: deletes + appends -----------------------------------------------------
     // `added` paths are deleted too: it makes a re-run of an interrupted sync
     // idempotent instead of duplicating rows.
+    onPhase?.("commit-text");
     const stale = [...diff.added, ...diff.changed, ...diff.deleted];
     let chunksRemoved = 0;
-    for (let i = 0; i < stale.length; i += 100) {
-      const batch = stale.slice(i, i + 100).map((p) => `'${p.replace(/'/g, "''")}'`);
-      chunksRemoved += table.delete(`path IN (${batch.join(",")})`).nTombstoned;
-    }
-    if (chunksAdded > 0) {
-      appendSpillSync(table, spill, chunksAdded, hasVectors && embedder ? dim : undefined);
+    let hostedStats: HostedLoadStats | undefined;
+    if (hosted) {
+      const tLoad = performance.now();
+      const meter = newHostedMeter();
+      for (const predicate of stalePredicates(stale)) {
+        const counts = await hosted.deleteWhere(TABLE, predicate);
+        chunksRemoved += Number(counts.n_tombstoned);
+        meterHostedCall(meter, hosted);
+      }
+      if (chunksAdded > 0) {
+        const columns = hostedColumns(indexedPlatform ? { platform: true } : { dim });
+        await appendSpillHosted(hosted, spill, chunksAdded, columns, dim, indexedPlatform, meter, opts.onProgress);
+      }
+      hostedStats = { ...meter, loadWallMs: Math.round(performance.now() - tLoad) };
+    } else {
+      // One synchronous block, so same-process readers never see the deletes
+      // without the appends.
+      const table = localConnection(opts).openTable(TABLE);
+      for (const predicate of stalePredicates(stale)) chunksRemoved += table.delete(predicate).nTombstoned;
+      if (chunksAdded > 0) appendSpillSync(table, spill, chunksAdded, dim);
+      // Compact after deletes/appends to keep tombstones clean. Hosted
+      // compaction is the platform's job (optimize/gc are refused there).
+      compact(table);
     }
 
     // --- persist state + recount ----------------------------------------------------
     writeFileState(indexDirPath, diff.next);
-    const [{ n: chunkCount, f: fileCount }] = db.querySql(
+    const query = (sql: string): Promise<RowRecord[]> =>
+      hosted ? hosted.querySql(sql) : Promise.resolve(localConnection(opts).querySql(sql));
+    const [{ n: chunkCount, f: fileCount }] = (await query(
       `SELECT COUNT(*) AS n, COUNT(DISTINCT path) AS f FROM ${TABLE}`,
-    ) as [{ n: unknown; f: unknown }];
-    const langRows = db.querySql(
-      `SELECT lang, COUNT(*) AS n FROM ${TABLE} GROUP BY lang`,
-    ) as Array<{ lang: string; n: unknown }>;
+    )) as [{ n: unknown; f: unknown }];
+    const langRows = (await query(`SELECT lang, COUNT(*) AS n FROM ${TABLE} GROUP BY lang`)) as Array<{ lang: string; n: unknown }>;
     const languages: Record<string, number> = {};
     for (const r of langRows) languages[r.lang || "other"] = Number(r.n);
     const nextManifest: Manifest = {
@@ -726,9 +1089,6 @@ export async function syncRepo(opts: IndexOptions): Promise<SyncOutcome> {
     }
     writeManifest(indexDirPath, nextManifest);
 
-    // --- compact after deletes/appends to keep tombstones clean ---
-    compact(table);
-
     return {
       action: "synced",
       filesAdded: diff.added.length,
@@ -741,10 +1101,22 @@ export async function syncRepo(opts: IndexOptions): Promise<SyncOutcome> {
       truncatedFiles,
       vectors: nextManifest.vectors,
       tookMs: Math.round(performance.now() - t0),
+      ...(hostedStats ? { hosted: hostedStats } : {}),
     };
   } finally {
     spill.release();
   }
+}
+
+/** `path IN (...)` predicates over the stale paths, DELETE_PATHS_PER_PREDICATE
+ * per predicate, single quotes doubled for SQL. */
+function stalePredicates(paths: string[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < paths.length; i += DELETE_PATHS_PER_PREDICATE) {
+    const batch = paths.slice(i, i + DELETE_PATHS_PER_PREDICATE).map((p) => `'${p.replace(/'/g, "''")}'`);
+    out.push(`path IN (${batch.join(",")})`);
+  }
+  return out;
 }
 
 /** Post-build/sync compaction: batched appends leave many small superfiles behind
@@ -808,11 +1180,28 @@ function toTextRow(c: Chunk) {
   };
 }
 
-function toManifest(stats: IndexStats, embedder?: Manifest["embedder"]): Manifest {
+/** The manifest's record of a local embedder, with the width it produced. */
+function localEmbedderInfo(embedder: Embedder, dim: number): Manifest["embedder"] {
+  return {
+    provider: embedder.provider,
+    model: embedder.model,
+    dim,
+    ...(embedder.dtype ? { dtype: embedder.dtype } : {}),
+  };
+}
+
+function toManifest(
+  stats: IndexStats,
+  analyzer: Analyzer,
+  embedder?: Manifest["embedder"],
+  origin?: Manifest["origin"],
+): Manifest {
   return {
     version: INDEX_FORMAT_VERSION,
     table: TABLE,
+    ...(origin ? { origin } : {}),
     vectors: stats.vectors,
+    analyzer,
     ...(embedder ? { embedder } : {}),
     files: stats.files,
     chunks: stats.chunks,

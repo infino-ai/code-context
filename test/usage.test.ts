@@ -8,6 +8,8 @@ import {
   findEntry,
   searchEntry,
   sqlEntry,
+  retrievalAgentEntry,
+  withPlatform,
   formatReceipt,
   recordUsage,
   readUsage,
@@ -19,6 +21,8 @@ import {
   promptStatsPath,
 } from "../src/core/usage.js";
 import type { SearchResult, SearchHit } from "../src/core/searcher.js";
+import type { RetrievalAgentResult, RetrievalAgentSpend } from "../src/core/retrieval-agent.js";
+import type { HostedDb, HostedCallInfo } from "../src/core/hosted.js";
 
 const hit = (path: string, content: string): SearchHit => ({
   path,
@@ -122,6 +126,86 @@ describe("sql receipt", () => {
     expect(session.queries).toBe(1);
     expect(line).not.toMatch(/to read those files whole/);
     expect(line).toMatch(/invoked 1x this session/);
+  });
+});
+
+describe("retrieval_agent receipt", () => {
+  const answered: RetrievalAgentResult = {
+    question: "which files?",
+    answer: "3 files",
+    hits: [{ path: "src/a.ts", startLine: 10, endLine: 30, text: "export function a() {" }],
+    queries: [{ tool: "query_sql", sql: "SELECT path, start_line, end_line, content FROM chunks LIMIT 3" }],
+    turns: 4,
+    model: "openai/gpt-oss-120b",
+  };
+  const spend: RetrievalAgentSpend = { promptTokens: 12_345, completionTokens: 210, rung: 1, cardTier: "enriched" };
+
+  it("counts the answer and hits as what was returned, and records the loop's spend", () => {
+    const entry = retrievalAgentEntry(answered, spend);
+    expect(entry.tool).toBe("retrieval_agent");
+    expect(entry.query).toBe("which files?");
+    expect(entry.returnedTokens).toBe(estTokens(JSON.stringify({ answer: answered.answer, hits: answered.hits })));
+    expect(entry.agentTurns).toBe(4);
+    expect(entry.agentPromptTokens).toBe(12_345);
+    expect(entry.agentCompletionTokens).toBe(210);
+    expect(entry.agentModel).toBe("openai/gpt-oss-120b");
+    expect(entry.agentRung).toBe(1);
+    expect(entry.agentCardTier).toBe("enriched");
+    // No row/hit fields of the other tools leak in, and the queries are not
+    // counted as returned tokens twice over (their places are the hits).
+    expect(entry.rows).toBeUndefined();
+    expect(entry.hits).toBeUndefined();
+    expect(JSON.stringify(entry)).not.toContain("FROM chunks");
+  });
+
+  it("prints the returned tokens, the turns, and the prompt/completion tokens on the model", () => {
+    const line = formatReceipt(retrievalAgentEntry(answered, spend));
+    expect(line).toMatch(/^returned ~\d+ tokens \| 4 turns \| 12\.3k prompt \/ 210 completion tokens on openai\/gpt-oss-120b$/);
+  });
+
+  it("singularizes one turn and accumulates into the session", () => {
+    const session = newSession();
+    const line = formatReceipt(retrievalAgentEntry({ ...answered, turns: 1 }, spend), session);
+    expect(line).toMatch(/\| 1 turn \|/);
+    expect(line).toMatch(/invoked 1x this session/);
+    expect(session.queries).toBe(1);
+  });
+
+  it("counts a no-answer result by its hits alone", () => {
+    const entry = retrievalAgentEntry({ ...answered, answer: null, error: "ran out of turns - fall back to search or sql" }, spend);
+    expect(entry.returnedTokens).toBe(estTokens(JSON.stringify({ answer: null, hits: answered.hits })));
+  });
+
+  it("round-trips through the ledger", () => {
+    const dir = mkdtempSync(join(tmpdir(), "cx-agent-ledger-"));
+    try {
+      recordUsage(dir, retrievalAgentEntry(answered, spend));
+      const [entry] = readUsage(dir);
+      expect(entry.tool).toBe("retrieval_agent");
+      expect(entry.agentModel).toBe("openai/gpt-oss-120b");
+      expect(entry.agentTurns).toBe(4);
+      expect(entry.agentCardTier).toBe("enriched");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("withPlatform (hosted telemetry on the ledger entry)", () => {
+  /** A stand-in for the platform client: only `lastCall` is read. */
+  const hostedWith = (info: HostedCallInfo | null): HostedDb => ({ lastCall: () => info }) as unknown as HostedDb;
+
+  it("attaches the answering call's round trip and metered tokens, and nothing else", () => {
+    const info: HostedCallInfo = { op: "bm25_search", status: 200, rttMs: 12.5, retries: 1, readTokens: 0.05 };
+    const entry = withPlatform(sqlEntry("SELECT 1", [{ a: 1 }]), { hosted: hostedWith(info) });
+    expect(entry.platform).toEqual({ rttMs: 12.5, readTokens: 0.05 });
+    // The receipt the model sees is unchanged by the telemetry.
+    expect(formatReceipt(entry)).toBe(formatReceipt(sqlEntry("SELECT 1", [{ a: 1 }])));
+  });
+
+  it("leaves a local entry untouched, and a hosted one before any call", () => {
+    expect(withPlatform(sqlEntry("SELECT 1", []), {}).platform).toBeUndefined();
+    expect(withPlatform(sqlEntry("SELECT 1", []), { hosted: hostedWith(null) }).platform).toBeUndefined();
   });
 });
 

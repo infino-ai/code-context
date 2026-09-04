@@ -15,6 +15,7 @@ import { ensureIndexed, type EnsureDeps } from "../src/mcp/ensure.js";
 const makeCtx = (): RepoCtx => ({
   root: "/repo",
   dir: "/repo/.infino",
+  target: "/repo/.infino",
   db: {} as unknown as Connection,
   lastSyncCheck: 0,
   mutation: null,
@@ -114,6 +115,43 @@ describe("ensureIndexed", () => {
     };
     const res = await ensureIndexed(ctx, deps);
     expect(res).toEqual({ needsIndex: true });
+  });
+
+  it("awaits an async getHandle (a hosted repo's readiness is a server round trip)", async () => {
+    const ctx = makeCtx();
+    let builds = 0;
+    const deps: EnsureDeps = {
+      autoIndexEnabled: false, // as forced for a hosted target
+      getHandle: async (c) => handleFor(c),
+      build: () => ((builds++), Promise.resolve(STATS)),
+    };
+    const res = await ensureIndexed(ctx, deps);
+    expect("handle" in res && res.handle.root).toBe("/repo");
+    expect(builds).toBe(0);
+  });
+
+  it("reports needsIndex from an async getHandle that resolves null with auto-index off", async () => {
+    const ctx = makeCtx();
+    const deps: EnsureDeps = {
+      autoIndexEnabled: false,
+      getHandle: async () => null,
+      build: () => Promise.resolve(STATS),
+    };
+    expect(await ensureIndexed(ctx, deps)).toEqual({ needsIndex: true });
+  });
+
+  it("never builds for a hosted repo, even with auto-index on", async () => {
+    // The hosted table is shared and loaded only by `cx index --db`; the guard
+    // holds on this path regardless of the environment-derived switch.
+    const ctx: RepoCtx = { ...makeCtx(), db: undefined, hosted: {} as unknown as RepoCtx["hosted"] };
+    let builds = 0;
+    const deps: EnsureDeps = {
+      autoIndexEnabled: true,
+      getHandle: async () => null,
+      build: () => ((builds++), Promise.resolve(STATS)),
+    };
+    expect(await ensureIndexed(ctx, deps)).toEqual({ needsIndex: true });
+    expect(builds).toBe(0);
   });
 
   it("propagates a build failure to the caller", async () => {

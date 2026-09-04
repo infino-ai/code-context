@@ -38,9 +38,17 @@ import {
   DEFAULT_SEARCH_K,
   DEFAULT_FIND_LIMIT,
   MAX_FIND_LIMIT,
+  hostedTarget,
+  hostedLabel,
+  autoIndexEnabled as autoIndexSetting,
+  autoSyncEnabled as autoSyncSetting,
+  retrievalAgentEnabled,
+  retrievalAgentMaxTurns,
+  retrievalAgentMaxWallSecs,
 } from "../core/config.js";
+import { runRetrievalAgent } from "../core/retrieval-agent.js";
 import { readManifest, type Manifest } from "../core/manifest.js";
-import type { IndexHandle } from "../core/context.js";
+import { localDb, openHostedHandle, newHostedMemo, type IndexHandle } from "../core/context.js";
 import { find, search, runSql, jsonify, partialIndex } from "../core/searcher.js";
 import {
   newSession,
@@ -48,6 +56,8 @@ import {
   findEntry,
   searchEntry,
   sqlEntry,
+  retrievalAgentEntry,
+  withPlatform,
   formatReceipt,
   recordUsage,
 } from "../core/usage.js";
@@ -65,36 +75,50 @@ import { ensureIndexed, type EnsureResult } from "./ensure.js";
 export async function serveMcp(rootPath?: string): Promise<void> {
   const defaultRoot = resolveRoot(rootPath);
 
+  // Hosted mode (CX_DB_URL / --db): the default root's chunks table lives on a
+  // platform database. Resolved once here - a bad URL or a missing key fails
+  // the server at startup, not on the first tool call. The key stays inside
+  // the target; only `hostedLabel` ever reaches a log line.
+  const hosted = hostedTarget();
+
+  // Null when the platform embeds server-side (CX_EMBED_PROVIDER=platform):
+  // the query paths then run without a client-side vector.
   let embedder: Embedder | null = null;
-  const getEmbedder = () => (embedder ??= createEmbedder());
+  const getEmbedder = (): Embedder | null => (embedder ??= createEmbedder());
 
   // --- per-repo state ---------------------------------------------------------
   // One server serves every repo a session touches: the optional `path` tool
   // arg targets one, defaulting to the startup root. Each repo keeps its own
   // connection, auto-sync clock, and mutation lock, held in a small LRU so a
-  // session that roams across many repos doesn't accumulate connections.
-  const registry = new RepoRegistry(defaultRoot, { connect });
+  // session that roams across many repos doesn't accumulate connections. Only
+  // the default root can be hosted (see RepoRegistry.targetFor).
+  const registry = new RepoRegistry(defaultRoot, { connect, ...(hosted ? { hosted: { target: hosted } } : {}) });
   const repoFor = (requested?: string): RepoCtx => registry.get(requested);
 
-  // The manifest is re-read per call so staged vector readiness is noticed the
-  // moment it lands.
-  const getHandle = (ctx: RepoCtx): IndexHandle | null => {
+  // Local: the manifest is re-read per call so staged vector readiness is
+  // noticed the moment it lands. Hosted: readiness is the server's (the table
+  // exists), memoized on the context once seen; the manifest is the sidecar's
+  // when it is a hosted one, else synthesized once from the server's schema.
+  const getHandle = async (ctx: RepoCtx): Promise<IndexHandle | null> => {
+    if (ctx.hosted) return openHostedHandle(ctx.hosted, ctx.root, ctx.dir, (ctx.hostedMemo ??= newHostedMemo()));
     if (!existsSync(ctx.dir)) return null;
     const manifest = readManifest(ctx.dir);
     if (!manifest) return null;
-    return { root: ctx.root, dir: ctx.dir, db: ctx.db, manifest };
+    return { root: ctx.root, dir: ctx.dir, target: ctx.target, db: ctx.db, manifest };
   };
 
   // --- freshness: one index mutation at a time per repo, auto-sync on queries -
   // Queries are not queued behind syncs; they run against the current index and
   // the next query sees the fresh one. CX_AUTO_SYNC=0 disables; the debounce
   // keeps the stat walk off the hot path (~20ms to ~2s depending on repo size).
-  const autoSyncEnabled = !["0", "false", "no"].includes((process.env.CX_AUTO_SYNC ?? "").toLowerCase());
+  // Both switches are forced off for a hosted target whatever the env says: a
+  // query must never drop and recreate a table other people share.
+  const autoSyncEnabled = autoSyncSetting();
   const syncIntervalMs = Number(process.env.CX_SYNC_INTERVAL_SECS ?? 30) * 1000;
   // A search/sql on a never-indexed repo builds the index inline, then answers
   // on the same call (staged: keyword search live in seconds). Off restores the
   // strict "index it first" error.
-  const autoIndexEnabled = !["0", "false", "no"].includes((process.env.CX_AUTO_INDEX ?? "").toLowerCase());
+  const autoIndexEnabled = autoIndexSetting();
 
   // A terse, local, factual receipt appended to each query result (tokens
   // returned, files touched, whole-file size it stood in for, session running
@@ -116,26 +140,28 @@ export async function serveMcp(rootPath?: string): Promise<void> {
   /** Fresh build-scoped embedder: full builds embed in a child process so the
    * bulk pipeline's memory leaves with it (issue #9). Query and sync
    * embedding keep the warm in-process singleton via getEmbedder(). */
-  const buildEmbedder = () => (process.env.CX_NO_EMBED ? undefined : createIndexingEmbedder());
+  const buildEmbedder = (): Embedder | null => (process.env.CX_NO_EMBED ? null : createIndexingEmbedder());
 
   /** Let vectors backfill in-process (the manifest flips to "ready"), then
    * release the build's embedder. `completion` never rejects by contract, but
    * nothing on this chain may take that on faith - an unhandled rejection
    * here would kill the whole server. */
-  const backfill = (run: StagedIndexRun, emb: Embedder | undefined) => {
+  const backfill = (run: StagedIndexRun, emb: Embedder | null) => {
     void run.completion
       .catch(() => undefined)
       .finally(() => void emb?.dispose?.()?.catch(() => undefined));
   };
 
   /** Acquire the repo's mutation lock and run a staged build; resolves at
-   * keyword-live with stage-1 stats, or null if a build is already in flight. */
+   * keyword-live with stage-1 stats, or null if a build is already in flight.
+   * Local repos only (`localDb` throws for a hosted one; auto-index is off
+   * there so this is never reached for it). */
   const buildIndex = (ctx: RepoCtx): Promise<IndexStats> | null =>
     exclusive(ctx, async () => {
       const emb = buildEmbedder();
       const run = await indexRepoStaged({
         root: ctx.root,
-        db: ctx.db,
+        db: localDb(ctx),
         indexDirPath: ctx.dir,
         embedder: emb,
         caps: DEFAULT_CAPS,
@@ -147,16 +173,16 @@ export async function serveMcp(rootPath?: string): Promise<void> {
   const doSync = async (ctx: RepoCtx): Promise<SyncOutcome> => {
     const outcome = await syncRepo({
       root: ctx.root,
-      db: ctx.db,
+      db: localDb(ctx),
       indexDirPath: ctx.dir,
-      embedder: process.env.CX_NO_EMBED ? undefined : getEmbedder(),
+      embedder: process.env.CX_NO_EMBED ? null : getEmbedder(),
       caps: DEFAULT_CAPS,
     });
     if (outcome.action === "rebuild-required" && outcome.reason !== "vector backfill in progress") {
       const emb = buildEmbedder();
       const run = await indexRepoStaged({
         root: ctx.root,
-        db: ctx.db,
+        db: localDb(ctx),
         indexDirPath: ctx.dir,
         embedder: emb,
         caps: DEFAULT_CAPS,
@@ -167,7 +193,10 @@ export async function serveMcp(rootPath?: string): Promise<void> {
   };
 
   const maybeAutoSync = (ctx: RepoCtx) => {
-    if (!autoSyncEnabled || performance.now() - ctx.lastSyncCheck < syncIntervalMs) return;
+    // A hosted table is never synced by a query, whatever the switch says: the
+    // guard sits here, on the one path that would run the mutation, and not
+    // only in the environment flag that is meant to keep it off.
+    if (ctx.hosted || !autoSyncEnabled || performance.now() - ctx.lastSyncCheck < syncIntervalMs) return;
     ctx.lastSyncCheck = performance.now();
     // Deferred so the triggering query's engine call runs first; the sync's
     // stat walk still shares the process, so on very large repos a
@@ -183,8 +212,12 @@ export async function serveMcp(rootPath?: string): Promise<void> {
     content: [{ type: "text" as const, text: message }],
     isError: true,
   });
-  const noIndex = (root: string) =>
-    fail(`no index for ${root} yet - run \`cx index\` there once (keyword search is live in seconds).`);
+  const noIndex = (ctx: RepoCtx) =>
+    fail(
+      ctx.hosted
+        ? `no ${TABLE} table at ${ctx.target} - load it with \`cx index --db ${ctx.target}\`.`
+        : `no index for ${ctx.root} yet - run \`cx index\` there once (keyword search is live in seconds).`,
+    );
 
   /** Marker attached to a query result when this call built the index. */
   const autoIndexNote = (stats: IndexStats) => ({
@@ -195,11 +228,11 @@ export async function serveMcp(rootPath?: string): Promise<void> {
       (stats.vectors === "building" ? " and vectors are backfilling in the background" : ""),
   });
 
-  const timed = <T,>(fn: () => T): { value: T; tookMs: number } => {
-    const t0 = performance.now();
-    const value = fn();
-    return { value, tookMs: Math.round((performance.now() - t0) * 1000) / 1000 };
-  };
+  // The hosted `retrieval_agent` tool (CX_RETRIEVAL_AGENT, default off). Its
+  // routing line joins the instructions only when the tool is registered: the
+  // instructions are prompt text on every turn, and a line for a tool that is
+  // not there would cost tokens and steer toward nothing.
+  const retrievalAgent = retrievalAgentEnabled();
 
   const server = new McpServer(
     { name: "code-context", version: "0.1.2" },
@@ -209,6 +242,9 @@ export async function serveMcp(rootPath?: string): Promise<void> {
         "- find - every line containing an exact string, where you would grep.\n" +
         "- search - how does X work, where is Y handled, code by meaning.\n" +
         "- sql - counts, rankings, and aggregates across the repo.\n" +
+        (retrievalAgent
+          ? "- retrieval_agent - one question answered by the platform's agent with path:line evidence: counts, rankings, which files, where something is handled.\n"
+          : "") +
         "Hits carry the code: when a hit answers the question, answer from it and cite path:line " +
         "without re-reading the file or re-checking with grep; Read a file only for a hit marked " +
         "truncated. " +
@@ -256,7 +292,7 @@ export async function serveMcp(rootPath?: string): Promise<void> {
       } catch (err) {
         return fail(`indexing failed: ${(err as Error).message}`);
       }
-      if ("needsIndex" in ensured) return noIndex(ctx.root);
+      if ("needsIndex" in ensured) return noIndex(ctx);
       const { handle, autoIndexed } = ensured;
       if (!autoIndexed) maybeAutoSync(ctx); // a fresh build is already current
       try {
@@ -264,7 +300,7 @@ export async function serveMcp(rootPath?: string): Promise<void> {
         const result = await search(handle, getEmbedder(), query, k);
         let usage: string | undefined;
         if (receiptOn) {
-          const entry = searchEntry(result, ctx.root);
+          const entry = withPlatform(searchEntry(result, ctx.root), ctx);
           recordUsage(ctx.dir, entry);
           usage = formatReceipt(entry, session);
         }
@@ -330,21 +366,22 @@ export async function serveMcp(rootPath?: string): Promise<void> {
       } catch (err) {
         return fail(`indexing failed: ${(err as Error).message}`);
       }
-      if ("needsIndex" in ensured) return noIndex(ctx.root);
+      if ("needsIndex" in ensured) return noIndex(ctx);
       const { handle, autoIndexed } = ensured;
       if (!autoIndexed) maybeAutoSync(ctx); // a fresh build is already current
       try {
-        const { value: result, tookMs } = timed(() => find(handle, query, { ignoreCase, limit }));
+        const t0 = performance.now();
+        const result = await find(handle, query, { ignoreCase, limit });
         let usage: string | undefined;
         if (receiptOn) {
-          const entry = findEntry(result);
+          const entry = withPlatform(findEntry(result), ctx);
           recordUsage(ctx.dir, entry);
           usage = formatReceipt(entry, session);
         }
         return ok({
           ...result,
           ...(autoIndexed ? { auto_indexed: autoIndexNote(autoIndexed) } : {}),
-          took_ms: tookMs,
+          took_ms: Math.round((performance.now() - t0) * 1000) / 1000,
           ...(usage ? { usage } : {}),
         });
       } catch (err) {
@@ -398,7 +435,7 @@ export async function serveMcp(rootPath?: string): Promise<void> {
       } catch (err) {
         return fail(`indexing failed: ${(err as Error).message}`);
       }
-      if ("needsIndex" in ensured) return noIndex(ctx.root);
+      if ("needsIndex" in ensured) return noIndex(ctx);
       const { handle, autoIndexed } = ensured;
       if (!autoIndexed) maybeAutoSync(ctx); // a fresh build is already current
       try {
@@ -407,7 +444,7 @@ export async function serveMcp(rootPath?: string): Promise<void> {
         const partial = partialIndex(handle.manifest);
         let usage: string | undefined;
         if (receiptOn) {
-          const entry = sqlEntry(query, rows);
+          const entry = withPlatform(sqlEntry(query, rows), ctx);
           recordUsage(ctx.dir, entry);
           usage = formatReceipt(entry, session);
         }
@@ -424,8 +461,93 @@ export async function serveMcp(rootPath?: string): Promise<void> {
     },
   );
 
+  if (retrievalAgent) {
+    server.registerTool(
+      "retrieval_agent",
+      {
+        title: "Retrieval agent over the hosted index",
+        description:
+          "Hands one question about the code to the platform's retrieval agent, which searches the " +
+          "index itself (keyword, meaning, SQL) and returns the answer with the places it found, cited " +
+          "path:line. Use it for questions that would take several find, search or sql calls: counts, " +
+          "which files or symbols, rankings, where something is handled. Not for reading or explaining " +
+          "a file you already know: Read it. The result includes a 'usage' field with the agent's turns " +
+          "and tokens.",
+        inputSchema: {
+          question: z.string().min(1).describe("The question, in plain language, about the indexed code."),
+          answer: z
+            .enum(["text", "scalar", "sql"])
+            .default("text")
+            .describe("The answer's shape: plain text (default), a single scalar, or one SQL statement whose rows answer it."),
+          path: z
+            .string()
+            .optional()
+            .describe(
+              "Absolute path to the repository root to ask about. Defaults to the server's configured root; " +
+                "set it to target a specific repo when a session spans more than one.",
+            ),
+        },
+      },
+      async ({ question, answer, path }) => {
+        let ctx: RepoCtx;
+        try {
+          ctx = repoFor(path);
+        } catch (err) {
+          return fail((err as Error).message);
+        }
+        // Only the hosted default root has a retrieval agent behind it; a
+        // local repo (any `path` other than the default root) does not.
+        if (!ctx.hosted) return fail("retrieval_agent needs a hosted index: set CX_DB_URL");
+        // The same readiness check the other tools make: without a chunks
+        // table the platform would spend the whole cold-start budget on
+        // "no table described yet" before saying anything useful.
+        let ensured: EnsureResult;
+        try {
+          ensured = await ensureIndexed(ctx, { autoIndexEnabled, getHandle, build: buildIndex });
+        } catch (err) {
+          return fail(`indexing failed: ${(err as Error).message}`);
+        }
+        if ("needsIndex" in ensured) return noIndex(ctx);
+        try {
+          const t0 = performance.now();
+          // The spend (tokens, rung, card tier) goes to the ledger and the
+          // receipt only; the result the model sees is answer, hits, queries.
+          const { result, spend } = await runRetrievalAgent(
+            ctx.hosted,
+            { question, answer },
+            { maxTurns: retrievalAgentMaxTurns(), maxWallSecs: retrievalAgentMaxWallSecs() },
+          );
+          let usage: string | undefined;
+          if (receiptOn) {
+            const entry = withPlatform(retrievalAgentEntry(result, spend), ctx);
+            recordUsage(ctx.dir, entry);
+            usage = formatReceipt(entry, session);
+          }
+          return ok({
+            ...result,
+            took_ms: Math.round((performance.now() - t0) * 1000) / 1000,
+            ...(usage ? { usage } : {}),
+          });
+        } catch (err) {
+          return fail(`retrieval_agent failed: ${(err as Error).message}`);
+        }
+      },
+    );
+  }
+
   const transport = new StdioServerTransport();
   await server.connect(transport);
+  if (hosted) {
+    // The host and the provider, never the key. Readiness is not probed here:
+    // a cold database can take a while to answer, and the first tool call
+    // reports "no chunks table" itself when the table is missing.
+    console.error(
+      `code-context MCP server ready on stdio (default root: ${defaultRoot}, hosted ${TABLE} table at ${hostedLabel(hosted)}, ` +
+        `embedder: ${embedderInfo()}; auto-index and auto-sync are off for the hosted table; ` +
+        "tools accept an optional 'path' to target other, local repos)",
+    );
+    return;
+  }
   const manifest: Manifest | undefined = readManifest(indexDir(defaultRoot));
   console.error(
     `code-context MCP server ready on stdio (default root: ${defaultRoot}, index: ${

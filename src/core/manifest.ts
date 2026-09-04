@@ -10,6 +10,7 @@
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { MANIFEST_NAME, TABLE } from "./config.js";
+import type { Analyzer } from "./analyzer.js";
 
 /** On-disk index format. Bump when the table schema or the embedded text
  * changes so old indexes are treated as absent and rebuilt, never mixed:
@@ -22,7 +23,10 @@ export type VectorState = "none" | "building" | "ready";
 export interface EmbedderInfo {
   provider: string;
   model: string;
-  dim: number;
+  /** Vector width. Absent when the platform embeds server-side: the JSON
+   * schema descriptor of an embedding column names the text it embeds, not a
+   * width the client ever chose. */
+  dim?: number;
   /** Local-model quantization the index was embedded with. */
   dtype?: string;
 }
@@ -31,7 +35,20 @@ export interface Manifest {
   version: number;
   /** Table name the index lives in (always `chunks` today). */
   table: string;
+  /** Where the table lives. `hosted` marks a manifest that describes a table
+   * on a platform database (written by the hosted loader and by the reader
+   * that synthesizes one from the server's schema); a manifest without it
+   * describes a local index and is never trusted for a hosted target, since
+   * the two tables share nothing but the sidecar directory. */
+  origin?: "hosted";
   vectors: VectorState;
+  /** The FTS analyzer the table's `content` index was built with. Queries are
+   * tokenized by the engine with this analyzer, and the client mirrors it to
+   * decide what the index can look up. Absent on manifests written before it
+   * was recorded: those tables were built locally through the binding's bare
+   * `IndexSpec.fts(column)`, which the pinned engine (0.5.2) indexes with
+   * `ascii_lower`, its default - read an absent value as that. */
+  analyzer?: Analyzer;
   embedder?: EmbedderInfo;
   files: number;
   chunks: number;
