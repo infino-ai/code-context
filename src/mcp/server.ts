@@ -195,6 +195,11 @@ export async function serveMcp(rootPath?: string): Promise<void> {
     return { value, tookMs: Math.round((performance.now() - t0) * 1000) / 1000 };
   };
 
+  // CX_HIDE_REINDEX takes the reindex tool off the surface (plan 101, E1):
+  // auto-sync and auto-index cover the job in-session, `cx index --full` on
+  // the CLI. The routing line below and the registration both follow it.
+  const hideReindex = ["1", "true", "yes"].includes((process.env.CX_HIDE_REINDEX ?? "").toLowerCase());
+
   const server = new McpServer(
     { name: "code-context", version: "0.1.2" },
     {
@@ -203,8 +208,10 @@ export async function serveMcp(rootPath?: string): Promise<void> {
         "- find - every line containing an exact string, where you would grep.\n" +
         "- search - how does X work, where is Y handled, code by meaning.\n" +
         "- sql - counts, rankings, and aggregates across the repo.\n" +
-        "- reindex - after sweeping edits; the server auto-syncs otherwise.\n" +
-        "Answer and cite from results (path:line); Read a file only for a hit marked truncated. " +
+        (hideReindex ? "" : "- reindex - after sweeping edits; the server auto-syncs otherwise.\n") +
+        "Hits carry the code: when a hit answers the question, answer from it and cite path:line " +
+        "without re-reading the file or re-checking with grep; Read a file only for a hit marked " +
+        "truncated. " +
         "Every tool takes an optional 'path' (an absolute repo root) to target another repository. " +
         "A 'partial' marker means files over the index cap were left out, so a missing match is not " +
         "proof of absence.",
@@ -349,8 +356,9 @@ export async function serveMcp(rootPath?: string): Promise<void> {
       title: "SQL over the code index",
       description:
         "Read-only SQL, one SELECT or WITH, over " +
-        `${TABLE}(path, start_line, end_line, lang, symbol, content[, embedding]) for counts, ` +
-        "rankings, and GROUP BY across the whole repo. Search functions are table-valued: " +
+        `${TABLE}(path, start_line, end_line, lang, symbol, content[, embedding]) - lang is the ` +
+        "file extension, e.g. 'rs' - for counts, rankings, and GROUP BY across the whole repo. " +
+        "Search functions are table-valued: " +
         `bm25_search('${TABLE}','content','terms', k) needs no embedding; ` +
         `hybrid_search('${TABLE}','content','terms','embedding', {{q}}, k) and ` +
         `vector_search('${TABLE}','embedding', {{q}}, k) take a {{name}} placeholder filled from ` +
@@ -412,10 +420,6 @@ export async function serveMcp(rootPath?: string): Promise<void> {
     },
   );
 
-  // Plan 101 variant V3: CX_HIDE_REINDEX takes the tool off the surface so the
-  // ablation can measure its absence from the same build; auto-sync and
-  // auto-index cover the job in-session and `cx index --full` on the CLI.
-  const hideReindex = ["1", "true", "yes"].includes((process.env.CX_HIDE_REINDEX ?? "").toLowerCase());
   if (!hideReindex) {
   server.registerTool(
     "reindex",
