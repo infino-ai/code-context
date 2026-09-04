@@ -1,22 +1,23 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: Copyright The Infino Authors
 //
-// The subagent tool's logic, without an MCP transport: how a platform
-// response becomes the tool result (facts only - the statement, the hits and
-// the aggregate rows read from the statement's result and the transcript;
-// never the inner model's prose), the no-answer reporting, and what
-// runRetrievalAgent sends and runs. No network.
+// The subagent tool's logic, without an MCP transport: how a sub_agent
+// response (a fact table plus, when asked, the transcript) becomes the tool
+// result - the statement, the hits and the aggregate rows read from the
+// table and the transcript, never anything the model wrote - the no-answer
+// reporting, and what runRetrievalAgent sends. No network.
 
 import { describe, expect, it } from "vitest";
 import {
   runRetrievalAgent,
   retrievalAgentRunFrom,
-  statementOf,
+  tableOf,
   stepsFrom,
   factsFrom,
   MAX_HITS,
   MAX_ROWS,
   HIT_CONTENT_CHARS,
+  ROW_CELL_CHARS,
   TERMINATE_ANSWERED,
   type RetrievalAgentResult,
 } from "../src/core/retrieval-agent.js";
@@ -50,13 +51,17 @@ const chunkRows = (n: number) => ({
   ...(n > 25 ? { note: `${n} rows total; first 25 shown - aggregate in SQL instead` } : {}),
 });
 
-/** The statement a sql-mode loop submits, as the platform serializes it in `answer`. */
+/** The statement the loop settled on, and its fact table as the platform
+ * returns it: columns once, rows positional. */
 const STATEMENT = "SELECT path, COUNT(*) AS n FROM token_match('chunks','content','compaction') GROUP BY path ORDER BY n DESC";
+const TABLE = { statement: STATEMENT, columns: ["path", "n"], rows: [["src/f1.ts", 7], ["src/f0.ts", 2]] };
+const COVERAGE = { rows_total: 2, rows_returned: 2, truncated: false };
 
-/** A complete sql-mode `answered` response, as the platform returns it. */
+/** A complete `answered` response, as the platform returns it. */
 function answered(overrides: Record<string, unknown> = {}) {
   return {
-    answer: JSON.stringify({ sql: STATEMENT }),
+    table: TABLE,
+    coverage: COVERAGE,
     terminate: "answered",
     turns: 3,
     answer_retries: 0,
@@ -77,50 +82,56 @@ function answered(overrides: Record<string, unknown> = {}) {
   };
 }
 
-/** The rows the statement returns when run. */
-const STATEMENT_ROWS = [
-  { path: "src/f1.ts", n: 7 },
-  { path: "src/f0.ts", n: 2 },
-];
+/** The same response with the loop ending short of a statement. */
+const unanswered = (terminate: string, extra: Record<string, unknown> = {}) =>
+  answered({ table: null, coverage: { rows_total: 0, rows_returned: 0, truncated: false }, terminate, ...extra });
 
 const QUESTION = "which files mention compaction?";
 
 // --- retrievalAgentRunFrom ------------------------------------------------------------
 
 describe("retrievalAgentRunFrom", () => {
-  it("returns the statement, the hits from the transcript with their content, the statement's rows, and the queries - and no prose", () => {
-    const { result } = retrievalAgentRunFrom(QUESTION, answered(), { statementRows: STATEMENT_ROWS });
+  it("returns the statement, its rows as facts, the hits from the transcript with their content, and the queries - and no prose", () => {
+    const { result } = retrievalAgentRunFrom(QUESTION, answered());
     expect(result).toEqual({
       question: QUESTION,
       sql: STATEMENT,
+      coverage: { rowsTotal: 2, rowsReturned: 2, truncated: false },
       hits: [
         { path: "src/f0.ts", startLine: 1, endLine: 9, content: "fn f0() {\n  body\n}" },
         { path: "src/f1.ts", startLine: 11, endLine: 19, content: "fn f1() {\n  body\n}" },
         { path: "src/f2.ts", startLine: 21, endLine: 29, content: "fn f2() {\n  body\n}" },
       ],
-      rows: STATEMENT_ROWS,
+      rows: [
+        { path: "src/f1.ts", n: 7 },
+        { path: "src/f0.ts", n: 2 },
+      ],
       hitsTotal: 3,
       rowsTotal: 2,
       queries: [{ tool: "query_sql", sql: "SELECT path, start_line, end_line, content FROM chunks LIMIT 3" }],
       turns: 3,
     });
     expect(result.error).toBeUndefined();
-    expect(Object.keys(result).sort()).toEqual(["hits", "hitsTotal", "queries", "question", "rows", "rowsTotal", "sql", "turns"]);
+    expect(Object.keys(result).sort()).toEqual(["coverage", "hits", "hitsTotal", "queries", "question", "rows", "rowsTotal", "sql", "turns"]);
   });
 
   it("keeps the loop's spend beside the result, not in it, and drops the platform's own fields and the transcript", () => {
     const { result, spend } = retrievalAgentRunFrom(QUESTION, answered());
     expect(spend).toEqual({ promptTokens: 1200, completionTokens: 80 });
     const asRecord = result as RetrievalAgentResult & Record<string, unknown>;
-    for (const dropped of ["answer", "model", "prompt_tokens", "completion_tokens", "terminate", "transcript", "usage", "answer_retries"]) {
+    for (const dropped of ["table", "model", "prompt_tokens", "completion_tokens", "terminate", "transcript", "usage", "answer_retries", "bare_reply", "card_tier", "rung"]) {
       expect(asRecord[dropped]).toBeUndefined();
     }
     expect(JSON.stringify(result)).not.toContain("the whole system prompt");
   });
 
   it("puts the statement's rows first when they name places, ahead of the transcript's", () => {
-    const fromStatement = [chunkRow(9, "from the statement"), chunkRow(0, "seen first here, so this content wins")];
-    const { result } = retrievalAgentRunFrom(QUESTION, answered(), { statementRows: fromStatement });
+    const table = {
+      statement: "SELECT path, start_line, end_line, content FROM chunks WHERE path = 'src/f9.ts'",
+      columns: ["path", "start_line", "end_line", "content"],
+      rows: [["src/f9.ts", 91, 99, "from the statement"], ["src/f0.ts", 1, 9, "seen first here, so this content wins"]],
+    };
+    const { result } = retrievalAgentRunFrom(QUESTION, answered({ table }));
     expect(result.hits.map((h) => `${h.path} ${h.content}`)).toEqual([
       "src/f9.ts from the statement",
       "src/f0.ts seen first here, so this content wins",
@@ -130,42 +141,34 @@ describe("retrievalAgentRunFrom", () => {
     expect(result.rows).toEqual([]);
   });
 
+  it("reports the platform's coverage when the statement's result was cut", () => {
+    const { result } = retrievalAgentRunFrom(QUESTION, answered({ coverage: { rows_total: 1500, rows_returned: 1000, truncated: true } }));
+    expect(result.coverage).toEqual({ rowsTotal: 1500, rowsReturned: 1000, truncated: true });
+  });
+
   it("returns the facts found on the way, with a reason, when the loop hit its turn cap", () => {
-    const { result } = retrievalAgentRunFrom(QUESTION, answered({ answer: null, terminate: "turn_cap", turns: 4 }));
+    const { result } = retrievalAgentRunFrom(QUESTION, unanswered("turn_cap", { turns: 4 }));
     expect(result.sql).toBeUndefined();
+    expect(result.coverage).toBeUndefined();
     expect(result.error).toMatch(/ran out of turns/);
     expect(result.error).toMatch(/what it retrieved before stopping/);
     expect(result.turns).toBe(4);
     expect(result.hits).toHaveLength(3);
+    expect(result.rows).toEqual([]);
     expect(result.queries).toHaveLength(1);
   });
 
   it("names the wall cap and carries the endpoint's own words on an error termination", () => {
-    expect(retrievalAgentRunFrom(QUESTION, answered({ answer: null, terminate: "wall_cap" })).result.error).toMatch(/ran out of time/);
-    const failed = retrievalAgentRunFrom(QUESTION, answered({ answer: null, terminate: "error", error: "401 from the model host" })).result;
+    expect(retrievalAgentRunFrom(QUESTION, unanswered("wall_cap")).result.error).toMatch(/ran out of time/);
+    const failed = retrievalAgentRunFrom(QUESTION, unanswered("error", { error: "401 from the model host" })).result;
     expect(failed.error).toBe(
       "the retrieval agent's model endpoint failed: 401 from the model host - the hits and rows below are what it retrieved before stopping",
     );
   });
 
-  it("reports a statement that failed to run, keeping the transcript's facts", () => {
-    const { result } = retrievalAgentRunFrom(QUESTION, answered(), { statementError: "the statement failed to run: no such column n" });
-    expect(result.sql).toBe(STATEMENT);
-    expect(result.error).toMatch(/failed to run: no such column n/);
-    expect(result.hits).toHaveLength(3);
-  });
-
   it("describes an unknown terminate value verbatim", () => {
-    const { result } = retrievalAgentRunFrom(QUESTION, answered({ answer: null, terminate: "budget_exceeded" }));
+    const { result } = retrievalAgentRunFrom(QUESTION, unanswered("budget_exceeded"));
     expect(result.error).toMatch(/"budget_exceeded"/);
-  });
-
-  it("has no statement when the loop answered in prose (text mode, or a sql-mode loop that wrote a paragraph)", () => {
-    const { result } = retrievalAgentRunFrom(QUESTION, answered({ answer: "Compaction works by first deciding ..." }));
-    expect(result.sql).toBeUndefined();
-    expect(result.error).toBeUndefined();
-    expect(JSON.stringify(result)).not.toContain("Compaction works by");
-    expect(result.hits).toHaveLength(3);
   });
 
   it("throws on a body that is not an agent response", () => {
@@ -176,9 +179,12 @@ describe("retrievalAgentRunFrom", () => {
 
   it("tolerates a response without a transcript (the server left it out)", () => {
     const { transcript: _dropped, ...noTranscript } = answered();
-    const { result } = retrievalAgentRunFrom(QUESTION, noTranscript, { statementRows: STATEMENT_ROWS });
+    const { result } = retrievalAgentRunFrom(QUESTION, noTranscript);
     expect(result.sql).toBe(STATEMENT);
-    expect(result.rows).toEqual(STATEMENT_ROWS);
+    expect(result.rows).toEqual([
+      { path: "src/f1.ts", n: 7 },
+      { path: "src/f0.ts", n: 2 },
+    ]);
     expect(result.hits).toEqual([]);
     expect(result.queries).toEqual([]);
   });
@@ -195,17 +201,29 @@ describe("retrievalAgentRunFrom", () => {
   });
 });
 
-// --- statementOf ------------------------------------------------------------------------------
+// --- tableOf ----------------------------------------------------------------------------------
 
-describe("statementOf", () => {
-  it("reads the sql out of an answered sql-mode response and nothing else", () => {
-    expect(statementOf(answered())).toBe(STATEMENT);
-    expect(statementOf(answered({ answer: "just words" }))).toBeUndefined();
-    expect(statementOf(answered({ answer: JSON.stringify({ sql: "" }) }))).toBeUndefined();
-    expect(statementOf(answered({ answer: JSON.stringify({ text: "no sql key" }) }))).toBeUndefined();
-    expect(statementOf(answered({ terminate: "turn_cap" }))).toBeUndefined();
-    expect(statementOf(answered({ answer: null }))).toBeUndefined();
-    expect(statementOf(null)).toBeUndefined();
+describe("tableOf", () => {
+  it("reads the statement and turns positional rows into records by column, in order", () => {
+    expect(tableOf(answered())).toEqual({
+      statement: STATEMENT,
+      rows: [
+        { path: "src/f1.ts", n: 7 },
+        { path: "src/f0.ts", n: 2 },
+      ],
+    });
+  });
+
+  it("keeps a null cell and skips a row that is not an array; a duplicate column name keeps the last cell", () => {
+    const table = { statement: "S", columns: ["name", "name", "k"], rows: [["a", "b", null], "garbage", ["c", "d", 1]] };
+    expect(tableOf({ table })).toEqual({ statement: "S", rows: [{ name: "b", k: null }, { name: "d", k: 1 }] });
+  });
+
+  it("is null without a table, or with a malformed one", () => {
+    expect(tableOf(unanswered("turn_cap"))).toBeNull();
+    expect(tableOf({ table: { statement: "S" } })).toBeNull();
+    expect(tableOf({ table: { columns: [], rows: [] } })).toBeNull();
+    expect(tableOf(null)).toBeNull();
   });
 });
 
@@ -240,6 +258,15 @@ describe("factsFrom", () => {
     expect(facts.hits).toEqual([]);
     expect(facts.rows).toEqual([{ path: "src/a.rs", n: 3 }, { path: "src/b.rs", start_line: "7", end_line: 9 }, { "COUNT(*)": 5527 }]);
     expect(facts.rowsTotal).toBe(3);
+  });
+
+  it("cuts a long string cell of an aggregate row at ROW_CELL_CHARS - a chunk's text without its place is not a fact to cite", () => {
+    const long = "y".repeat(ROW_CELL_CHARS * 3);
+    const { rows: out } = rows([{ content: long, n: 1 }, { path: "a.rs", short: "kept whole" }]);
+    expect(ROW_CELL_CHARS).toBe(240);
+    expect(out[0].content).toBe("y".repeat(ROW_CELL_CHARS) + "...");
+    expect(out[0].n).toBe(1);
+    expect(out[1]).toEqual({ path: "a.rs", short: "kept whole" });
   });
 
   it("ignores rows with nothing scalar, and the bm25 tool's _id/text/score rows become aggregate rows, not hits", () => {
@@ -289,6 +316,7 @@ describe("stepsFrom", () => {
     const { result } = retrievalAgentRunFrom(
       QUESTION,
       answered({
+        table: null,
         transcript: [
           toolCall("s1", "bm25_search", { query: "compaction merge", k: 5, column: "content" }),
           toolResult("s1", { rows: [{ _id: 1, text: "a", score: 1.5 }] }),
@@ -380,57 +408,33 @@ describe("stepsFrom", () => {
 // --- runRetrievalAgent ----------------------------------------------------------------------
 
 describe("runRetrievalAgent", () => {
-  it("asks with the contract and budget, runs the statement, and leads the result with its rows", async () => {
+  it("asks sub_agent with the budget and the transcript, and returns the distilled run", async () => {
     const sent: unknown[] = [];
-    const ran: string[] = [];
     const hosted = {
-      ask: async (req: unknown) => {
+      subAgent: async (req: unknown) => {
         sent.push(req);
         return answered();
       },
-      querySql: async (sql: string) => {
-        ran.push(sql);
-        return STATEMENT_ROWS;
-      },
     };
-    const { result, spend } = await runRetrievalAgent(hosted, { question: "which files?", answer: "sql" }, { maxTurns: 4, maxWallSecs: 90 });
-    expect(sent).toEqual([{ question: "which files?", answer: "sql", max_turns: 4, max_wall_secs: 90, include_transcript: true }]);
-    expect(ran).toEqual([STATEMENT]);
+    const { result, spend } = await runRetrievalAgent(hosted, { question: "which files?" }, { maxTurns: 4, maxWallSecs: 90 });
+    expect(sent).toEqual([{ question: "which files?", max_turns: 4, max_wall_secs: 90, include_transcript: true }]);
     expect(result.question).toBe("which files?");
     expect(result.sql).toBe(STATEMENT);
-    expect(result.rows).toEqual(STATEMENT_ROWS);
+    expect(result.rows).toEqual([
+      { path: "src/f1.ts", n: 7 },
+      { path: "src/f0.ts", n: 2 },
+    ]);
     expect(result.hits).toHaveLength(3);
     expect(spend).toEqual({ promptTokens: 1200, completionTokens: 80 });
     expect((result as unknown as Record<string, unknown>).transcript).toBeUndefined();
   });
 
-  it("runs no statement when the loop produced none, and reports one that fails without losing the transcript's facts", async () => {
-    const ran: string[] = [];
-    const prose = { ask: async () => answered({ answer: "words" }), querySql: async (sql: string) => (ran.push(sql), []) };
-    const fromProse = await runRetrievalAgent(prose, { question: "q", answer: "text" }, { maxTurns: 4, maxWallSecs: 90 });
-    expect(ran).toEqual([]);
-    expect(fromProse.result.sql).toBeUndefined();
-    expect(fromProse.result.hits).toHaveLength(3);
-
-    const failing = {
-      ask: async () => answered(),
-      querySql: async () => {
-        throw new Error("query_sql: server returned 400: no such function token_match");
-      },
-    };
-    const { result } = await runRetrievalAgent(failing, { question: "q", answer: "sql" }, { maxTurns: 4, maxWallSecs: 90 });
-    expect(result.sql).toBe(STATEMENT);
-    expect(result.error).toMatch(/failed to run: query_sql: server returned 400/);
-    expect(result.hits).toHaveLength(3);
-  });
-
   it("propagates the client's error for a terminal platform failure", async () => {
     const hosted = {
-      ask: async () => {
-        throw new Error("ask: server returned 501: ask is not configured on this deployment");
+      subAgent: async () => {
+        throw new Error("sub_agent: server returned 501: the sub-agent is not configured on this deployment");
       },
-      querySql: async () => [],
     };
-    await expect(runRetrievalAgent(hosted, { question: "q", answer: "sql" }, { maxTurns: 4, maxWallSecs: 120 })).rejects.toThrow(/501/);
+    await expect(runRetrievalAgent(hosted, { question: "q" }, { maxTurns: 4, maxWallSecs: 120 })).rejects.toThrow(/501/);
   });
 });

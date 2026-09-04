@@ -479,13 +479,6 @@ export async function serveMcp(rootPath?: string): Promise<void> {
           "what the call cost.",
         inputSchema: {
           question: z.string().min(1).describe("The question or task, in plain language, about the indexed code."),
-          answer: z
-            .enum(["sql", "text", "scalar"])
-            .default("sql")
-            .describe(
-              "How the agent closes: sql (default) submits one statement whose rows answer the question and those rows lead the result; " +
-                "text or scalar let it reason toward a written answer, which is not returned - the rows it retrieved are.",
-            ),
           path: z
             .string()
             .optional()
@@ -495,7 +488,7 @@ export async function serveMcp(rootPath?: string): Promise<void> {
             ),
         },
       },
-      async ({ question, answer, path }) => {
+      async ({ question, path }) => {
         let ctx: RepoCtx;
         try {
           ctx = repoFor(path);
@@ -521,7 +514,7 @@ export async function serveMcp(rootPath?: string): Promise<void> {
           // the result the model sees is the facts: sql, hits, rows, queries.
           const { result, spend } = await runRetrievalAgent(
             ctx.hosted,
-            { question, answer },
+            { question },
             { maxTurns: subagentMaxTurns(), maxWallSecs: subagentMaxWallSecs() },
           );
           let usage: string | undefined;

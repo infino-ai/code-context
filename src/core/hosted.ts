@@ -29,8 +29,9 @@ export const DEFAULT_COLD_START_SECS = 120;
 /** Seconds to wait before a retry when the server sent no `Retry-After`. */
 const DEFAULT_RETRY_AFTER_SECS = 5;
 
-/** Extra wall clock an `ask` gets on top of its own `max_wall_secs`: the loop
- * may run right up to its budget and the answer still has to travel back. */
+/** Extra wall clock a `sub_agent` call gets on top of its own `max_wall_secs`:
+ * the loop may run right up to its budget and the answer still has to travel
+ * back. */
 const ASK_TIMEOUT_MARGIN_SECS = 60;
 
 /** Milliseconds per second, named so the unit conversions read as such. */
@@ -435,16 +436,20 @@ export class HostedDb {
     return this.rows(await this.postJson("token_match", body, true), "token_match");
   }
 
-  // --- ask ---
+  // --- sub_agent ---
 
-  /** `POST /v1/ask/{db}`: the answering loop. The per-call timeout is the
-   * request's own `max_wall_secs` plus a margin for the answer to travel; with
-   * no `max_wall_secs` the server's cap applies and the client's general
-   * timeout is all it can go on. A retryable 503 is retried like any other
-   * op; 501 (no agent configured) is terminal. */
-  async ask(req: {
+  /** `POST /v1/sub_agent/{db}`: the platform's retrieval loop. It answers
+   * with a fact table - the statement the loop settled on, its columns, and
+   * the rows the database returned for it, positional - with `coverage`
+   * saying how much of the result that is, and the loop's accounting. A loop
+   * that did not finish still answers 200 with `terminate` saying how and
+   * `table` null. The per-call timeout is the request's own `max_wall_secs`
+   * plus a margin for the answer to travel; with no `max_wall_secs` the
+   * server's cap applies and the client's general timeout is all it can go
+   * on. A retryable 503 is retried like any other op; 501 (no agent
+   * configured) is terminal. */
+  async subAgent(req: {
     question: string;
-    answer?: "text" | "scalar" | "sql";
     max_turns?: number;
     max_wall_secs?: number;
     include_transcript?: boolean;
@@ -452,21 +457,20 @@ export class HostedDb {
     // Only the fields given are sent: the request type rejects unknown keys and
     // defaults the rest itself.
     const body: RowRecord = { question: req.question };
-    if (req.answer !== undefined) body.answer = req.answer;
     if (req.max_turns !== undefined) body.max_turns = req.max_turns;
     if (req.max_wall_secs !== undefined) body.max_wall_secs = req.max_wall_secs;
     if (req.include_transcript !== undefined) body.include_transcript = req.include_transcript;
     const timeoutMs =
       req.max_wall_secs !== undefined ? (req.max_wall_secs + ASK_TIMEOUT_MARGIN_SECS) * MS_PER_SEC : this.timeoutMs;
     const exchange = await this.call({
-      op: "ask",
+      op: "sub_agent",
       method: "POST",
       body: JSON.stringify(body),
       contentType: JSON_CONTENT_TYPE,
       acceptJson: true,
       timeoutMs,
     });
-    return this.parseJson(exchange, "ask") as RowRecord;
+    return this.parseJson(exchange, "sub_agent") as RowRecord;
   }
 
   // --- plumbing ---

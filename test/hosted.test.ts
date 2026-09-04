@@ -283,20 +283,31 @@ describe("request shapes", () => {
     expect(calls[0].body).toBeUndefined();
   });
 
-  it("ask posts only the fields given and decodes the answer", async () => {
-    const answer = { answer: "3", terminate: "answered", turns: 2, answer_retries: 0, bare_reply: false, prompt_tokens: 10, completion_tokens: 2, usage: [], model: "m" };
+  it("sub_agent posts only the fields given and decodes the fact table", async () => {
+    const answer = {
+      table: { statement: "SELECT path, COUNT(*) AS n FROM chunks GROUP BY path", columns: ["path", "n"], rows: [["a.rs", 3]] },
+      coverage: { rows_total: 1, rows_returned: 1, truncated: false },
+      terminate: "answered",
+      turns: 2,
+      answer_retries: 0,
+      bare_reply: false,
+      prompt_tokens: 10,
+      completion_tokens: 2,
+      usage: [],
+      model: "m",
+    };
     const { db, calls } = client([json(answer), json(answer)]);
-    expect(await db.ask({ question: "how many?" })).toEqual(answer);
-    expect(calls[0].url).toBe("https://api.example.test/v1/ask/cx");
+    expect(await db.subAgent({ question: "how many?" })).toEqual(answer);
+    expect(calls[0].url).toBe("https://api.example.test/v1/sub_agent/cx");
     expect(bodyJson(calls[0])).toEqual({ question: "how many?" });
-    await db.ask({ question: "q", answer: "sql", max_turns: 3, max_wall_secs: 30, include_transcript: true });
-    expect(bodyJson(calls[1])).toEqual({ question: "q", answer: "sql", max_turns: 3, max_wall_secs: 30, include_transcript: true });
+    await db.subAgent({ question: "q", max_turns: 3, max_wall_secs: 30, include_transcript: true });
+    expect(bodyJson(calls[1])).toEqual({ question: "q", max_turns: 3, max_wall_secs: 30, include_transcript: true });
     expect(calls[1].signal).toBeInstanceOf(AbortSignal);
   });
 
-  it("ask does not retry a 501 (no ask configured on the deployment)", async () => {
-    const { db, calls } = client([{ status: 501, body: "ask is not configured on this deployment" }]);
-    await expect(db.ask({ question: "q" })).rejects.toMatchObject({ status: 501 });
+  it("sub_agent does not retry a 501 (no agent configured on the deployment)", async () => {
+    const { db, calls } = client([{ status: 501, body: "the sub-agent is not configured on this deployment" }]);
+    await expect(db.subAgent({ question: "q" })).rejects.toMatchObject({ status: 501 });
     expect(calls).toHaveLength(1);
   });
 
