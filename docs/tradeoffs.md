@@ -10,13 +10,15 @@ symbol-precise references. It ranks and retrieves content and aggregates by
 relevance. Tools that resolve structure (LSP servers, graph indexes) are
 complementary: MCP servers stack, so run both when you need both.
 
-### It does not beat grep on pinpoint lookups
+### Pinpoint lookups are not where the token win is
 
-Naming the one file a known symbol lives in is a single grep's job. There the
-index does not save tokens: a grep returns one matching line, while ranked
-search returns chunks that carry their content. That content is what pays off
-on "how does X work" and whole-repo questions, and it is dead weight when all
-you need is a path. Adding code-context does not reduce accuracy on
+Naming the one file a known symbol lives in is a single grep's job. `find`
+does that job from the index - every matching line as `path:line`, no file
+scanned - and returns the same one-line-per-match shape grep does, so it
+matches grep's cost rather than beating it. Ranked `search` is the wrong tool
+there: it returns chunks that carry their content, which is what pays off on
+"how does X work" and whole-repo questions and is dead weight when all you
+need is a path. Adding code-context does not reduce accuracy on
 localization; it just does not win on cost there. Both are measured in the
 [benchmark](benchmark.md).
 

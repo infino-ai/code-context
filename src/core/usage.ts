@@ -9,7 +9,7 @@
 
 import { appendFileSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { jsonify, type SearchResult } from "./searcher.js";
+import { jsonify, type FindResult, type SearchResult } from "./searcher.js";
 
 /** Rough tokens-per-char - the standard heuristic for English + code. Kept
  * deliberately simple: usage reports `~` figures, not a billed count. */
@@ -38,14 +38,17 @@ export const receiptEnabled = (): boolean =>
  * it doesn't duplicate the repo. */
 export interface UsageEntry {
   ts: string;
-  tool: "search" | "sql";
+  tool: "find" | "search" | "sql";
   query: string;
   returnedTokens: number;
   /** search only: whole-file size of the distinct files the hits came from. */
   wholeFileTokens?: number | null;
   ranking?: "hybrid" | "keyword";
-  /** search only: the response, as the regions you'd jump to. */
+  /** search and find: the response, as the regions you'd jump to (a find
+   * match is a single line, so its start and end are the same). */
   hits?: Array<{ path: string; startLine: number; endLine: number }>;
+  /** find only: matching lines across the repo, before the limit. */
+  matches?: number;
   /** sql only. */
   rows?: number;
   /** sql only: a truncated preview of the returned rows (the answer itself). */
@@ -84,6 +87,20 @@ export function searchEntry(result: SearchResult, root: string): UsageEntry {
   };
 }
 
+/** A find returns one line per match, so what it cost is the serialized
+ * matches themselves; the whole-file counterfactual is search's and does not
+ * apply - grep never read the files whole either. */
+export function findEntry(result: FindResult): UsageEntry {
+  return {
+    ts: new Date().toISOString(),
+    tool: "find",
+    query: result.query,
+    returnedTokens: estTokens(jsonify(result.matches)),
+    hits: result.matches.map((m) => ({ path: m.path, startLine: m.line, endLine: m.line })),
+    matches: result.total,
+  };
+}
+
 const ROWS_PREVIEW_CAP = 2000;
 
 export function sqlEntry(query: string, rows: Array<Record<string, unknown>>): UsageEntry {
@@ -119,6 +136,12 @@ export function formatReceipt(entry: UsageEntry, session?: SessionUsage): string
     // it after every response. The raw wholeFileTokens still lives in the entry
     // for anyone who wants to reason about it from the ledger.
     parts.push(`returned ~${fmtTokens(entry.returnedTokens)} tokens | ${plural(hits.length, "chunk", "chunks")} / ${plural(files, "file", "files")}`);
+  } else if (entry.tool === "find") {
+    const hits = entry.hits ?? [];
+    const files = new Set(hits.map((h) => h.path)).size;
+    // The repo-wide count, not just the lines returned: a cut result still
+    // tells the reader how many matches exist.
+    parts.push(`returned ~${fmtTokens(entry.returnedTokens)} tokens | ${plural(entry.matches ?? hits.length, "match", "matches")} / ${plural(files, "file", "files")}`);
   } else {
     parts.push(`returned ~${fmtTokens(entry.returnedTokens)} tokens | ${plural(entry.rows ?? 0, "row", "rows")}`);
   }

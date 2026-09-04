@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: Copyright The Infino Authors
 //
-// `cx search` / `cx sql` / `cx status` - the query commands.
+// `cx find` / `cx search` / `cx sql` / `cx status` / `cx usage` - the query commands.
 
 import { openIndex, NoIndexError } from "../core/context.js";
 import { indexDir, resolveRoot } from "../core/config.js";
 import { createEmbedder, embedderInfo } from "../core/embedder.js";
-import { search, runSql, jsonify } from "../core/searcher.js";
+import { find, search, runSql, jsonify } from "../core/searcher.js";
 import {
   receiptEnabled,
+  findEntry,
   searchEntry,
   sqlEntry,
   formatReceipt,
@@ -25,6 +26,42 @@ function die(err: unknown): never {
   const msg = err instanceof NoIndexError ? err.message : `error: ${(err as Error).message}`;
   console.error(msg);
   process.exit(1);
+}
+
+export interface FindCmdOptions {
+  ignoreCase?: boolean;
+  limit?: string;
+  json?: boolean;
+  path?: string;
+}
+
+/** `cx find` - every line containing the exact text, printed `path:line: text`
+ * the way `grep -n` does, so it drops into the same habits and pipelines. */
+export function findCmd(text: string, opts: FindCmdOptions): void {
+  try {
+    const handle = openIndex(opts.path);
+    const result = find(handle, text, {
+      ignoreCase: opts.ignoreCase,
+      limit: opts.limit === undefined ? undefined : Number(opts.limit),
+    });
+    if (receiptEnabled()) {
+      const entry = findEntry(result);
+      recordUsage(handle.dir, entry);
+      console.error(dim(formatReceipt(entry)));
+    }
+    if (opts.json) {
+      console.log(jsonify(result, true));
+      return;
+    }
+    if (result.partial) console.error(yellow(`warning: ${result.partial.note}`));
+    for (const m of result.matches) console.log(`${cyan(m.path)}${dim(`:${m.line}:`)} ${m.text}`);
+    if (result.truncated) {
+      console.error(yellow(`showing ${result.matches.length} of ${result.total} matches - raise --limit to see more`));
+    }
+    if (result.total === 0) console.error(yellow("no matches"));
+  } catch (err) {
+    die(err);
+  }
 }
 
 export interface SearchCmdOptions {
@@ -111,7 +148,7 @@ export function statusCmd(opts: StatusCmdOptions): void {
     console.log(
       `code-context index: ${fmtCount(m.chunks)} chunks from ${fmtCount(m.files)} files, ` +
         `vectors ${m.vectors}, indexed ${fmtAge(m.indexedAt)}. ` +
-        `MCP tools: search (terms + meaning), sql (aggregation), reindex (after big edits).`,
+        `MCP tools: find (exact text, every occurrence), search (terms + meaning), sql (aggregation), reindex (after big edits).`,
     );
     return;
   }
@@ -187,7 +224,7 @@ export async function usageCmd(opts: UsageCmdOptions): Promise<void> {
     return;
   }
   if (entries.length === 0 && (!session || session.prompts === 0)) {
-    console.error(yellow("no usage recorded yet - run `cx search`/`cx sql` here, or query via the MCP server"));
+    console.error(yellow("no usage recorded yet - run `cx find`/`cx search`/`cx sql` here, or query via the MCP server"));
     return;
   }
 
@@ -217,6 +254,16 @@ export async function usageCmd(opts: UsageCmdOptions): Promise<void> {
         `${dim(clock)}  ${bold(tool)}  ${q}  ${dim(`-> ${hits.length} hits / ${files} files | ~${fmtTokens(e.returnedTokens)} tok | ${e.ranking ?? "?"}`)}`,
       );
       const locs = hits.slice(0, 5).map((h) => `${h.path}:${h.startLine}-${h.endLine}`);
+      if (locs.length) console.log(green(`            ${locs.join("  ")}${hits.length > 5 ? dim(`  (+${hits.length - 5} more)`) : ""}`));
+    } else if (e.tool === "find") {
+      // A find match is one line, so cite it as path:line; the count is the
+      // repo-wide total, which can exceed the lines that were returned.
+      const hits = e.hits ?? [];
+      const files = new Set(hits.map((h) => h.path)).size;
+      console.log(
+        `${dim(clock)}  ${bold(tool)}  ${q}  ${dim(`-> ${e.matches ?? hits.length} matches / ${files} files | ~${fmtTokens(e.returnedTokens)} tok`)}`,
+      );
+      const locs = hits.slice(0, 5).map((h) => `${h.path}:${h.startLine}`);
       if (locs.length) console.log(green(`            ${locs.join("  ")}${hits.length > 5 ? dim(`  (+${hits.length - 5} more)`) : ""}`));
     } else {
       console.log(

@@ -26,19 +26,21 @@ logs, docs, and agent memory.
   view when many MCP servers are configured):
   `claude mcp add-json code-context -s user '{"command":"npx","args":["-y","@infino-ai/code-context","mcp"],"alwaysLoad":true}'`.
   A Claude Code plugin (`/plugin marketplace add infino-ai/code-context`) bakes the same config in.
-- MCP tools (stdio): `search` (exact terms AND meaning, one ranked pass,
-  hits carry chunk content with path:line ranges), `sql` (read-only
-  SELECT/WITH over `chunks(path, start_line, end_line, lang, content)`,
-  ranked search functions (bm25_search/hybrid_search) usable as table-valued
-  relations so search composes with GROUP BY), `reindex` (incremental sync;
-  the server also auto-syncs in the
-  background). A `search`/`sql` on a never-indexed repo builds the index
-  inline and answers on the same call (keyword live in seconds, vectors
-  backfilling); `CX_AUTO_INDEX=0` restores a strict "index it first" error.
-  Each tool takes an optional `path` (absolute repo root) so one server serves
-  multiple repos in a session; omit it for the startup root.
-- CLI: `cx index` (incremental; `--full`, `--watch`), `cx search`,
-  `cx sql`, `cx status`, `cx mcp`.
+- MCP tools (stdio): `find` (every line containing an exact string, cited
+  path:line like grep -n; complete and unranked - the grep replacement),
+  `search` (exact terms AND meaning, one ranked pass, hits carry chunk
+  content with path:line ranges), `sql` (read-only SELECT/WITH over
+  `chunks(path, start_line, end_line, lang, content)`, ranked search
+  functions (bm25_search/hybrid_search) usable as table-valued relations so
+  search composes with GROUP BY), `reindex` (incremental sync; the server
+  also auto-syncs in the background). A `find`/`search`/`sql` on a
+  never-indexed repo builds the index inline and answers on the same call
+  (keyword live in seconds, vectors backfilling); `CX_AUTO_INDEX=0` restores
+  a strict "index it first" error. Each tool takes an optional `path`
+  (absolute repo root) so one server serves multiple repos in a session;
+  omit it for the startup root.
+- CLI: `cx index` (incremental; `--full`, `--watch`), `cx find`,
+  `cx search`, `cx sql`, `cx status`, `cx mcp`.
 
 ## Evidence
 
@@ -60,7 +62,7 @@ logs, docs, and agent memory.
   the crawl-vs-retrieve model, when an index saves tokens, and where a plain
   grep is still the right tool.
 - [FAQ](docs/faq.md): what it is, when an agent should use it, local-only
-  guarantees, freshness, the three-tool MCP surface.
+  guarantees, freshness, the four-tool MCP surface.
 - [Tradeoffs](docs/tradeoffs.md): honest limits (no structural code
   intelligence; no token win on pinpoint lookups; one-time vector cost).
 

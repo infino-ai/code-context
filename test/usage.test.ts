@@ -5,6 +5,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import {
   estTokens,
   newSession,
+  findEntry,
   searchEntry,
   sqlEntry,
   formatReceipt,
@@ -73,6 +74,36 @@ describe("search receipt", () => {
     const session = newSession();
     const line = formatReceipt(searchEntry(result([hit("a.ts", "z".repeat(40))]), "/nope"), session);
     expect(line).toMatch(/invoked 1x this session/);
+  });
+});
+
+describe("find receipt", () => {
+  const found = {
+    query: "x",
+    ignoreCase: false,
+    total: 3,
+    files: 1,
+    truncated: true,
+    matches: [
+      { path: "a.ts", line: 3, text: "x = 1" },
+      { path: "a.ts", line: 9, text: "x = 2" },
+    ],
+  };
+
+  it("reports the repo-wide match count and the files, not just the lines returned", () => {
+    const line = formatReceipt(findEntry(found));
+    expect(line).toMatch(/^returned ~\d+ tokens \| 3 matches \/ 1 file$/);
+  });
+
+  it("records each match as a one-line region in the ledger", () => {
+    const entry = findEntry(found);
+    expect(entry.tool).toBe("find");
+    expect(entry.hits).toEqual([
+      { path: "a.ts", startLine: 3, endLine: 3 },
+      { path: "a.ts", startLine: 9, endLine: 9 },
+    ]);
+    expect(entry.matches).toBe(3);
+    expect(entry.wholeFileTokens).toBeUndefined();
   });
 });
 

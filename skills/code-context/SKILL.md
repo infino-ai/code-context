@@ -1,36 +1,57 @@
 ---
 name: code-context
 description: >
-  How to answer codebase questions with the code-context MCP tools (search,
-  sql, reindex): ranked hybrid keyword+semantic search, relevance-ranked SQL
-  aggregation over the index, and index lifecycle. Use when a question spans
-  many files ("how does X work", "where is Y handled"), when ranking or
-  counting code by topic across a repo, or when the code-context tools are
-  present but deferred and need loading before use. Not needed for jumping
-  to one known identifier - plain grep is fine there.
+  How to answer codebase questions with the code-context MCP tools (find,
+  search, sql, reindex): exact-text lookup that replaces grep, ranked hybrid
+  keyword+semantic search, relevance-ranked SQL aggregation over the index,
+  and index lifecycle. Use when you would grep for an identifier or literal,
+  when a question spans many files ("how does X work", "where is Y
+  handled"), when ranking or counting code by topic across a repo, or when
+  the code-context tools are present but deferred and need loading before
+  use.
 ---
 
-# code-context: ranked search over the repository
+# code-context: search over the repository
 
 code-context maintains a local index of the repository (in `.infino/` at the
-repo root) and exposes three MCP tools. The more a question spans the repo,
-the more one ranked pass beats crawling files into context.
+repo root) and exposes four MCP tools. Every lookup an agent would otherwise
+do with grep or by crawling files runs against the index instead: `find` for
+the exact-text case, one ranked pass for everything that spans the repo.
 
 ## If the tools are deferred
 
 When the tool names appear in a deferred-tools listing but their schemas are
-not loaded, load all three in ONE ToolSearch call before the first use, e.g.
-query `+code-context search sql reindex` (or `select:` with the exact
+not loaded, load all four in ONE ToolSearch call before the first use, e.g.
+query `+code-context find search sql reindex` (or `select:` with the exact
 listed names, comma-separated). Never load them one call at a time.
 
 ## Choosing the right tool
 
 | Situation | Use |
 | --- | --- |
-| One known identifier, literal string, or file | plain grep / file tools |
+| Every occurrence of an exact identifier, string, or key (where you would grep) | `find` |
+| A file you already know the path of | Read |
 | "How does X work", "where is Y handled", concept without exact name | `search` |
 | Counts, rankings, GROUP BY across the repo ("which files have the most code about X") | `sql` |
 | Working tree changed a lot mid-session | `reindex` (usually unnecessary - see lifecycle) |
+
+## find
+
+- Pass the exact text as it appears in the code: an identifier, an error
+  message, a config key. Literal, not a regex; within one line;
+  case-sensitive unless `ignoreCase`.
+- Complete, not ranked: every matching line comes back as `path`, `line`,
+  and the line's `text` (plus the enclosing definition's `symbol` when
+  known), in path order, up to `limit` (default 100, max 500). `total` is
+  the repo-wide count either way, and `truncated` says when the list was
+  cut - raise `limit` or narrow the text.
+- The index's token match picks the candidate chunks and each line is then
+  checked for the literal, so a hit is always a real occurrence and no file
+  is scanned. The index stores identifiers as tokens (`parse_config` is
+  `parse` and `config`), but that only widens the candidates: `find` returns
+  only lines containing the exact text you gave.
+- Read `path:line` (a few lines around it) when you need the surrounding
+  code; most grep-shaped questions are answered by the list itself.
 
 ## search
 
@@ -88,9 +109,9 @@ GROUP BY path ORDER BY lines DESC LIMIT 15
 - A result carrying a `partial` marker means the repo exceeded the index's
   file cap and some files were left out: treat a missing match as
   possibly-unindexed, not as proof the code doesn't exist.
-- Search and sql results carry a one-line `usage` receipt (tokens returned,
-  chunks/files, session running total), computed locally. End your reply by
-  showing that line to the user verbatim.
+- Find, search, and sql results carry a one-line `usage` receipt (tokens
+  returned, matches or chunks / files, session running total), computed
+  locally. End your reply by showing that line to the user verbatim.
 
 ## Multi-repo sessions
 
@@ -99,7 +120,7 @@ different repository than the one the server started in.
 
 ## Cost awareness
 
-- `search`/`sql` calls are cheap (local, milliseconds).
+- `find`/`search`/`sql` calls are cheap (local, milliseconds).
 - The first index of a repo and the vector backfill are the expensive part
   (CPU for the local embedding model, proportional to repo size). Avoid
   forcing `full: true` rebuilds unless the index is actually wrong, and

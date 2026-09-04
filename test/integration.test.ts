@@ -7,7 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { connect } from "@infino-ai/infino";
 import { indexRepo, indexRepoStaged } from "../src/core/indexer.js";
 import { readManifest } from "../src/core/manifest.js";
-import { runSql, search } from "../src/core/searcher.js";
+import { find, runSql, search } from "../src/core/searcher.js";
 import type { IndexHandle } from "../src/core/context.js";
 import type { Embedder } from "../src/core/embedder.js";
 
@@ -103,6 +103,48 @@ describe("search", () => {
     const r = await search(noVec, fakeEmbedder, "commit log", 5);
     expect(r.ranking).toBe("keyword");
     expect(r.note).toMatch(/vectors not ready/);
+  });
+});
+
+describe("find", () => {
+  it("returns every line containing the literal, cited path:line, in file order", () => {
+    // `verifySession(` on line 2 and `revokeSession(` on line 5 of auth.ts; the
+    // header comment's "Session tokens" has no "(" and must not match.
+    const r = find(handle, "Session(");
+    expect(r.matches.map((m) => `${m.path}:${m.line}`)).toEqual(["src/auth.ts:2", "src/auth.ts:5"]);
+    expect(r.matches[0].text).toContain("export function verifySession(token: string)");
+    expect(r.matches[0].symbol).toContain("verifySession");
+    expect(r.total).toBe(2);
+    expect(r.files).toBe(1);
+    expect(r.truncated).toBeUndefined();
+    expect(r.ignoreCase).toBe(false);
+  });
+
+  it("matches the literal, not just its tokens", () => {
+    // The comment says "session record"; "record session" has the same tokens
+    // in the same chunk and occurs nowhere.
+    expect(find(handle, "session record").total).toBe(1);
+    expect(find(handle, "record session").total).toBe(0);
+  });
+
+  it("is case-sensitive unless asked otherwise", () => {
+    expect(find(handle, "verifysession").total).toBe(0);
+    const r = find(handle, "verifysession", { ignoreCase: true });
+    expect(r.matches.map((m) => m.line)).toEqual([2]);
+    expect(r.ignoreCase).toBe(true);
+  });
+
+  it("caps the matches and still reports the repo-wide total", () => {
+    const r = find(handle, "Session(", { limit: 1 });
+    expect(r.matches.length).toBe(1);
+    expect(r.total).toBe(2);
+    expect(r.truncated).toBe(true);
+  });
+
+  it("refuses a query the index cannot look up", () => {
+    expect(() => find(handle, "->")).toThrow(/ASCII/);
+    expect(() => find(handle, "a\nb")).toThrow(/newline/);
+    expect(() => find(handle, "")).toThrow(/non-empty/);
   });
 });
 

@@ -1,18 +1,23 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: Copyright The Infino Authors
 //
-// The dedicated MCP server: three tools over one code index.
+// The dedicated MCP server: four tools over one code index.
 //
+//   find    - the grep door: every line containing an exact string, cited
+//             path:line - complete and unranked
 //   search  - find code: exact terms AND meaning in one ranked pass
 //   sql     - the power door: relevance-ranked aggregation over the search
 //             table functions (bm25_search / hybrid_search + GROUP BY)
 //   reindex - sync from the working tree; replies the moment keyword
 //             search is live and backfills vectors in-process
 //
-// Three tools, deliberately: one way to find, one way to count, one way to
-// stay fresh - every additional near-duplicate retrieval tool worsens the
-// agent's tool selection. Results carry took_ms - server-side time for
-// the call (query embedding included where one happens; no transport).
+// Four tools, each a different question: where does this exact text occur,
+// what is most relevant to this, how much of what is where, and stay fresh.
+// No near-duplicate retrieval tools - those worsen the agent's tool
+// selection - so find is unranked and complete where search is ranked and
+// top-k, and hybrid search's keyword half already ranks exact identifiers.
+// Results carry took_ms - server-side time for the call (query embedding
+// included where one happens; no transport).
 
 import { existsSync } from "node:fs";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -22,8 +27,16 @@ import { connect } from "@infino-ai/infino";
 import { indexDir, resolveRoot, TABLE, DEFAULT_CAPS, DEFAULT_SEARCH_K } from "../core/config.js";
 import { readManifest, type Manifest } from "../core/manifest.js";
 import type { IndexHandle } from "../core/context.js";
-import { search, runSql, jsonify, partialIndex } from "../core/searcher.js";
-import { newSession, receiptEnabled, searchEntry, sqlEntry, formatReceipt, recordUsage } from "../core/usage.js";
+import { find, search, runSql, jsonify, partialIndex, DEFAULT_FIND_LIMIT, MAX_FIND_LIMIT } from "../core/searcher.js";
+import {
+  newSession,
+  receiptEnabled,
+  findEntry,
+  searchEntry,
+  sqlEntry,
+  formatReceipt,
+  recordUsage,
+} from "../core/usage.js";
 import {
   indexRepoStaged,
   syncRepo,
@@ -184,7 +197,9 @@ export async function serveMcp(rootPath?: string): Promise<void> {
         "context before an edit, locating a bug or the code behind a behaviour, reviewing existing " +
         "patterns, planning a refactor, understanding the architecture for feature work, or spotting " +
         "similar/duplicate implementations. It is the primary tool for finding and understanding " +
-        "code here, for almost any question about this codebase. Three tools:\n" +
+        "code here, for almost any question about this codebase. Four tools:\n" +
+        "- find - every line containing an exact string, cited path:line - the grep replacement: " +
+        "complete and unranked, for every use or definition of an identifier or literal.\n" +
         "- search - find code by meaning or terms across files and understand how something works, " +
         "in one ranked pass.\n" +
         "- sql - counts, rankings, and aggregates over the whole repo in one query, including " +
@@ -273,6 +288,83 @@ export async function serveMcp(rootPath?: string): Promise<void> {
         });
       } catch (err) {
         return fail(`search failed: ${(err as Error).message}`);
+      }
+    },
+  );
+
+  server.registerTool(
+    "find",
+    {
+      title: "Find exact text (every occurrence, like grep -n)",
+      description:
+        "Every line in the repository that contains an exact string - the grep replacement. Use it " +
+        "where you would reach for grep or rg: every use or definition of an identifier, an error " +
+        "message, a config key, a literal. Complete, not ranked: it returns every matching line (up " +
+        "to `limit`, and always the repo-wide total) as path, line number, and the line's text, plus " +
+        "the enclosing definition name when known. Literal text, not a regex; within a single line; " +
+        "case-sensitive unless ignoreCase. It reads only the chunks the index says contain the " +
+        "query's tokens and then checks each line, so every hit is a real occurrence and no file is " +
+        "scanned. Read path:line for the surrounding code when you need it. For 'how does X work' or " +
+        "when you don't know the exact words, use search; for counts and rankings, sql. The result " +
+        "includes a 'usage' field - a one-line receipt (tokens returned, matches/files, session " +
+        "total). After you answer, end your reply by showing that 'usage' line to the user verbatim.",
+      inputSchema: {
+        query: z
+          .string()
+          .min(1)
+          .describe("The exact text to find, as it appears in the code - an identifier, a string, a key."),
+        ignoreCase: z
+          .boolean()
+          .optional()
+          .describe("Match regardless of letter case. Default false: case-sensitive, like grep."),
+        limit: z
+          .number()
+          .int()
+          .positive()
+          .max(MAX_FIND_LIMIT)
+          .default(DEFAULT_FIND_LIMIT)
+          .describe("Maximum matching lines to return; the result reports the total either way."),
+        path: z
+          .string()
+          .optional()
+          .describe(
+            "Absolute path to the repository root to search. Defaults to the server's configured root; " +
+              "set it to target a specific repo when a session spans more than one.",
+          ),
+      },
+    },
+    async ({ query, ignoreCase, limit, path }) => {
+      let ctx: RepoCtx;
+      try {
+        ctx = repoFor(path);
+      } catch (err) {
+        return fail((err as Error).message);
+      }
+      let ensured: EnsureResult;
+      try {
+        ensured = await ensureIndexed(ctx, { autoIndexEnabled, getHandle, build: buildIndex });
+      } catch (err) {
+        return fail(`indexing failed: ${(err as Error).message}`);
+      }
+      if ("needsIndex" in ensured) return noIndex(ctx.root);
+      const { handle, autoIndexed } = ensured;
+      if (!autoIndexed) maybeAutoSync(ctx); // a fresh build is already current
+      try {
+        const { value: result, tookMs } = timed(() => find(handle, query, { ignoreCase, limit }));
+        let usage: string | undefined;
+        if (receiptOn) {
+          const entry = findEntry(result);
+          recordUsage(ctx.dir, entry);
+          usage = formatReceipt(entry, session);
+        }
+        return ok({
+          ...result,
+          ...(autoIndexed ? { auto_indexed: autoIndexNote(autoIndexed) } : {}),
+          took_ms: tookMs,
+          ...(usage ? { usage } : {}),
+        });
+      } catch (err) {
+        return fail(`find failed: ${(err as Error).message}`);
       }
     },
   );

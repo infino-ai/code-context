@@ -13,8 +13,9 @@ file by file.
 The rule of thumb: the more a question spans the repo, the more the index
 saves. Use it for understanding how a subsystem works, finding code by
 meaning when you do not know the identifier, and ranking or aggregating
-across the whole repo. For jumping to one known symbol or literal string, a
-plain grep is already cheap and there is no need for an index.
+across the whole repo. For the grep case itself - every occurrence of a known
+symbol or literal string - `find` answers from the same index: every matching
+line, cited `path:line`, complete and unranked, with no file scanned.
 
 ### Does my code leave the machine?
 
@@ -32,8 +33,8 @@ reports that honestly rather than failing.
 
 ### Do I have to index before I can search?
 
-No. The first `search` or `sql` on a repo that has never been indexed builds
-the index inline and answers on that same call - keyword search is live in
+No. The first `find`, `search`, or `sql` on a repo that has never been indexed
+builds the index inline and answers on that same call - keyword search is live in
 seconds, vectors backfill behind it. Call `reindex` first if you'd rather
 kick the build off explicitly, or set `CX_AUTO_INDEX=0` to make an unindexed
 query return a "index it first" error instead of building.
@@ -63,7 +64,7 @@ no-op. The MCP server also auto-syncs in the background as queries arrive.
 
 Indexing caps how many files it takes (`CX_MAX_FILES`, default 20,000); files
 past the cap are left out. When that happens the index is marked partial:
-every `search` and `sql` result carries a `partial` note with how many files
+every `find`, `search`, and `sql` result carries a `partial` note with how many files
 were skipped and the cap in effect, so an agent treats a missing match as
 "maybe not indexed" rather than "not in the repo." `cx status` shows the same,
 and `cx search` prints a warning. Raise `CX_MAX_FILES` (CLI: `--max-files`)
@@ -71,12 +72,16 @@ and re-index for full coverage.
 
 ### What tools does the MCP server expose?
 
-Three, by design: `search` (hybrid keyword + semantic retrieval, one ranked
-pass, hits carry chunk content with `path:line` ranges), `sql` (read-only
+Four, by design, one per question: `find` (every line containing an exact
+string, cited `path:line` like `grep -n`; complete and unranked, the grep
+replacement), `search` (hybrid keyword + semantic retrieval, one ranked pass,
+hits carry chunk content with `path:line` ranges), `sql` (read-only
 `SELECT`/`WITH` over the index, with the ranked search functions usable as
 table-valued relations so search composes with `GROUP BY`), and `reindex`
 (incremental sync). Every additional near-duplicate retrieval tool worsens an
-agent's tool selection, so the surface is kept deliberately small.
+agent's tool selection, so the surface is kept deliberately small: `find` and
+`search` are not duplicates, one is complete and unranked, the other ranked
+and top-k.
 
 ### How is SQL over code useful?
 

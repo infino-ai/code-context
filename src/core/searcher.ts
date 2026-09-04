@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: Copyright The Infino Authors
 //
-// The two retrieval doors, shared by the CLI and the MCP server:
+// The three retrieval doors, shared by the CLI and the MCP server:
 //
+//   find   - the grep door: every line containing an exact string, cited
+//            path:line. Complete and unranked - "every place this appears"
+//            is a different question from "the chunks most about it".
 //   search - the finding door: one ranked pass fuses exact keyword matching
 //            (BM25) with semantic similarity (vectors, RRF) once vectors are
 //            ready; ranked keyword search until then. Hits carry chunk
@@ -128,6 +131,160 @@ export async function search(
       const partial = partialIndex(handle.manifest);
       return partial ? { partial } : {};
     })(),
+  };
+}
+
+// --- find -------------------------------------------------------------------
+//
+// Two steps. The index's token match narrows to the chunks that contain every
+// token of the query - an inverted-list intersection, no scoring, no top-k -
+// then the literal is verified line by line inside those chunks. The analyzer
+// splits identifiers (`parse_config` indexes as `parse` and `config`), so the
+// first step alone would over-match; the second makes every hit a real
+// occurrence of the exact text, and grep's line-based, case-sensitive
+// semantics fall out of it.
+
+export interface FindMatch {
+  path: string;
+  /** 1-based line number of the matching line. */
+  line: number;
+  /** The matching line, capped at FIND_LINE_CAP characters. */
+  text: string;
+  /** Definition name(s) of the enclosing chunk (e.g. "parseConfig"), when known. */
+  symbol?: string;
+}
+
+export interface FindResult {
+  query: string;
+  ignoreCase: boolean;
+  /** Matching lines in path then line order, cut at the limit. */
+  matches: FindMatch[];
+  /** Matching lines across the repo before the limit was applied. */
+  total: number;
+  /** Distinct files with at least one match, before the limit. */
+  files: number;
+  /** Set when `total` exceeded the limit and `matches` was cut. */
+  truncated?: boolean;
+  /** Present when the index omitted files over the cap - results may be incomplete. */
+  partial?: PartialIndex;
+}
+
+export interface FindOptions {
+  /** Match regardless of letter case. Default false: case-sensitive, like grep. */
+  ignoreCase?: boolean;
+  /** Maximum matches returned; clamped to [1, MAX_FIND_LIMIT]. */
+  limit?: number;
+}
+
+/** Default and hard cap on matches returned. A grep over a large repo can hit
+ * thousands of lines; past this the agent needs the count, not every line. */
+export const DEFAULT_FIND_LIMIT = 100;
+export const MAX_FIND_LIMIT = 500;
+
+/** Per-line cap so one minified or generated line cannot flood the result. */
+const FIND_LINE_CAP = 240;
+
+/** Columns a find reads: no `end_line` (each match cites its own line) and no
+ * `score` (there is none - matches are unranked). */
+const FIND_PROJECTION = ["path", "start_line", "symbol", "content"];
+
+/** First code point outside ASCII. The default analyzer extends a token run
+ * across such characters and then drops the whole run. */
+const NON_ASCII_MIN = 0x80;
+
+/** The tokens the index's default analyzer (`ascii_lower`) produces for a
+ * string: runs of `[A-Za-z0-9]`, lowercased, and a run that touches non-ASCII
+ * text is dropped whole. Mirrored here so the candidate lookup asks the index
+ * for exactly the tokens it holds - a different split would miss chunks that
+ * do contain the literal. Duplicates are dropped; the intersection is the same. */
+export function analyzerTokens(text: string): string[] {
+  const out = new Set<string>();
+  let run = "";
+  let nonAscii = false;
+  const flush = () => {
+    if (run && !nonAscii) out.add(run.toLowerCase());
+    run = "";
+    nonAscii = false;
+  };
+  for (const ch of text) {
+    if ((ch.codePointAt(0) ?? 0) >= NON_ASCII_MIN) {
+      run += ch;
+      nonAscii = true;
+    } else if (/[A-Za-z0-9]/.test(ch)) {
+      run += ch;
+    } else {
+      flush();
+    }
+  }
+  flush();
+  return [...out];
+}
+
+/** The lines of `content` (whose first line is 1-based `startLine`) that
+ * contain `query` literally, each with its repo line number. */
+export function matchLines(
+  content: string,
+  startLine: number,
+  query: string,
+  ignoreCase: boolean,
+): Array<{ line: number; text: string }> {
+  const needle = ignoreCase ? query.toLowerCase() : query;
+  const out: Array<{ line: number; text: string }> = [];
+  const lines = content.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const haystack = ignoreCase ? lines[i].toLowerCase() : lines[i];
+    if (haystack.includes(needle)) out.push({ line: startLine + i, text: lines[i].replace(/\r$/, "") });
+  }
+  return out;
+}
+
+export function find(handle: IndexHandle, query: string, opts: FindOptions = {}): FindResult {
+  if (query.length === 0) throw new Error("find needs a non-empty string to look for");
+  if (/[\r\n]/.test(query)) {
+    throw new Error("find matches within a single line - the query must not contain a newline");
+  }
+  const tokens = analyzerTokens(query);
+  if (tokens.length === 0) {
+    throw new Error(
+      "find needs at least one run of ASCII letters or digits to look up in the index; a query of " +
+        "only punctuation or non-ASCII text cannot use it - try search, or sql with regexp_like(content, ...)",
+    );
+  }
+  const ignoreCase = opts.ignoreCase ?? false;
+  const limit = Math.min(Math.max(1, opts.limit ?? DEFAULT_FIND_LIMIT), MAX_FIND_LIMIT);
+
+  const table = handle.db.openTable(TABLE);
+  const candidates = table.tokenMatch("content", tokens.join(" "), { mode: "and", projection: FIND_PROJECTION });
+
+  // Fixed-window chunks overlap, so one line can arrive in two chunks; key by path:line.
+  const seen = new Set<string>();
+  const all: FindMatch[] = [];
+  for (const row of candidates) {
+    const path = String(row.path);
+    const symbol = row.symbol ? String(row.symbol) : undefined;
+    for (const m of matchLines(String(row.content), Number(row.start_line), query, ignoreCase)) {
+      const key = `${path} ${m.line}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      all.push({
+        path,
+        line: m.line,
+        text: m.text.length > FIND_LINE_CAP ? m.text.slice(0, FIND_LINE_CAP) + "..." : m.text,
+        ...(symbol ? { symbol } : {}),
+      });
+    }
+  }
+  all.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : a.line - b.line));
+
+  const partial = partialIndex(handle.manifest);
+  return {
+    query,
+    ignoreCase,
+    matches: all.slice(0, limit),
+    total: all.length,
+    files: new Set(all.map((m) => m.path)).size,
+    ...(all.length > limit ? { truncated: true } : {}),
+    ...(partial ? { partial } : {}),
   };
 }
 

@@ -24,7 +24,7 @@ the honest limits in [docs/tradeoffs.md](docs/tradeoffs.md).
 ## Repo map
 
 - `src/cli.ts`: the `cx` / `code-context` command entry (commander).
-- `src/mcp/server.ts`: the MCP server, three tools (`search`, `sql`,
+- `src/mcp/server.ts`: the MCP server, four tools (`find`, `search`, `sql`,
   `reindex`). Each takes an optional `path` (repo root) so one server serves
   multiple repos in a session, defaulting to the startup root.
 - `src/mcp/repos.ts`: the per-repo registry - resolves and validates a
@@ -34,7 +34,7 @@ the honest limits in [docs/tradeoffs.md](docs/tradeoffs.md).
   (`CX_AUTO_INDEX=0` restores the strict "index it first" error).
 - `src/core/`: the engine-facing core. `chunker` (tree-sitter chunking),
   `indexer` (build + staged readiness + incremental sync), `searcher`
-  (hybrid search + SQL), `embedder` (local model), `filestate` (incremental
+  (find, hybrid search, SQL), `embedder` (local model), `filestate` (incremental
   sync state), `walker`, `manifest`, `config`, `context`, `output`.
 - `src/commands/`: CLI command implementations (`index-cmd`, `query-cmds`).
 - `test/`: vitest suites. `bench/`: the benchmark harness. `docs/`: docs.
@@ -53,9 +53,12 @@ before opening a PR.
 ## Conventions
 
 - TypeScript, ES modules. Every source file carries an SPDX header.
-- The MCP surface is deliberately three tools: one way to find (`search`),
-  one way to count (`sql`), one way to stay fresh (`reindex`). Adding
-  near-duplicate retrieval tools worsens an agent's tool selection; resist it.
+- The MCP surface is deliberately four tools, one per question: where does
+  this exact text occur (`find`, unranked and complete - the grep
+  replacement), what is most relevant (`search`, ranked top-k), how much of
+  what is where (`sql`), stay fresh (`reindex`). Adding near-duplicate
+  retrieval tools worsens an agent's tool selection; resist it. A new tool
+  must answer a question none of these four does.
 - Search results carry chunk content plus `path:line` ranges so answers cite
   code; keep that contract when touching `searcher` or the tool descriptions.
 
