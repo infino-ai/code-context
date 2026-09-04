@@ -199,33 +199,15 @@ export async function serveMcp(rootPath?: string): Promise<void> {
     { name: "code-context", version: "0.1.2" },
     {
       instructions:
-        "code-context is a local ranked index over this repository - semantic + keyword search and " +
-        "SQL over the whole codebase. Reach for it whenever you need to understand or find code: " +
-        "understanding how a subsystem works, finding code by meaning or by exact term, gathering " +
-        "context before an edit, locating a bug or the code behind a behaviour, reviewing existing " +
-        "patterns, planning a refactor, understanding the architecture for feature work, or spotting " +
-        "similar/duplicate implementations. It is the primary tool for finding and understanding " +
-        "code here, for almost any question about this codebase. Four tools:\n" +
-        "- find - every line containing an exact string, cited path:line - the grep replacement: " +
-        "complete and unranked, for every use or definition of an identifier or literal.\n" +
-        "- search - find code by meaning or terms across files and understand how something works, " +
-        "in one ranked pass.\n" +
-        "- sql - counts, rankings, and aggregates over the whole repo in one query, including " +
-        "relevance-ranked aggregation ('which files have the most code about X') that file tools " +
-        "cannot express at any budget.\n" +
-        "- reindex - sync the index after the working tree changes.\n" +
-        "Treat a hit's content as authoritative: when it answers the question, answer from it and " +
-        "cite path plus line range - you don't need to re-confirm with grep or by opening the file. " +
-        "Read a file only for a hit marked truncated (its cited range), or when the results genuinely " +
-        "don't cover the question. When one search isn't enough, refine the query and search again - " +
-        "the ranked hits are already the relevant regions.\n" +
-        "Every tool takes an optional 'path' (an absolute repo root): omit it for the default repo, " +
-        "or set it to target a specific one when you're working across more than one repo in a session.\n" +
-        "If a result carries a 'partial' marker, the repo exceeded the index's file cap and some files " +
-        "were left out: treat a missing match as possibly-unindexed, not proof it's absent.\n" +
-        "Each result carries a 'usage' receipt (tokens returned, chunks/files, and a session running " +
-        "total) - computed locally, nothing leaves the machine. Surface it to the user so they can see " +
-        "how much context the ranked results put into the conversation.",
+        "code-context is a local index of this repository. Which tool for which question:\n" +
+        "- find - every line containing an exact string, where you would grep.\n" +
+        "- search - how does X work, where is Y handled, code by meaning.\n" +
+        "- sql - counts, rankings, and aggregates across the repo.\n" +
+        "- reindex - after sweeping edits; the server auto-syncs otherwise.\n" +
+        "Answer and cite from results (path:line); Read a file only for a hit marked truncated. " +
+        "Every tool takes an optional 'path' (an absolute repo root) to target another repository. " +
+        "A 'partial' marker means files over the index cap were left out, so a missing match is not " +
+        "proof of absence. Each result carries a 'usage' receipt; show it to the user.",
     },
   );
 
@@ -234,23 +216,14 @@ export async function serveMcp(rootPath?: string): Promise<void> {
     {
       title: "Code search (exact terms + meaning)",
       description:
-        "Semantic + keyword code search over the indexed repository - a strong default for finding " +
-        "and understanding code. Use it to: understand how a subsystem or feature works, find code " +
-        "by meaning when you don't know the exact name, locate the code behind a behaviour or bug, " +
-        "gather context before making a change, review existing implementations and patterns, find " +
-        "everything a refactor would touch, understand the architecture for feature work, or spot " +
-        "similar/duplicate code. One pass fuses exact keyword matching (BM25: identifiers, error " +
-        "strings, function names, stemmed and scored) with semantic similarity (renamed symbols, " +
-        "paraphrases, 'where is X handled'), so it works whether or not you know the words. Each hit " +
-        "carries path, line range, and the chunk content with a relevance score - treat it as " +
-        "authoritative and answer directly from it, citing path plus line range; you don't need to " +
-        "re-confirm a hit with grep or by opening the file. When one search isn't enough, refine the " +
-        "query and search again - the index has already ranked the relevant regions. Read a file only " +
-        "for a hit marked truncated (its cited start-end range via offset/limit), or when results " +
-        "genuinely don't cover the question. (Until the index's vector stage finishes, results are " +
-        "keyword-ranked and say so.) The result includes a 'usage' field - a one-line receipt " +
-        "(tokens returned, chunks/files, session total). After you " +
-        "answer, end your reply by showing that 'usage' line to the user verbatim.",
+        "Ranked code search fusing exact keyword matching with semantic similarity, so it works " +
+        "whether or not you know the words. Use it for 'how does X work', 'where is Y handled', code " +
+        "by meaning, context before a change, similar implementations. Each hit carries path, line " +
+        "range, and the chunk content: answer and cite from the hits; Read a file only for one marked " +
+        "truncated. For every occurrence of an exact string use find; for counts and rankings use " +
+        "sql. The result includes a 'usage' field - a one-line receipt (tokens returned, " +
+        "chunks/files, session total). After you answer, end your reply by showing that 'usage' line " +
+        "to the user verbatim.",
       inputSchema: {
         query: z.string().describe("What you're looking for - terms, a phrase, or a description."),
         k: z.number().int().positive().max(50).default(DEFAULT_SEARCH_K).describe("Maximum hits."),
@@ -305,20 +278,14 @@ export async function serveMcp(rootPath?: string): Promise<void> {
     {
       title: "Find exact text (every occurrence, like grep -n)",
       description:
-        "Every line in the repository that contains an exact string - the grep replacement. Use it " +
-        "where you would reach for grep or rg: every use or definition of an identifier, an error " +
-        "message, a config key, a literal. Complete, not ranked: it returns every matching line (up " +
-        "to `limit`, and always the repo-wide `total`) as path, line number, and the line's text, " +
-        "plus the enclosing definition name when known, and `byFile` - matching lines per file over " +
-        "every match, the `grep -c` answer in the same call. Literal text, not a regex; within a " +
-        "single line; case-sensitive unless ignoreCase. It reads only the chunks the index says " +
-        "contain the query's tokens and then checks each line, so every hit is a real occurrence " +
-        "and no file is scanned. Not for a file you already know: Read that file directly - find is " +
-        "for locating occurrences across the repository, and Read path:line when you need the code " +
-        "around a hit. For 'how does X work' or when you don't know the exact words, use search; " +
-        "for rankings and aggregates beyond per-file counts, sql. The result includes a 'usage' " +
-        "field - a one-line receipt (tokens returned, matches/files, session total). After you " +
-        "answer, end your reply by showing that 'usage' line to the user verbatim.",
+        "Every line in the repository containing an exact string, like grep -n: complete and " +
+        "unranked, with the repo-wide total and per-file counts (byFile, the grep -c answer). " +
+        "Literal text within one line, case-sensitive unless ignoreCase. Use it where you would " +
+        "grep: every use or definition of an identifier, an error message, a config key. Not for a " +
+        "file you already know - Read that file. For meaning or 'how does X work' use search; for " +
+        "rankings use sql. The result includes a 'usage' field - a one-line receipt (tokens " +
+        "returned, matches/files, session total). After you answer, end your reply by showing that " +
+        "'usage' line to the user verbatim.",
       inputSchema: {
         query: z
           .string()
@@ -385,20 +352,16 @@ export async function serveMcp(rootPath?: string): Promise<void> {
     {
       title: "SQL over the code index",
       description:
-        "Whole-repo analytical questions that file tools cannot express at any budget: counts, " +
-        "rankings, GROUP BY across the codebase in one query, " +
-        `on table ${TABLE}(path, start_line, end_line, lang, content[, embedding]). ` +
-        "Search functions are callable as table-valued relations, so one query can rank AND " +
-        "aggregate: bm25_search('" + TABLE + "','content','terms', k) needs no embedding; " +
-        "hybrid_search('" + TABLE + "','content','terms','embedding', {{q}}, k) and " +
-        "vector_search('" + TABLE + "','embedding', {{q}}, k) take a {{name}} placeholder with an " +
-        'embed map: {"q":"query text"}. The canonical move - "which files have the most code about ' +
-        'X": SELECT path, SUM(end_line - start_line + 1) AS lines FROM ' +
+        "Read-only SQL, one SELECT or WITH, over " +
+        `${TABLE}(path, start_line, end_line, lang, symbol, content[, embedding]) for counts, ` +
+        "rankings, and GROUP BY across the whole repo. Search functions are table-valued: " +
+        `bm25_search('${TABLE}','content','terms', k) needs no embedding; ` +
+        `hybrid_search('${TABLE}','content','terms','embedding', {{q}}, k) and ` +
+        `vector_search('${TABLE}','embedding', {{q}}, k) take a {{name}} placeholder filled from ` +
+        "the embed map. Canonical: SELECT path, SUM(end_line - start_line + 1) AS lines FROM " +
         `bm25_search('${TABLE}','content','<terms>', 300) GROUP BY path ORDER BY lines DESC LIMIT 15. ` +
-        "Build queries on bm25_search/hybrid_search so results are ranked by relevance to the topic, " +
-        "not on a raw scan of the whole table. Read-only, single statement. The result includes a " +
-        "'usage' field - a one-line receipt (tokens returned, rows, session total). After " +
-        "you answer, end your reply by showing that 'usage' line to the user verbatim.",
+        "The result includes a 'usage' field - a one-line receipt (tokens returned, rows, session " +
+        "total). After you answer, end your reply by showing that 'usage' line to the user verbatim.",
       inputSchema: {
         query: z
           .string()
@@ -460,12 +423,9 @@ export async function serveMcp(rootPath?: string): Promise<void> {
     {
       title: "Sync the code index",
       description:
-        "Bring the index up to date with the working tree. Incremental by default: only files that " +
-        "changed since the last index are re-chunked and re-embedded, and an unchanged tree is a " +
-        "fast no-op, so call this freely after edits. The server also auto-syncs in the background as " +
-        "queries arrive. On a repo that has never been indexed this builds the index from scratch, " +
-        "replying as soon as keyword search is live (seconds) while vectors backfill behind it. " +
-        "Pass full=true to force a rebuild from scratch. Returns what changed plus index status.",
+        "Sync the index with the working tree: incremental, or a full rebuild with full=true. The " +
+        "server auto-syncs as queries arrive and builds the index on the first query of an unindexed " +
+        "repo, so this is rarely needed.",
       inputSchema: {
         full: z.boolean().optional().describe("Force a full rebuild instead of an incremental sync."),
         path: z
