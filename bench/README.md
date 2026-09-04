@@ -49,3 +49,8 @@ Lane design notes (they matter for fairness):
 - Token totals count input + cache writes + cache reads + output; cost uses the
   API's per-run accounting.
 - Model is set in `lanes.mjs` (`BENCH_MODEL`, default `claude-sonnet-4-6`).
+- The MCP lanes run this checkout's `dist/cli.js`. To compare two builds of
+  the server (a tool-surface variant against main), point a run at another
+  build with `CX_BENCH_CLI=/path/to/other/dist/cli.js` and label it with
+  `CX_BENCH_BUILD=<name>`; both land on every result row, so one
+  `questions.jsonl` can hold every variant.
