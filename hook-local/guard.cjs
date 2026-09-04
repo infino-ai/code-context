@@ -8,9 +8,10 @@
 // Why block at all: an agent that greps a codebase reasons from match
 // fragments, and fragments produce confident wrong claims about code it
 // never read. The index answers the same lookups with ranked chunks that
-// carry their content, and `bm25_search` covers the exact-identifier case
-// grep was kept around for. Blocking is deliberate policy, not a
-// capability gap - the repo owner opts in by shipping the hook.
+// carry their content, and the `find` tool covers the exact-identifier case
+// grep was kept around for: every matching line, cited path:line, complete
+// and unranked. Blocking is deliberate policy, not a capability gap - the
+// repo owner opts in by shipping the hook.
 //
 // The decision is a pure function of the hook payload so it can be tested
 // without a process boundary. The hook wrapper around it must never fail
@@ -127,10 +128,11 @@ function denyReason(program) {
     return (`${program} is blocked here by code-context: file contents do not reach ` +
         `you through a shell. To read a file, use Read (it takes an offset, so ` +
         `size is not a reason to filter). To find something, use the ` +
-        `code-context MCP: bm25_search('chunks','content','<terms>', k) via the ` +
-        `sql tool for exact identifiers and strings, hybrid_search to add ` +
-        `meaning. Both answer over a corpus of any size and return the ` +
-        `surrounding context, which a matched line does not.`);
+        `code-context MCP tools: find for every line containing an exact string ` +
+        `(path:line, complete and unranked - what grep did), search for meaning ` +
+        `and 'how does X work', sql for counts and rankings. They answer over a ` +
+        `corpus of any size and return the surrounding context, which a matched ` +
+        `line does not.`);
 }
 /** Decide a PreToolUse event: a deny reason, or null to allow. Pure. */
 function guardDecision(payload) {
