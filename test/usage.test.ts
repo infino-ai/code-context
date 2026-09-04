@@ -137,7 +137,6 @@ describe("subagent receipt", () => {
     rows: [{ path: "src/a.ts", n: 3 }],
     hitsTotal: 1,
     rowsTotal: 1,
-    queries: [{ tool: "query_sql", sql: "SELECT path, start_line, end_line, content FROM chunks LIMIT 3" }],
     turns: 4,
   };
   const spend: RetrievalAgentSpend = { promptTokens: 12_345, completionTokens: 210 };
@@ -152,8 +151,7 @@ describe("subagent receipt", () => {
     expect(entry.agentTurns).toBe(4);
     expect(entry.agentPromptTokens).toBe(12_345);
     expect(entry.agentCompletionTokens).toBe(210);
-    // The ledger points at places; neither the queries nor the code leak into it.
-    expect(JSON.stringify(entry)).not.toContain("FROM chunks LIMIT 3");
+    // The ledger points at places; the code does not leak into it.
     expect(JSON.stringify(entry)).not.toContain("export function a");
   });
 
