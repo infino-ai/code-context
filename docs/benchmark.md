@@ -216,6 +216,253 @@ auto-sync exists for exactly that; the bench disables it to keep the index
 identical across runs, so it must pin the tree instead. Spend for the two
 lanes: about $14 of agent runs and $14 of judging.
 
+## The tool surface: names, shapes, and prose
+
+The `find` run above showed an agent choosing tools on nothing but a name, a
+description, and a result shape. This run measures how much each of those
+steers, one lever at a time, and what the steering costs per turn. Measured
+2026-09-04; the design and the decisions are in plan 101.
+
+**Setup.** Same pinned clone (infino @ `ed4e020`, 401 files, 5,527 chunks,
+indexed once, auto-sync off), same hermetic lane (stock file tools including
+Grep, plus the code-context build under test), `claude-sonnet-4-6`, fresh
+conversation per question. Four question sets, 36 questions: the shipped 16
+(10 aggregation, 6 comprehension), the 8 pinpoint lookups, 6 *known-file*
+questions whose right first call is Read ("what does `Cargo.toml` pin for
+arrow"), and 6 *by-meaning* questions that name no identifier ("which code
+decides when a superfile is compacted"). Three repeats, so 108 runs per
+build; V0 and V3 were run twice over to measure the spread directly. Haiku
+4.5 ran V0, V3, V6, V7 and V8, two passes each. Quality: the same blind pairwise
+judge as the `find` run (`claude-opus-5` with Read/Grep/Glob on the clone;
+winner, confidence, unsupported-claim counts), each variant against V0, and
+the mechanical citation check. Selection is the primary metric: the first
+tool called, against the tool the question shape is for.
+
+The variants, each one change on the last, with the prose the model pays for
+on every turn (chars / 4; JSON schema framing comes on top):
+
+| build | change | tool text | instructions |
+|---|---|---|---|
+| V0 | the surface after `find` (`byFile`, limit 500) | ~1,280 tok | ~545 tok |
+| V1 | descriptions cut to question shape, not-for, result shape; instructions cut to a routing table | ~790 | ~175 |
+| V2 | V1 without the "show the usage line" sentence in three descriptions | ~650 | ~160 |
+| V3 | V2 with `reindex` off the tool list | ~570 | ~160 |
+| V4a | V3 with `search` renamed `context` | ~575 | ~160 |
+| V5 | V3 with a tiered `search` result: content on the top 3 hits, a one-line excerpt below | ~590 | ~170 |
+| V6 | V3 plus two sentences: answer from a hit without re-reading (in the instructions), and what `lang` holds | ~580 | ~185 |
+| V7 | V6 with the answer-from-a-hit sentence in the `search` description as well | ~610 | ~185 |
+| V8 | V7 with one sentence per description saying what the `usage` receipt reports, no request to show it | ~680 | ~185 |
+
+### Selection: the prose was not doing the steering
+
+Every build, every pass: `sql` first on 30 of 30 aggregation runs, `search`
+first on 18 of 18 comprehension and 18 of 18 by-meaning runs. Cutting the
+descriptions to a third and the instructions to a quarter moved none of it.
+The known-file tripwire did not move either: Read was the first call on 3
+to 5 of 18 runs on every build, `find` on 6 to 13, Glob on the rest.
+
+Pinpoint moved, and how it moved is the finding. `find` was the first call
+on 19 and 18 of 24 runs in the two V0 passes and on 14 and 15 of 24 in the
+two V3 passes. Two questions account for it: the env-var inventory ("every
+`std::env::var` read, with name and file:line") and the per-file test
+count. The inventory opened with `find` in 6 of 6 V0 runs and 3 of 3 V1
+runs, then with Grep in 9 of 9 runs under V2, V3 and V5 - and back to
+`find` in 3 of 3 under V4a, whose only difference from V3 is the *other*
+tool's name. A six-pass A/B on the pinpoint set alone pinned it: V1 opened
+the inventory with `find` 6 of 6 and the test count with `find` or `sql` 6
+of 6; V2, which differs from V1 only by the dropped receipt sentence ("the
+result includes a 'usage' field - a one-line receipt (tokens returned,
+matches/files, session total); after you answer, show it verbatim"), opened
+them with Grep 6 of 6 and 5 of 6. Across everything run, that question is
+`find` 12 of 12 with the sentence and Grep 15 of 15 without it. Two
+lessons. A borderline question gets a stable choice for a given prompt text
+and flips on wording that has nothing to do with it, so a 3-of-3 flip on
+one question is not a signal; set totals are. And a sentence written to
+make the model show a receipt was steering its tool choice.
+
+The cost of the flip is real where it lands: the Grep runs on that question
+took 15 to 24 calls and 135k to 192k tokens against 2 to 5 calls and 32k to
+96k for the `find` runs, for the same inventory.
+
+Which half of the sentence steered? V8 keeps a description of the field
+("the result includes a 'usage' field, a one-line receipt of tokens
+returned, matches and files") and drops the request to show it. Six
+pinpoint passes: the inventory back to `find` 5 of 6, the test count to
+`sql` 4 of 6, 39 of 48 first calls on a code-context tool against V1's 42
+and V2's 31, at the lowest tokens of the three (191k against 232k and
+302k). Telling the model what the result reports is what steers; asking it
+to relay the receipt was never the active part.
+
+### Cost: a tenth off, reproducibly
+
+Sums over questions of the per-question median; two passes each of V0 and V3:
+
+| set | V0 | V0 again | V3 | V3 again |
+|---|---|---|---|---|
+| aggregation (10) | 138k | 146k | 157k | 146k |
+| comprehension (6) | 746k | 774k | 669k | 738k |
+| pinpoint (8) | 227k | 205k | 258k | 243k |
+| known-file (6) | 131k | 131k | 113k | 107k |
+| by-meaning (6) | 524k | 586k | 380k | 383k |
+| **blended (36)** | **1,766k** | **1,842k** | **1,576k** | **1,617k** |
+| cost per pass | $3.03 | $3.23 | $2.94 | $2.95 |
+| tool calls | 103 | 105 | 119 | 124 |
+
+Pass-to-pass spread on one build is 4 to 12% per set, so: by-meaning down
+27 to 35% is real, blended down 10 to 12% is real, comprehension down 3 to
+10% is at the edge, and aggregation up 6 to 14% is real and has a cause.
+On the two aggregation questions that ask for "reasons", every trimmed
+build followed the `sql` call with a `search` (9 of 9 runs against 1 of 6
+under V0), and the "largest Rust files" question paid a three-call detour
+(`lang = 'rust'`, no rows, list the languages, retry with `rs`) that nothing
+in the description prevented. The judge rewarded the extra `search` (below);
+V6 fixes the detour with eight words.
+
+Single-call questions show the per-turn saving directly: an aggregation
+question answered in one `sql` call costs 13k tokens under V0 and 11k under
+V3, the 1.5k-token prompt difference, every turn of every conversation.
+
+### Quality: better, not just level
+
+Blind judge, each variant against V0, same question and repeat paired:
+
+| variant | pairs | V0 wins | variant wins | ties | unsupported claims V0 / variant | median confidence |
+|---|---|---|---|---|---|---|
+| V1 | 107 | 39 | 46 | 22 | 185 / 151 | 0.70 |
+| V3 | 108 | 31 | 55 | 22 | 283 / 192 | 0.72 |
+| V5 | 107 | 35 | 47 | 25 | 243 / 201 | 0.72 |
+
+V3 wins on every set (aggregation 21 to 8, by-meaning 10 to 7, comprehension
+9 to 6, pinpoint 8 to 5 with 11 ties, known-file 7 to 5) and makes a third
+fewer claims the code does not support. The aggregation gap is the second
+`search` call: a "ranked list with a short reason each" answered from one
+`sql` result invents its reasons; answered after a `search` it cites them.
+No build cited a line outside its file except one V4a answer; V3 answers
+carry more citations than V0's (0.7 against 0.5 per answer).
+
+### The rename and the shape
+
+`context` for `search` (V4a) changed nothing the rename was for: 18 of 18
+first calls on both comprehension and by-meaning under either name, and
+by-meaning tokens higher than V3 (452k against 380k). The name stays.
+
+The tiered result (V5) trades dollars for round trips. Blended cost $2.61
+against V3's $2.94, tokens level (1,640k), but 161 tool calls against 119:
+Reads went from 49 to 86 on comprehension and from 10 to 54 on by-meaning,
+because the agent reads the hits whose content it no longer has. Cheaper on
+the bill because the Reads hit the prompt cache; slower because each is a
+round trip. The judge calls it level with V0 on the sets the shape is for
+(comprehension 8 to 8, by-meaning 9 to 8) where V3 wins them, and the
+excerpt tier lost a little on known-file (3 to 6). A shape that costs a
+third more round trips to arrive at the same answers does not ship as the
+default; the branch stays for a client that pays per token and not per
+round trip.
+
+### The confirmation builds
+
+V6 adds two sentences to V3: the instructions say again that a hit is
+answered from without re-reading the file, and the `sql` description says
+`lang` is the file extension. V7 puts the first sentence in the `search`
+description as well. V8 adds the receipt-field sentence from the A/B above
+to each description. Sonnet, tokens per set, alongside both passes of V0
+and V3:
+
+| set | V0 | V0 again | V3 | V3 again | V6 | V7 | V8 |
+|---|---|---|---|---|---|---|---|
+| aggregation | 138k | 146k | 157k | 146k | 142k | 146k | 136k |
+| comprehension | 746k | 774k | 669k | 738k | 519k | 572k | 578k |
+| pinpoint | 227k | 205k | 258k | 243k | 253k | 203k | 204k |
+| known-file | 131k | 131k | 113k | 107k | 121k | 112k | 114k |
+| by-meaning | 524k | 586k | 380k | 383k | 539k | 433k | 435k |
+| **blended** | **1,766k** | **1,842k** | **1,576k** | **1,617k** | **1,574k** | **1,465k** | **1,468k** |
+| cost per pass | $3.03 | $3.23 | $2.94 | $2.95 | $2.93 | $2.87 | $2.77 |
+| tool calls | 103 | 105 | 119 | 124 | 118 | 105 | 107 |
+| first call on a code-context tool | 94/108 | 94/108 | 88/108 | 87/108 | 90/108 | 94/108 | 97/108 |
+
+The `lang` sentence removed the detour (the largest-Rust-files question is
+one `sql` call again). The restored steer brought comprehension to 519k to
+578k, under every V0 and V3 pass, with Reads at 33 against 49 to 53. V7 and
+V8 are the first trimmed builds to match V0's round trips and first-call
+count while spending 17 to 19% fewer tokens; V8 adds the pinpoint steer
+(`find` or `sql` first on 18 of 24 against V7's 17 and V3's 14 to 15) and
+the highest code-context first-call count of the run. Its one soft spot is
+the tripwire set: `find` was the first call on 13 of 18 known-file runs
+against V0's 9 and 10, though at 114k tokens against 131k, because a `find`
+that lands on a file the agent should have Read costs one cheap call, not a
+detour. The blind judge on V8 against V0 was still running when this was
+written; its row joins the quality table when it lands.
+
+### Haiku 4.5
+
+Two passes of each build, tokens per set:
+
+| set | V0 | V0 again | V3 | V3 again | V6 | V6 again | V7 | V7 again | V8 | V8 again |
+|---|---|---|---|---|---|---|---|---|---|---|
+| aggregation | 314k | 182k | 190k | 154k | 194k | 262k | 163k | 147k | 183k | 170k |
+| comprehension | 889k | 904k | 1,402k | 1,290k | 1,412k | 847k | 864k | 797k | 1,186k | 794k |
+| pinpoint | 366k | 323k | 387k | 328k | 287k | 251k | 392k | 411k | 365k | 524k |
+| known-file | 126k | 126k | 103k | 111k | 98k | 109k | 109k | 109k | 110k | 110k |
+| by-meaning | 866k | 896k | 853k | 896k | 780k | 605k | 622k | 644k | 627k | 726k |
+| **blended** | **2,560k** | **2,432k** | **2,935k** | **2,779k** | **2,772k** | **2,074k** | **2,150k** | **2,108k** | **2,471k** | **2,326k** |
+
+Selection on Haiku is the same story as Sonnet: `sql` first on 27 to 29 of
+30 aggregation runs and `search` first on 16 to 18 of 18 on every build,
+`find` first on 13 to 16 of 24 pinpoint runs, and never a code-context
+tool on the known-file set (Bash or Read, then Read). Haiku is where the
+fourth tool cost something: on "break down the crate by top-level module"
+it called `reindex` in 2 of 3 V0 runs, once as its first call, and the two
+V0 aggregation passes swing 314k to 182k largely on that question. With
+`reindex` hidden the set sits between 147k and 262k.
+
+Haiku is also where the trimmed text lost something Sonnet did not need.
+Comprehension went from about 900k tokens under V0 to 1.3M and 1.4M under
+V3, with Reads doubled (82 and 97 against 40 and 45) and Grep up (13 and 17
+against 2 and 6): V0's `search` description said to answer from a hit
+without re-confirming it by opening the file, the trimmed one said "answer
+and cite from the hits", and Haiku went back to reading. Putting the
+sentence back in the server instructions (V6) split the passes, 1.4M and
+847k; putting it in the `search` description as well (V7), where the model
+reads it as the hits arrive, brought both passes to 864k and 797k, under
+V0. V8, the same text plus the receipt-field sentence, split again (1,186k
+and 794k). Haiku's spread on this six-question set is wide - the same
+build lands 65% apart - so the honest reading is: the trimmed text without
+the sentence was over V0 in all four passes, and with it in the `search`
+description it was at or under V0 in three of four. Haiku also invented a
+tool name (`mcp__code_context__search`, underscores for the hyphen) in 9
+of 648 runs on the trimmed builds and never in 216 under V0; each such
+call fails and the run falls back to Grep and Read.
+
+### What this run decides
+
+- **`search` keeps its name and its shape.** The rename moved nothing it
+  was meant to move; the tiered result buys dollars with round trips and
+  answers no better.
+- **The descriptions and instructions ship trimmed**, at about 680 tokens
+  of tool text and 185 of instructions per turn against 1,280 and 545,
+  with three sentences the trim had cut and the runs showed were
+  load-bearing: answer from a hit without re-opening the file (in the
+  `search` description, for Haiku), what the `usage` receipt reports (in
+  each description, for the two lookups on Sonnet), and what `lang` holds.
+- **The "show the usage line" request goes.** It was paid three times per
+  turn, and the part of the sentence that steered was the description of
+  the field, which stays.
+- **`reindex` leaves the tool list.** Nothing on Sonnet called it in 216
+  runs; Haiku called it where it hurt. Auto-sync and auto-index cover the
+  job in a session and `cx index --full` on the command line.
+- **Prose is measured from now on.** Every sentence in a description costs
+  every turn; this run found two that steered selection and one that
+  steered how many files got opened, none of them written for that. The
+  question sets and the comparison scripts in `bench/` are the harness for
+  the next change.
+
+**Caveats.** Sonnet's pass-to-pass spread is 4 to 12% per set; Haiku's is
+wider (aggregation 314k against 182k on V0). Per-question first-call counts
+are stable per prompt and flip on unrelated wording, so only set totals are
+read. The pinned clone and the disabled auto-sync are the same discipline as
+the `find` run. Spend: about $50 of agent runs (11 Sonnet passes over the
+four sets, three pinpoint-only passes, 10 Haiku passes) and about $107 of
+judging, four variants at a quarter of a dollar a pair.
+
 ## Indexing at scale
 
 Keyword-index timings on an Apple Silicon laptop (the stage that gates
