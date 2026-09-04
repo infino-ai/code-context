@@ -29,19 +29,19 @@ database you own on infino-platform and queries go there over HTTPS.
 
 Yes. `cx index --db https://host/<database> --api-key-file <path>` walks and
 chunks the repo here and loads the chunks table into that database; by
-default the platform embeds it server-side, so no model runs on your machine
-and there is no vector backfill. `cx mcp --db ...` (or any of `find`, `search`,
-`sql`, `status` with `--db`) then serves the same three tools over that table,
-with the same results. Every hosted setting is a command-line flag (`--db`,
+default the platform embeds it, so no model runs on your machine and there is
+no vector backfill. `cx mcp --db ...` (or any of `find`, `search`, `sql`,
+`status` with `--db`) then serves the same three tools over that table, with
+the same results. Every hosted setting is a command-line flag (`--db`,
 `--api-key-file`, `--embed-provider`, `--analyzer`, the two timeouts); the key
 comes from a file or from `INFINO_API_KEY`, never from the command line, and
 `.infino/` in the repo stays as a small sidecar for the manifest and the
 usage ledger. Because a hosted table is shared, nothing builds or re-syncs
 it as a side effect of a query: `cx index --db` is the explicit load, re-run
-to sync. With `cx mcp --db ... --retrieval-agent` the platform's own
-retrieval agent joins as a fourth tool, `retrieval_agent`, which answers one
-question by searching the table itself and returns the answer with cited
-`path:line` places. The README's hosted section has the flag table.
+to sync. With `cx mcp --db ... --retrieval-agent` a fourth tool joins,
+`retrieval_agent`, which hands one question to the platform and returns the
+answer with cited `path:line` places. The README's hosted section has the
+flag table.
 
 ### How fast is it usable after indexing starts?
 

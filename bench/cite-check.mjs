@@ -4,21 +4,24 @@
 // (in backticks, within the same sentence) must appear within a few lines of
 // the cited range. Reports per build so variants can be compared.
 //
-// Usage: node cite-check.mjs <repoDir> [results=questions.jsonl] [builds]
+// Usage: node cite-check.mjs <repoDir> [results=questions.jsonl] [builds] [lanes=combo]
 //   builds  comma-separated build labels, or `since..until` windows for rows
 //           without a label; default: every build in the file (plus `V0` for
 //           unlabelled rows when CX_V0_WINDOW=since..until is set)
+//   lanes   comma-separated lanes whose rows are checked (default combo; the
+//           hosted runs are `hosted`, `hosted-agent`, `agent-only`)
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { RESULTS } from "./lanes.mjs";
 
-const [repoArg, resultsArg, buildsArg] = process.argv.slice(2);
+const [repoArg, resultsArg, buildsArg, lanesArg] = process.argv.slice(2);
 if (!repoArg) {
-  console.error("usage: node cite-check.mjs <repoDir> [results.jsonl] [builds]");
+  console.error("usage: node cite-check.mjs <repoDir> [results.jsonl] [builds] [lanes=combo]");
   process.exit(1);
 }
 const repoDir = resolve(repoArg);
 const resultsFile = resultsArg ? resolve(resultsArg) : join(RESULTS, "questions.jsonl");
+const lanes = new Set((lanesArg || "combo").split(","));
 
 /** How far from the cited range an identifier may sit and still count as
  * anchored: a citation to a signature line often names the body's symbol. */
@@ -33,7 +36,7 @@ const rows = readFileSync(resultsFile, "utf8")
   .split("\n")
   .filter(Boolean)
   .map((l) => JSON.parse(l))
-  .filter((r) => r.lane === "combo" && !r.error && r.answer);
+  .filter((r) => lanes.has(r.lane) && !r.error && r.answer);
 
 function selector(spec) {
   const m = /^(\S+)\.\.(\S+)$/.exec(spec);

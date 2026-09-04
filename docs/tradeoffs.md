@@ -45,23 +45,20 @@ shared vocabulary are weaker until vectors land.
 The default embedding model optimizes quality-per-minute on commodity
 hardware; a larger model would rank better but index much slower. The choice
 is documented in [the embedder eval](embedder-eval.md), and the model is
-configurable. A hosted index is embedded by the platform's model by default,
-one per deployment and not yours to pick; `--embed-provider local` keeps this
-machine's model and ships the vectors if that matters to you.
+configurable. A hosted index is embedded by the platform by default;
+`--embed-provider local` keeps this machine's model and ships the vectors if
+that matters to you.
 
 ### A hosted index puts the network in the loop
 
-With `--db` every query is an HTTPS round trip to the platform: tens of
-milliseconds on a warm database, and a cold one (its worker still spawning)
-answers "not yet" until it is up, which the client waits out for a bounded
-time (`--cold-start-secs`) before giving up. The table is shared, so the
+With `--db` every query is an HTTPS round trip to the platform, and a
+database that is not yet ready is retried for a bounded time
+(`--cold-start-secs`) before the client gives up. The table is shared, so the
 conveniences of the local index that rewrite it behind your back - the first
 query building it, every query re-syncing it - are off; loading and syncing
 are the explicit `cx index --db`. What you get in exchange is no model and no
 build on the machine, and one index for every machine and agent that points
-at it. Measured on the [benchmark](benchmark.md#hosted-index), the agent's
-own tokens and dollars are the same either way: retrieval time is a few
-percent of end-to-end time in both.
+at it.
 
 ### It is built for largely append-and-edit source trees
 

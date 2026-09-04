@@ -117,15 +117,13 @@ GROUP BY path ORDER BY lines DESC LIMIT 15
 ## retrieval_agent (hosted index only, when present)
 
 When the server was started with `--retrieval-agent` a fourth tool is
-registered: `retrieval_agent` hands one question to the platform's own agent
-loop, which searches the same table itself (keyword, meaning, SQL) and
-returns `answer`, `hits` (`path`, `startLine`-`endLine`, a text snippet: the
-places it found, in the shape of a `search` result) and the queries it ran.
-Use it for a question that would take several `find`, `search`, or `sql`
-calls of your own - counts, which files or symbols, rankings, where something
-is handled. Not for reading or explaining a file you already know: Read it.
-Its result carries a `usage` field with the agent's turns and tokens; those
-are spent on the platform, not in your context.
+registered: `retrieval_agent` hands one question to the platform and returns
+`answer` and `hits` (`path`, `startLine`-`endLine`, a text snippet: the places
+it found, in the shape of a `search` result). Use it for a question that
+would take several `find`, `search`, or `sql` calls of your own - counts,
+which files or symbols, rankings, where something is handled. Not for reading
+or explaining a file you already know: Read it. Like the other tools, its
+result carries a one-line `usage` receipt.
 
 ## Reading results honestly
 
