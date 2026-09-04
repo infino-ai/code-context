@@ -136,9 +136,8 @@ describe("retrieval_agent receipt", () => {
     hits: [{ path: "src/a.ts", startLine: 10, endLine: 30, text: "export function a() {" }],
     queries: [{ tool: "query_sql", sql: "SELECT path, start_line, end_line, content FROM chunks LIMIT 3" }],
     turns: 4,
-    model: "openai/gpt-oss-120b",
   };
-  const spend: RetrievalAgentSpend = { promptTokens: 12_345, completionTokens: 210, rung: 1, cardTier: "enriched" };
+  const spend: RetrievalAgentSpend = { promptTokens: 12_345, completionTokens: 210 };
 
   it("counts the answer and hits as what was returned, and records the loop's spend", () => {
     const entry = retrievalAgentEntry(answered, spend);
@@ -148,9 +147,6 @@ describe("retrieval_agent receipt", () => {
     expect(entry.agentTurns).toBe(4);
     expect(entry.agentPromptTokens).toBe(12_345);
     expect(entry.agentCompletionTokens).toBe(210);
-    expect(entry.agentModel).toBe("openai/gpt-oss-120b");
-    expect(entry.agentRung).toBe(1);
-    expect(entry.agentCardTier).toBe("enriched");
     // No row/hit fields of the other tools leak in, and the queries are not
     // counted as returned tokens twice over (their places are the hits).
     expect(entry.rows).toBeUndefined();
@@ -158,9 +154,9 @@ describe("retrieval_agent receipt", () => {
     expect(JSON.stringify(entry)).not.toContain("FROM chunks");
   });
 
-  it("prints the returned tokens, the turns, and the prompt/completion tokens on the model", () => {
+  it("prints the returned tokens, the turns, and the prompt/completion tokens", () => {
     const line = formatReceipt(retrievalAgentEntry(answered, spend));
-    expect(line).toMatch(/^returned ~\d+ tokens \| 4 turns \| 12\.3k prompt \/ 210 completion tokens on openai\/gpt-oss-120b$/);
+    expect(line).toMatch(/^returned ~\d+ tokens \| 4 turns \| 12\.3k prompt \/ 210 completion tokens$/);
   });
 
   it("singularizes one turn and accumulates into the session", () => {
@@ -182,9 +178,8 @@ describe("retrieval_agent receipt", () => {
       recordUsage(dir, retrievalAgentEntry(answered, spend));
       const [entry] = readUsage(dir);
       expect(entry.tool).toBe("retrieval_agent");
-      expect(entry.agentModel).toBe("openai/gpt-oss-120b");
       expect(entry.agentTurns).toBe(4);
-      expect(entry.agentCardTier).toBe("enriched");
+      expect(entry.agentPromptTokens).toBe(12_345);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

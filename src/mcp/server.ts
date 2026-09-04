@@ -467,12 +467,11 @@ export async function serveMcp(rootPath?: string): Promise<void> {
       {
         title: "Retrieval agent over the hosted index",
         description:
-          "Hands one question about the code to the platform's retrieval agent, which searches the " +
-          "index itself (keyword, meaning, SQL) and returns the answer with the places it found, cited " +
-          "path:line. Use it for questions that would take several find, search or sql calls: counts, " +
-          "which files or symbols, rankings, where something is handled. Not for reading or explaining " +
-          "a file you already know: Read it. The result includes a 'usage' field with the agent's turns " +
-          "and tokens.",
+          "Hands one question about the code to the platform's retrieval agent and returns the answer " +
+          "with the places it found, cited path:line. Use it for questions that would take several " +
+          "find, search or sql calls: counts, which files or symbols, rankings, where something is " +
+          "handled. Not for reading or explaining a file you already know: Read it. The result " +
+          "includes a 'usage' field, a one-line receipt of what the call cost.",
         inputSchema: {
           question: z.string().min(1).describe("The question, in plain language, about the indexed code."),
           answer: z
@@ -510,8 +509,8 @@ export async function serveMcp(rootPath?: string): Promise<void> {
         if ("needsIndex" in ensured) return noIndex(ctx);
         try {
           const t0 = performance.now();
-          // The spend (tokens, rung, card tier) goes to the ledger and the
-          // receipt only; the result the model sees is answer, hits, queries.
+          // The spend (turns, tokens) goes to the ledger and the receipt only;
+          // the result the model sees is answer, hits, queries.
           const { result, spend } = await runRetrievalAgent(
             ctx.hosted,
             { question, answer },

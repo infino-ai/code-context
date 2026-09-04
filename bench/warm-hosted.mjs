@@ -2,12 +2,12 @@
 // SPDX-FileCopyrightText: Copyright The Infino Authors
 //
 // Wake the platform database a hosted lane targets before the clock starts.
-// A cold database answers 503 (a worker is spawning, Retry-After: 5) or 529
-// (no capacity, Retry-After: 600) until a worker is live; a question that
-// lands on that would bill the spawn to the model's wall clock. This posts
-// the cheapest read the API has - list_tables - until it answers 200,
-// honouring Retry-After, and prints the round trip of that first good answer
-// and whether a cold start was seen, so a report can say which it measured.
+// A database that is not ready yet answers a retryable status (503 or 529)
+// with a Retry-After; a question that lands on that would bill the wait to
+// the model's wall clock. This posts the cheapest read the API has -
+// list_tables - until it answers 200, honouring Retry-After, and prints the
+// round trip of that first good answer and whether a cold start was seen, so
+// a report can say which it measured.
 //
 // Usage: CX_BENCH_DB_URL=https://host/<database> CX_BENCH_KEY_FILE=<path> node warm-hosted.mjs
 // Exits non-zero when the database is not live within the cap (WARM_CAP_MS).
@@ -16,15 +16,14 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BENCH_DB_URL, BENCH_KEY_FILE } from "./lanes.mjs";
 
-/** How long to keep retrying before giving up: two minutes covers a worker
- * spawn many times over; a 529 (Retry-After: 600) will not clear inside it
- * and is reported as such rather than waited out. */
+/** How long to keep retrying before giving up: two minutes covers a database
+ * coming up; a Retry-After longer than that is reported rather than waited
+ * out. */
 export const WARM_CAP_MS = 120_000;
-/** Retry-After to assume when a retryable answer carries none - the
- * platform's own activation interval. */
+/** Retry-After to assume when a retryable answer carries none. */
 export const DEFAULT_RETRY_AFTER_SECS = 5;
-/** Answers that mean "not yet, try again": cold start, no capacity, and a
- * catalog change in flight. Only the first two are a cold start. */
+/** Answers that mean "not yet, try again"; the first two are a cold start,
+ * the third a change in flight. */
 const RETRYABLE = new Set([503, 529, 409]);
 const COLD_START = new Set([503, 529]);
 /** Platform metering header on every response; recorded, never billed here. */

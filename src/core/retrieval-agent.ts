@@ -2,18 +2,16 @@
 // SPDX-FileCopyrightText: Copyright The Infino Authors
 //
 // The `retrieval_agent` door, hosted mode only: one question handed to the
-// platform's own agent (`POST /v1/ask/{database}` - the platform's name for
-// it), which runs SQL and searches over the chunks table server-side and
-// submits an answer. This file turns the platform's response into what the
-// outer agent sees, shaped like the other retrieval tools so it can cite
-// from it: the answer, the HITS (path, line range, a line of text - the
-// places the inner agent's queries touched, distilled from the transcript),
-// and the QUERIES it ran (statements and search terms, without their rows).
-// The loop's own spend (tokens, model rung, card tier) is not part of the
-// tool result: it travels beside it to the usage ledger. The whole
-// transcript (system prompts carrying table cards, every model reply, every
-// nudge) is never returned: it is paid for on every later turn of the outer
-// agent and says nothing the hits and queries do not.
+// platform's own agent (`POST /v1/ask/{database}`), which answers it over the
+// chunks table. This file turns the platform's response into what the outer
+// agent sees, shaped like the other retrieval tools so it can cite from it:
+// the answer, the HITS (path, line range, a line of text - the places the
+// inner agent's queries touched, distilled from the transcript), and the
+// QUERIES it ran (statements and search terms, without their rows). The
+// loop's own spend (turns, tokens) is not part of the tool result: it travels
+// beside it to the usage ledger. The whole transcript is never returned: it
+// is paid for on every later turn of the outer agent and says nothing the
+// hits and queries do not.
 
 import type { HostedDb } from "./hosted.js";
 
@@ -104,20 +102,15 @@ export interface RetrievalAgentResult {
   hits: RetrievalAgentHit[];
   queries: RetrievalAgentQuery[];
   turns: number;
-  model: string;
   /** Present when `answer` is null: why, and what to do instead. */
   error?: string;
 }
 
 /** What the loop cost on the platform, for the usage ledger and receipt:
- * never part of the tool result. The rung is the escalation step the loop
- * ended on (0 = the base model); the card tier is the table description it
- * answered from. */
+ * never part of the tool result. */
 export interface RetrievalAgentSpend {
   promptTokens: number;
   completionTokens: number;
-  rung: number;
-  cardTier: string;
 }
 
 /** One run: the tool result and, beside it, the spend. */
@@ -148,9 +141,9 @@ export interface TranscriptStep {
 
 /** Hand the platform's retrieval agent one question over the hosted
  * database. The transcript is requested so the hits and queries can be read
- * from it, and dropped again here. Retryable platform states (a cold
- * database, tables not carded yet) are handled inside the client; a terminal
- * failure (no agent configured, bad key) surfaces as its error. */
+ * from it, and dropped again here. Retryable platform states are handled
+ * inside the client; a terminal failure (no agent configured, bad key)
+ * surfaces as its error. */
 export async function runRetrievalAgent(
   hosted: Pick<HostedDb, "ask">,
   request: RetrievalAgentRequest,
@@ -186,14 +179,11 @@ export function retrievalAgentRunFrom(question: string, response: unknown): Retr
     hits: hitsFrom(steps),
     queries: steps.map((s) => s.query),
     turns: numberField(body.turns),
-    model: typeof body.model === "string" ? body.model : "",
   };
   if (result.answer === null) result.error = noAnswerMessage(terminate, body.error);
   const spend: RetrievalAgentSpend = {
     promptTokens: numberField(body.prompt_tokens),
     completionTokens: numberField(body.completion_tokens),
-    rung: numberField(body.rung),
-    cardTier: typeof body.card_tier === "string" ? body.card_tier : "",
   };
   return { result, spend };
 }
@@ -212,8 +202,7 @@ function noAnswerMessage(terminate: string, detail: unknown): string {
 }
 
 /** The hits in a transcript: every row of every tool result that names a
- * place in the code (path + start_line + end_line - SQL over the chunks
- * table; the bm25 tool projects only _id, text and score and so yields
+ * place in the code (path + start_line + end_line; a row without them yields
  * none), in transcript order, one per path:start_line, the first MAX_HITS. */
 export function hitsFrom(steps: TranscriptStep[]): RetrievalAgentHit[] {
   const hits: RetrievalAgentHit[] = [];
@@ -255,8 +244,7 @@ function hitFromRow(raw: unknown): RetrievalAgentHit | null {
 
 /** The tool calls in a transcript: every tool call of every assistant message
  * (the answer submission excluded) paired with the rows of its result by
- * `tool_call_id`. Mirrors how the platform itself reads a transcript into a
- * worked example. */
+ * `tool_call_id`. */
 export function stepsFrom(transcript: unknown[]): TranscriptStep[] {
   const messages = transcript.map((m) => asRecord(m) as TranscriptMessage);
   const results = new Map<string, string>();

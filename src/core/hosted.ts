@@ -20,16 +20,13 @@ import * as arrow from "apache-arrow";
  * layer (config.ts) gives --db-timeout-ms this same default. */
 export const DEFAULT_TIMEOUT_MS = 60_000;
 
-/** How long the retry loop keeps re-issuing a retryable failure (a database
- * whose worker is still spawning answers 503 until it is up) before giving up.
- * The platform's own worker spawn is measured in tens of seconds, and a 529
- * (no capacity) hints a 600 s wait the budget refuses to take - two minutes
- * covers a spawn without stalling a session. Exported for config.ts likewise. */
+/** How long the retry loop keeps re-issuing a retryable "not ready yet"
+ * answer before giving up. Two minutes covers a database coming up without
+ * stalling a session; a `Retry-After` longer than the budget is refused rather
+ * than waited out. Exported for config.ts likewise. */
 export const DEFAULT_COLD_START_SECS = 120;
 
-/** Seconds to wait before a retry when the server sent no `Retry-After`. The
- * platform's own activation hint is 5 s, so a missing header falls back to the
- * value the platform would have sent. */
+/** Seconds to wait before a retry when the server sent no `Retry-After`. */
 const DEFAULT_RETRY_AFTER_SECS = 5;
 
 /** Extra wall clock an `ask` gets on top of its own `max_wall_secs`: the loop
@@ -39,15 +36,13 @@ const ASK_TIMEOUT_MARGIN_SECS = 60;
 /** Milliseconds per second, named so the unit conversions read as such. */
 const MS_PER_SEC = 1000;
 
-/** The database's worker is still activating, or no capacity is free yet. */
+/** The database is not ready to answer yet; retryable. */
 const HTTP_SERVICE_UNAVAILABLE = 503;
-/** The platform's own "no capacity to activate this database" status. */
+/** The platform is declining for now; retryable when it says when. */
 const HTTP_OVERWHELMED = 529;
-/** A write lost the single-writer race (retryable when it carries `Retry-After`)
- * or a name already exists (terminal, no `Retry-After`). */
+/** A write lost a race (retryable when it carries `Retry-After`) or a name
+ * already exists (terminal, no `Retry-After`). */
 const HTTP_CONFLICT = 409;
-/** No card of the requested tier is stored for the table. */
-const HTTP_NOT_FOUND = 404;
 
 /** The API version prefix every route lives under. */
 const API_PREFIX = "/v1";
@@ -56,8 +51,8 @@ const API_PREFIX = "/v1";
 const JSON_CONTENT_TYPE = "application/json";
 const ARROW_STREAM_CONTENT_TYPE = "application/vnd.apache.arrow.stream";
 
-/** The metering headers the gateway stamps on every response: decimal tokens
- * (`"0.050"`), one for reads and one for writes. */
+/** The metering headers the platform returns on every response: decimal
+ * tokens (`"0.050"`), one for reads and one for writes. */
 const READ_TOKENS_HEADER = "x-infino-read-tokens";
 const WRITE_TOKENS_HEADER = "x-infino-write-tokens";
 
@@ -226,10 +221,9 @@ function tokensHeader(headers: Headers, name: string): number | undefined {
   return Number.isFinite(n) ? n : undefined;
 }
 
-/** The server's message out of an error body. The data plane answers in plain
- * text (worker bodies are proxied verbatim); the control plane (auth, table
- * cards) answers a JSON `{"error": "..."}`. Both are read, and anything else
- * comes back as the raw text. */
+/** The server's message out of an error body: plain text, or a JSON
+ * `{"error": "..."}`. Both are read, and anything else comes back as the raw
+ * text. */
 export function serverMessage(status: number, body: string): string {
   const text = body.trim();
   if (text.startsWith("{")) {
@@ -441,14 +435,13 @@ export class HostedDb {
     return this.rows(await this.postJson("token_match", body, true), "token_match");
   }
 
-  // --- ask / cards ---
+  // --- ask ---
 
   /** `POST /v1/ask/{db}`: the answering loop. The per-call timeout is the
    * request's own `max_wall_secs` plus a margin for the answer to travel; with
-   * no `max_wall_secs` the deployment's cap applies server-side and the
-   * client's general timeout is all it can go on. 503 (tables not carded yet /
-   * cold database) is retried like any other op; 501 (no ask configured) is
-   * terminal. */
+   * no `max_wall_secs` the server's cap applies and the client's general
+   * timeout is all it can go on. A retryable 503 is retried like any other
+   * op; 501 (no agent configured) is terminal. */
   async ask(req: {
     question: string;
     answer?: "text" | "scalar" | "sql";
@@ -474,25 +467,6 @@ export class HostedDb {
       timeoutMs,
     });
     return this.parseJson(exchange, "ask") as RowRecord;
-  }
-
-  /** `GET /v1/table_card/{db}?table=T[&tier=lean|enriched|semantic]`: the
-   * optimizer's card for the table, or null while none of that tier is stored
-   * yet (the platform's 404). */
-  async tableCard(table: string, tier?: string): Promise<RowRecord | null> {
-    try {
-      const exchange = await this.call({
-        op: "table_card",
-        method: "GET",
-        query: { table, ...(tier !== undefined ? { tier } : {}) },
-        acceptJson: true,
-        timeoutMs: this.timeoutMs,
-      });
-      return this.parseJson(exchange, "table_card") as RowRecord;
-    } catch (err) {
-      if (err instanceof HostedError && err.status === HTTP_NOT_FOUND) return null;
-      throw err;
-    }
   }
 
   // --- plumbing ---

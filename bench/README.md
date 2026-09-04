@@ -84,11 +84,11 @@ node run-questions.mjs /path/to/repo combo,hosted
 `CX_BENCH_CLI`) with the `--db` flag hosted mode adds to `cx index`. A CLI
 that does not have the flag yet fails with commander's "unknown option" line,
 which the record keeps verbatim (`error`) rather than pretending a build
-happened. `warm-hosted.mjs` exists because a cold database answers `503`
-(worker spawning, `Retry-After: 5`) or `529` (no capacity, `Retry-After: 600`)
-until a worker is live, and a question landing on that would bill the spawn to
-the model's clock; it honours `Retry-After`, gives up after 120 s, and reports
-the round trip of the first `200` and every status it saw on the way.
+happened. `warm-hosted.mjs` exists because a database that is not ready yet
+answers a retryable status with a `Retry-After`, and a question landing on
+that would bill the wait to the model's clock; it retries `list_tables`
+honouring `Retry-After`, gives up after 120 s, and reports the round trip of
+the first `200` and every status it saw on the way.
 
 Lane design notes (they matter for fairness):
 
@@ -173,16 +173,14 @@ smoke run. Judging costs about a quarter of a dollar per pair.
 ## Caveats to state in any local-vs-hosted report
 
 1. **The engine version is a lane attribute.** The local lanes run the
-   `@infino-ai/infino` Node binding this checkout links (engine 0.5.5 at the
-   time of writing), while the platform worker links engine 0.5.12. A gap in
-   `cxTookMs` or in hit ranking between `combo` and `hosted` can be the engine
-   version, not the transport; say which versions the run used.
-2. **The platform's read-token header is not engine work.** The
-   `x-infino-read-tokens` figure the platform meters folds in RAM rent for the
-   database's idle time, so it moves with how long the worker sat between
-   calls, not only with what a query did. Report it as cost, never as a
-   latency or work proxy; the work proxy is `took_ms`, which the tool result
-   carries the same way in both lanes.
+   `@infino-ai/infino` Node binding this checkout links; the hosted lanes run
+   whatever the platform runs. A gap in `cxTookMs` or in hit ranking between
+   `combo` and `hosted` can be the engine version, not the transport; say
+   which binding version the local run used.
+2. **The platform's metering headers are cost, not work.** Report the
+   `x-infino-read-tokens` figure as cost, never as a latency or work proxy;
+   the work proxy is `took_ms`, which the tool result carries the same way in
+   both lanes.
 
 ## Tests
 

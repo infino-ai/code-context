@@ -284,7 +284,7 @@ describe("request shapes", () => {
   });
 
   it("ask posts only the fields given and decodes the answer", async () => {
-    const answer = { answer: "3", terminate: "answered", turns: 2, answer_retries: 0, bare_reply: false, card_tier: "lean", rung: 0, prompt_tokens: 10, completion_tokens: 2, usage: [], model: "m" };
+    const answer = { answer: "3", terminate: "answered", turns: 2, answer_retries: 0, bare_reply: false, prompt_tokens: 10, completion_tokens: 2, usage: [], model: "m" };
     const { db, calls } = client([json(answer), json(answer)]);
     expect(await db.ask({ question: "how many?" })).toEqual(answer);
     expect(calls[0].url).toBe("https://api.example.test/v1/ask/cx");
@@ -298,28 +298,6 @@ describe("request shapes", () => {
     const { db, calls } = client([{ status: 501, body: "ask is not configured on this deployment" }]);
     await expect(db.ask({ question: "q" })).rejects.toMatchObject({ status: 501 });
     expect(calls).toHaveLength(1);
-  });
-
-  it("table_card is a GET with ?table= and an optional tier; 404 is null", async () => {
-    const card = { tier: "lean", built_ms: 5, card: { table: "chunks", rows: 10 } };
-    const { db, calls } = client([
-      json(card),
-      { status: 404, body: JSON.stringify({ error: "no lean card for table chunks in database cx" }), headers: { "content-type": "application/json" } },
-      json(card),
-    ]);
-    expect(await db.tableCard("chunks")).toEqual(card);
-    expect(calls[0].method).toBe("GET");
-    expect(calls[0].url).toBe("https://api.example.test/v1/table_card/cx?table=chunks");
-    expect(calls[0].body).toBeUndefined();
-    expect(await db.tableCard("chunks")).toBeNull();
-    expect(db.lastCall()).toMatchObject({ op: "table_card", status: 404 });
-    await db.tableCard("chunks", "enriched");
-    expect(calls[2].url).toBe("https://api.example.test/v1/table_card/cx?table=chunks&tier=enriched");
-  });
-
-  it("table_card rethrows anything but a 404", async () => {
-    const { db } = client([{ status: 401, body: JSON.stringify({ error: "unauthenticated" }) }]);
-    await expect(db.tableCard("chunks")).rejects.toMatchObject({ status: 401 });
   });
 
   it("strips a trailing slash off the base URL", async () => {

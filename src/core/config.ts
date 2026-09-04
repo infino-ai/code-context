@@ -38,8 +38,8 @@ export const DEFAULT_DB_TIMEOUT_MS = DEFAULT_TIMEOUT_MS;
 /** Default cold-start budget: likewise the client's own default. */
 export const DEFAULT_DB_COLD_START_SECS = DEFAULT_COLD_START_SECS;
 
-/** Default turn cap for `retrieval_agent`: enough for card lookup, a few SQL
- * turns and an answer; more turns mostly buy cost. */
+/** Default turn cap for `retrieval_agent`: enough for a few search turns and
+ * an answer; more turns mostly buy cost. */
 export const DEFAULT_RETRIEVAL_AGENT_MAX_TURNS = 8;
 
 /** Default wall clock for `retrieval_agent`, in seconds. */
@@ -74,8 +74,8 @@ export interface HostedSettings {
   embedProvider: EmbedProvider;
   /** Per-request wall clock, in milliseconds. */
   timeoutMs: number;
-  /** How long retryable "not yet" answers (a cold database whose worker is
-   * spawning, an embedder starting) are re-issued before giving up, in seconds. */
+  /** How long retryable "not ready yet" answers are re-issued before giving
+   * up, in seconds. */
   coldStartSecs: number;
   /** The FTS analyzer `cx index --db` creates the content index with. */
   analyzer: Analyzer;

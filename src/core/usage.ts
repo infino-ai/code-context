@@ -56,15 +56,11 @@ export interface UsageEntry {
   /** sql only: a truncated preview of the returned rows (the answer itself). */
   rowsPreview?: string;
   /** retrieval_agent only: what the platform's agent spent on the question -
-   * its model turns and tokens, the model that answered, the escalation rung
-   * it answered from and the table card tier it read. The platform bills
-   * these; the receipt shows them, the tool result does not. */
+   * its turns and tokens. The platform bills these; the receipt shows them,
+   * the tool result does not. */
   agentTurns?: number;
   agentPromptTokens?: number;
   agentCompletionTokens?: number;
-  agentModel?: string;
-  agentRung?: number;
-  agentCardTier?: string;
   /** Hosted mode only: what the platform call behind this query cost - the
    * round trip of the answering request and the tokens the platform metered
    * (from its response headers, when present). Lives in the ledger, never in
@@ -134,8 +130,7 @@ export function sqlEntry(query: string, rows: Array<Record<string, unknown>>): U
 
 /** A retrieval_agent call returns an answer and the hits behind it, so what
  * it cost the outer agent is those two serialized; the loop's own spend
- * (turns, tokens, model, rung, card tier) is the platform's meter and rides
- * beside it in the ledger. */
+ * (turns, tokens) is the platform's meter and rides beside it in the ledger. */
 export function retrievalAgentEntry(result: RetrievalAgentResult, spend: RetrievalAgentSpend): UsageEntry {
   return {
     ts: new Date().toISOString(),
@@ -145,9 +140,6 @@ export function retrievalAgentEntry(result: RetrievalAgentResult, spend: Retriev
     agentTurns: result.turns,
     agentPromptTokens: spend.promptTokens,
     agentCompletionTokens: spend.completionTokens,
-    agentModel: result.model,
-    agentRung: spend.rung,
-    agentCardTier: spend.cardTier,
   };
 }
 
@@ -195,7 +187,7 @@ export function formatReceipt(entry: UsageEntry, session?: SessionUsage): string
     // turns and tokens, so the caller sees what one question cost there.
     parts.push(
       `returned ~${fmtTokens(entry.returnedTokens)} tokens | ${plural(entry.agentTurns ?? 0, "turn", "turns")} | ` +
-        `${fmtTokens(entry.agentPromptTokens ?? 0)} prompt / ${fmtTokens(entry.agentCompletionTokens ?? 0)} completion tokens on ${entry.agentModel ?? "?"}`,
+        `${fmtTokens(entry.agentPromptTokens ?? 0)} prompt / ${fmtTokens(entry.agentCompletionTokens ?? 0)} completion tokens`,
     );
   } else {
     parts.push(`returned ~${fmtTokens(entry.returnedTokens)} tokens | ${plural(entry.rows ?? 0, "row", "rows")}`);

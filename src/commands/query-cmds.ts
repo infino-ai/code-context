@@ -302,7 +302,7 @@ export async function usageCmd(opts: UsageCmdOptions): Promise<void> {
       if (locs.length) console.log(green(`            ${locs.join("  ")}${hits.length > 5 ? dim(`  (+${hits.length - 5} more)`) : ""}`));
     } else if (e.tool === "retrieval_agent") {
       // A retrieval_agent call has no rows of its own: what it cost is the inner agent's turns on the platform.
-      console.log(`${dim(clock)}  ${bold(tool)}  ${q}  ${dim(`-> ${e.agentTurns ?? 0} turns | ~${fmtTokens(e.returnedTokens)} tok | ${e.agentModel ?? "?"}`)}`);
+      console.log(`${dim(clock)}  ${bold(tool)}  ${q}  ${dim(`-> ${e.agentTurns ?? 0} turns | ~${fmtTokens(e.returnedTokens)} tok`)}`);
     } else {
       console.log(
         `${dim(clock)}  ${bold(tool)}  ${q}  ${dim(`-> ${e.rows ?? 0} rows | ~${fmtTokens(e.returnedTokens)} tok`)}`,

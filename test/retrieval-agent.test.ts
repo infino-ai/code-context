@@ -47,7 +47,7 @@ const chunkRows = (n: number) => ({
   ...(n > 25 ? { note: `${n} rows total; first 25 shown - aggregate in SQL instead` } : {}),
 });
 
-/** A complete `answered` response, as the worker serializes AskResponse. */
+/** A complete `answered` response, as the platform returns it. */
 function answered(overrides: Record<string, unknown> = {}) {
   return {
     answer: "3 files",
@@ -55,14 +55,12 @@ function answered(overrides: Record<string, unknown> = {}) {
     turns: 3,
     answer_retries: 0,
     bare_reply: false,
-    card_tier: "lean",
-    rung: 0,
     prompt_tokens: 1200,
     completion_tokens: 80,
-    usage: [{ prompt_tokens: 400, completion_tokens: 30, rung: 0 }],
-    model: "openai/gpt-oss-120b",
+    usage: [{ prompt_tokens: 400, completion_tokens: 30 }],
+    model: "some-model",
     transcript: [
-      { role: "system", content: "You answer questions about a database ... <the whole table card>" },
+      { role: "system", content: "You answer questions about a database ... <the whole system prompt>" },
       { role: "user", content: "which files mention compaction?" },
       toolCall("c1", "query_sql", { sql: "SELECT path, start_line, end_line, content FROM chunks LIMIT 3" }),
       toolResult("c1", chunkRows(3)),
@@ -90,20 +88,19 @@ describe("retrievalAgentRunFrom", () => {
       ],
       queries: [{ tool: "query_sql", sql: "SELECT path, start_line, end_line, content FROM chunks LIMIT 3" }],
       turns: 3,
-      model: "openai/gpt-oss-120b",
     });
     expect(result.error).toBeUndefined();
   });
 
-  it("keeps the loop's spend beside the result, not in it", () => {
+  it("keeps the loop's spend beside the result, not in it, and drops the platform's own fields", () => {
     const { result, spend } = retrievalAgentRunFrom(QUESTION, answered());
-    expect(spend).toEqual({ promptTokens: 1200, completionTokens: 80, rung: 0, cardTier: "lean" });
+    expect(spend).toEqual({ promptTokens: 1200, completionTokens: 80 });
     const asRecord = result as RetrievalAgentResult & Record<string, unknown>;
-    for (const dropped of ["rung", "card_tier", "prompt_tokens", "completion_tokens", "evidence", "terminate", "transcript", "usage"]) {
+    for (const dropped of ["model", "prompt_tokens", "completion_tokens", "evidence", "terminate", "transcript", "usage", "answer_retries"]) {
       expect(asRecord[dropped]).toBeUndefined();
     }
-    expect(JSON.stringify(result)).not.toContain("the whole table card");
-    expect(Object.keys(result).sort()).toEqual(["answer", "hits", "model", "queries", "question", "turns"]);
+    expect(JSON.stringify(result)).not.toContain("the whole system prompt");
+    expect(Object.keys(result).sort()).toEqual(["answer", "hits", "queries", "question", "turns"]);
   });
 
   it("is ok (not an error) with answer null and a reason when the loop hit its turn cap", () => {
@@ -149,7 +146,7 @@ describe("retrievalAgentRunFrom", () => {
     expect(() => retrievalAgentRunFrom(QUESTION, "plain text")).toThrow(/not an agent result/);
   });
 
-  it("tolerates a response without a transcript (gateway stripped it)", () => {
+  it("tolerates a response without a transcript (the server left it out)", () => {
     const { transcript: _dropped, ...noTranscript } = answered();
     const { result } = retrievalAgentRunFrom(QUESTION, noTranscript);
     expect(result.answer).toBe("3 files");
@@ -158,10 +155,10 @@ describe("retrievalAgentRunFrom", () => {
   });
 
   it("defaults a missing or malformed numeric field to 0 instead of NaN", () => {
-    const { result, spend } = retrievalAgentRunFrom(QUESTION, answered({ turns: "3", prompt_tokens: undefined, rung: Number.NaN }));
+    const { result, spend } = retrievalAgentRunFrom(QUESTION, answered({ turns: "3", prompt_tokens: undefined, completion_tokens: Number.NaN }));
     expect(result.turns).toBe(0);
     expect(spend.promptTokens).toBe(0);
-    expect(spend.rung).toBe(0);
+    expect(spend.completionTokens).toBe(0);
   });
 
   it("uses the terminate constant the platform serializes", () => {
@@ -334,7 +331,7 @@ describe("stepsFrom", () => {
 
   it("ignores system swaps, user nudges, and messages of unexpected shape", () => {
     const steps = stepsFrom([
-      { role: "system", content: "enriched card", rung: 1, model: "stronger" },
+      { role: "system", content: "a swapped system prompt" },
       { role: "user", content: "The turn budget ran out ..." },
       null,
       "garbage",
@@ -362,7 +359,7 @@ describe("runRetrievalAgent", () => {
     expect(result.question).toBe("which files?");
     expect(result.answer).toBe("3 files");
     expect(result.hits).toHaveLength(3);
-    expect(spend.cardTier).toBe("lean");
+    expect(spend).toEqual({ promptTokens: 1200, completionTokens: 80 });
     expect((result as unknown as Record<string, unknown>).transcript).toBeUndefined();
   });
 
