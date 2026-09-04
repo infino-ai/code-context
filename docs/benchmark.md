@@ -467,6 +467,85 @@ the `find` run. Spend: about $50 of agent runs (11 Sonnet passes over the
 four sets, three pinpoint-only passes, 10 Haiku passes) and about $107 of
 judging, four variants at a quarter of a dollar a pair.
 
+## Hosted index
+
+Where the chunks table lives is a deployment choice, so it was measured the
+same way as everything else: the shipped V8 surface with the index in
+`.infino/` on the machine (lane `combo`, the V8 rows above) against the same
+surface over an [infino-platform](https://infino.ai) database reached over
+HTTPS (lane `hosted`, build H8), and that plus the platform's own retrieval
+agent registered as a fourth tool, `retrieval_agent` (lane `hosted-agent`,
+build H8A). Same pinned clone (401 files, 5,527 chunks), same four question
+sets, Sonnet 4.6, three passes each, auto-sync off. The hosted table was
+loaded once with `cx index --db`, the platform embedding the chunks
+server-side: 11 appends, 216 to 254 platform write tokens, 17 to 19 seconds
+of wall against the minutes the local build spends on vector backfill.
+The tool text is identical in all three; the hosted builds add the `--db`
+plumbing and, in H8A, one more tool.
+
+Summed medians over the three passes, tokens per set:
+
+| set | V8 local | H8 hosted | H8A hosted + `retrieval_agent` |
+|---|---|---|---|
+| aggregation | 136k | 147k | 155k |
+| comprehension | 578k | 518k | 638k |
+| pinpoint | 204k | 279k | 281k |
+| known-file | 114k | 114k | 114k |
+| by-meaning | 435k | 337k | 387k |
+| **blended** | **1,468k** | **1,395k** | **1,576k** |
+| cost per pass | $2.77 | $2.79 | $2.92 |
+| tool calls | 107 | 104 | 108 |
+| wall per pass | 1,072s | 1,103s | 1,128s |
+| first call on a code-context tool | 97/108 | 96/108 | 99/108 |
+| `retrieval_agent` called | - | - | 0/108 |
+
+**Hosted is the local index, moved.** H8 lands inside the pass-to-pass
+spread of V8 on every axis (5% fewer tokens, the same dollars, three fewer
+round trips, 3% more wall), with the same tool choices: `sql` first on all
+30 aggregation runs, `search` first on all 36 comprehension and by-meaning
+runs, `find` or `sql` first on 19 of 24 pinpoint runs against V8's 18. The
+per-set swings (pinpoint +37%, by-meaning -23%) are the familiar one-Read
+versus several-Reads flips on the same questions, not a hosted effect: the
+retrieval is not on the clock. The hosted build records each tool call's
+time, and over the 108 H8 runs they sum to 12 seconds of the 3,401 seconds
+of agent wall time. On the platform side the two hosted lanes made 426
+`find`/`search`/`sql` calls metered at 3,237 read tokens in total (about 7.6
+per call), with a median round trip of 45 to 59 ms, a 90th percentile under
+100 ms, and a worst of 414 ms, all against a database on the same box, so
+a real deployment adds its network distance to those.
+
+**`retrieval_agent` was never called.** It was registered on all 108 H8A
+runs (its description and the routing sentence in the server instructions
+add about 600 prompt tokens to every turn: the one-call aggregation runs
+read 11.0k tokens under H8 and 11.6k under H8A), and Sonnet answered every
+question with `sql`, `search`, and `find` exactly as before. That standing
+cost is most of the 181k gap between H8 and H8A; the rest is spread. The
+description offers it for "questions that would take several find, search
+or sql calls", which the model cannot know up front, and on this suite one
+`sql` or `search` usually answers. This is the `reindex` result from the
+surface run again: a tool the model does not route to is pure prompt cost,
+so `retrieval_agent` ships off by default (`cx mcp --db ... --retrieval-agent`
+turns it on). What this run does not say is whether the platform's agent
+answers well or cheaply when it *is* used; that needs a lane that leaves
+it as the only retrieval tool, which has not been run.
+
+**The analyzer is declared, not assumed.** A hosted table takes the
+platform's default full-text analyzer for a bare column, `standard` (UAX #29
+words), which keeps `self.reconcile_tombstone_seqs` as one token: the first
+hosted load found 1 of the 5 occurrences of `reconcile_tombstone_seqs` and
+137 of the 147 of `env::var`. `cx index --db` now creates the index with
+`ascii_lower` (splits on `.`, `_`, `::`) and records the choice in the
+manifest, after which `find` totals match the local index exactly on every
+probe term (`reconcile_tombstone_seqs` 5 lines in 2 files, `env::var` 147 in
+38, `impl StorageProvider` 27 in 23). `--analyzer standard` is there for a
+table whose queries are prose.
+
+**Caveats.** Three passes per lane; the same 4 to 12% per-set spread as the
+surface run applies, so only the blended row and the selection counts are
+read. Answers were not judged this time: the hosted lanes made the same tool
+choices over the same table content, and the question was cost and time, not
+quality. Spend: about $17 of agent runs.
+
 ## Indexing at scale
 
 Keyword-index timings on an Apple Silicon laptop (the stage that gates
@@ -495,6 +574,16 @@ JSONL these tables aggregate.
 ```
 cx index /path/to/repo
 node bench/run-questions.mjs /path/to/repo          # default question set
+```
+
+For the hosted lanes, load the repo into a platform database first and name
+it to the harness (the server itself is configured by flags; these two are
+the harness's own):
+
+```
+export CX_BENCH_DB_URL=https://<host>/<database> CX_BENCH_KEY_FILE=~/.infino/key
+node bench/load-hosted.mjs /path/to/repo            # cx index --db ..., timed
+node bench/run-questions.mjs /path/to/repo hosted   # or hosted-agent
 ```
 
 Question sets are `bench/questions/*.json` (`{cat, q}` arrays) - point it at

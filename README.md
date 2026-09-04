@@ -40,7 +40,8 @@ code-context.
   re-chunk and re-embed.
 - 🔒 **Nothing leaves your machine.** No accounts, no API keys, no database
   server, no telemetry. Embedding is a small local model, downloaded once;
-  after that everything works offline.
+  after that everything works offline. (The one opt-in exception is a
+  [hosted index](#hosted-index-on-infino-platform) on infino-platform.)
 
 Built on [infino](https://github.com/infino-ai/infino), a fast retrieval
 engine that runs SQL, full-text search, and vector search over a single copy
@@ -179,6 +180,64 @@ Everything lives in `.infino/` in your repo root (added to your
 cache in CI, or put on object storage. It's a live index the engine queries in place, not a snapshot you
 export and pass around.
 
+## Hosted index on infino-platform
+
+The same three tools can run over an index that lives in an
+[infino-platform](https://infino.ai) database instead of on the machine. Point
+any command at it with `--db`:
+
+```bash
+cx index --db https://api.platform.infino.ws/my-repo --api-key-file ~/.infino/key
+cx mcp   --db https://api.platform.infino.ws/my-repo --api-key-file ~/.infino/key
+```
+
+`cx index --db` walks and chunks the repo here and loads the chunks table into
+that database in one pass over the network; by default the platform embeds
+the chunks and every query server-side, so **no model runs on this machine**
+and there is no vector backfill to wait for (loading the ~5,500-chunk bench
+repo took under twenty seconds). `--embed-provider local` keeps this
+machine's model and ships the vectors instead, for a deployment whose
+embedding model you would rather not depend on. Queries then go over HTTPS to
+the same `find`, `search`, and `sql`, with the same results and the same
+`path:line` citations; `.infino/` in the repo stays as a small sidecar (the
+manifest, the file state, the usage ledger).
+
+Two things change from the local index. A hosted table is shared, so nothing
+builds or re-syncs it as a side effect of a query: loading is the explicit
+`cx index --db` step, re-run to sync. And the platform's own retrieval agent
+is available as a fourth MCP tool when you ask for it, `cx mcp --db ...
+--retrieval-agent`: `retrieval_agent` hands one question to an agent loop that
+runs on the platform next to the data (keyword, meaning, and SQL over the
+same table) and returns the answer with the places it found, cited
+`path:line`, in the same shape as a `search` result.
+
+Everything hosted is a command-line flag, on every command that can reach a
+hosted database:
+
+| Flag | Default | Purpose |
+|---|---|---|
+| `--db <url>` | (local index) | the hosted database, `https://host/<database>` (plain `http://` only for localhost) |
+| `--api-key-file <path>` | `INFINO_API_KEY` | file holding the bearer key. The key is never an argument, since a process's arguments are visible to every other process on the machine; the environment variable is the one alternative |
+| `--embed-provider <platform\|local>` | `platform` | who embeds the table at load time and the query at search time (the two must agree) |
+| `--analyzer <ascii_lower\|standard>` | `ascii_lower` | `cx index` only: the full-text analyzer the table is created with. `ascii_lower` splits code identifiers on `.`, `_`, and `::`, which is what makes `find` complete on code; it is recorded in the table so queries always mirror it |
+| `--db-timeout-ms <n>` | 60000 | per-request timeout |
+| `--cold-start-secs <n>` | 120 | how long to wait out a cold database (its worker still spawning) or a starting embedder before giving up |
+| `--retrieval-agent` | off | `cx mcp` only: also register `retrieval_agent`; `--agent-max-turns` (8) and `--agent-max-wall-secs` (120) cap one call |
+
+As an MCP server the flags go in `args`:
+
+```json
+{ "mcpServers": { "code-context": { "command": "npx", "args": ["-y", "@infino-ai/code-context", "mcp", "--db", "https://api.platform.infino.ws/my-repo", "--api-key-file", "/home/me/.infino/key"], "alwaysLoad": true } } }
+```
+
+Measured on the same benchmark as the local index (below), the hosted lane
+costs the agent the same tokens and dollars as the local one - the tool
+surface and the results are identical, and the retrieval itself is a few
+percent of end-to-end time in both - so what a hosted index buys is the
+machine side: no model download, no local build, one index shared by every
+machine and agent that points at it. Details and the `retrieval_agent`
+measurement are in [docs/benchmark.md](docs/benchmark.md#hosted-index).
+
 ## Setup for agents
 
 code-context is an MCP server over stdio, so any MCP client works. Register
@@ -295,6 +354,10 @@ no restart, no per-repo config.
 | `CX_NO_EMBED` | off | keyword-only mode for the MCP server (skip the vector stage) |
 | `CX_NO_RECEIPT` | off | `1` turns off usage accounting - the per-call receipt on results and the `cx usage` ledger |
 
+A hosted index is configured by command-line flags, not variables (see
+[Hosted index](#hosted-index-on-infino-platform)); the only variable there is
+`INFINO_API_KEY`, as the alternative to `--api-key-file`.
+
 Every `find` / `search` / `sql` result carries a **usage receipt** - a terse, local line
 showing the tokens it returned, the files it spanned, and a running session
 total (e.g. `returned ~1.2k tokens | 4 chunks / 3 files | session ~8.4k over 7
@@ -319,6 +382,8 @@ cx sql <statement>        read-only SQL; --embed q="text" fills {{q}}
 cx status                 what the index holds, how fresh, vector readiness
 cx usage                  ledger of queries run and what each returned  (-n, --all, --clear, --json)
 cx mcp                    serve the MCP tools over stdio
+cx <command> --db <url>   the same command over a hosted index on infino-platform  (--api-key-file, --embed-provider;
+                          index: --analyzer; mcp: --retrieval-agent)
 ```
 
 `cx usage` reads the local ledger at `.infino/usage.jsonl` - every `find` /
@@ -383,12 +448,15 @@ stack, so run both.
   Every chunk carries `path, start_line, end_line, lang, content`.
 - **Index:** [infino](https://github.com/infino-ai/infino) tables in
   `.infino/`: BM25 (FTS) and IVF vector indexes over a single copy of the
-  data, queried in-process through the Node binding. No server.
-- **Embeddings:** always local. A small model (chosen by a
+  data, queried in-process through the Node binding. No server. With
+  `--db`, the same table lives in an infino-platform database and is
+  reached over HTTPS instead, and `.infino/` is only a sidecar.
+- **Embeddings:** local by default. A small model (chosen by a
   [measured eval](docs/embedder-eval.md)) downloaded once; no key, no
   per-query network, code never leaves the machine. Queries embed with the
   same model the index was built with, and a mismatch is a clear error, not
-  silently wrong results.
+  silently wrong results. A hosted index is embedded by the platform
+  server-side unless told otherwise, so no model runs here at all.
 - **Freshness:** incremental by design. A per-file state map (size/mtime
   prefilter, then content hash) means a sync re-chunks and re-embeds only
   the files that changed: on a ~3,000-chunk repo an unchanged tree checks

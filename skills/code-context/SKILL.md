@@ -109,6 +109,23 @@ GROUP BY path ORDER BY lines DESC LIMIT 15
 - Each repo's index is keyed to its own root directory: a fresh git worktree
   is a new root and builds its own index on first query (the main checkout's
   index does not carry over).
+- A hosted index (the server was started with `--db`, and `cx status` names
+  an `https://` table) is shared and never built or re-synced by a query:
+  `cx index --db <url> --api-key-file <path>` from a shell is the explicit
+  load, and it is the user's step, not yours.
+
+## retrieval_agent (hosted index only, when present)
+
+When the server was started with `--retrieval-agent` a fourth tool is
+registered: `retrieval_agent` hands one question to the platform's own agent
+loop, which searches the same table itself (keyword, meaning, SQL) and
+returns `answer`, `hits` (`path`, `startLine`-`endLine`, a text snippet: the
+places it found, in the shape of a `search` result) and the queries it ran.
+Use it for a question that would take several `find`, `search`, or `sql`
+calls of your own - counts, which files or symbols, rankings, where something
+is handled. Not for reading or explaining a file you already know: Read it.
+Its result carries a `usage` field with the agent's turns and tokens; those
+are spent on the platform, not in your context.
 
 ## Reading results honestly
 
@@ -127,7 +144,8 @@ different repository than the one the server started in.
 
 ## Cost awareness
 
-- `find`/`search`/`sql` calls are cheap (local, milliseconds).
+- `find`/`search`/`sql` calls are cheap: milliseconds against a local index,
+  one HTTPS round trip (tens of milliseconds) against a hosted one.
 - The first index of a repo and the vector backfill are the expensive part
   (CPU for the local embedding model, proportional to repo size). Avoid
   forcing `cx index --full` rebuilds unless the index is actually wrong, and
