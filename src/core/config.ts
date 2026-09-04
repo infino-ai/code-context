@@ -57,3 +57,13 @@ export const EMBED_MAX_CHARS = Number(process.env.CX_EMBED_MAX_CHARS ?? 8000);
 /** Default number of search hits. Configurable per call (the `k` tool param /
  * CLI `-k`) and via CX_SEARCH_K for config/CI-level defaults. */
 export const DEFAULT_SEARCH_K = Number(process.env.CX_SEARCH_K ?? 10);
+
+/** Default number of matching lines `find` returns; the result's `total` and
+ * `byFile` are complete either way. Configurable per call (the `limit` tool
+ * param / CLI `--limit`) and via CX_FIND_LIMIT. Bounded by MAX_FIND_LIMIT. */
+export const DEFAULT_FIND_LIMIT = Number(process.env.CX_FIND_LIMIT ?? 100);
+
+/** Hard cap on matching lines in one `find` result, so a ubiquitous term
+ * cannot flood the context; a cut list still carries the full total and the
+ * per-file counts. */
+export const MAX_FIND_LIMIT = 500;

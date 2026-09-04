@@ -16,7 +16,7 @@
 //            vector functions.
 
 import type { IndexHandle } from "./context.js";
-import { TABLE, DEFAULT_SEARCH_K } from "./config.js";
+import { TABLE, DEFAULT_SEARCH_K, DEFAULT_FIND_LIMIT, MAX_FIND_LIMIT } from "./config.js";
 import type { Embedder } from "./embedder.js";
 import type { Manifest } from "./manifest.js";
 
@@ -186,11 +186,6 @@ export interface FindOptions {
   /** Maximum matches returned: a positive integer, clamped to MAX_FIND_LIMIT. */
   limit?: number;
 }
-
-/** Default and hard cap on matches returned. A grep over a large repo can hit
- * thousands of lines; past this the agent needs the count, not every line. */
-export const DEFAULT_FIND_LIMIT = 100;
-export const MAX_FIND_LIMIT = 500;
 
 /** Per-line cap so one minified or generated line cannot flood the result. */
 const FIND_LINE_CAP = 240;

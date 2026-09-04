@@ -7,8 +7,7 @@
 import { Command } from "commander";
 import { indexCmd } from "./commands/index-cmd.js";
 import { findCmd, searchCmd, sqlCmd, statusCmd, usageCmd } from "./commands/query-cmds.js";
-import { DEFAULT_SEARCH_K } from "./core/config.js";
-import { DEFAULT_FIND_LIMIT, MAX_FIND_LIMIT } from "./core/searcher.js";
+import { DEFAULT_SEARCH_K, DEFAULT_FIND_LIMIT, MAX_FIND_LIMIT } from "./core/config.js";
 
 const program = new Command();
 

@@ -24,10 +24,18 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { connect } from "@infino-ai/infino";
-import { indexDir, resolveRoot, TABLE, DEFAULT_CAPS, DEFAULT_SEARCH_K } from "../core/config.js";
+import {
+  indexDir,
+  resolveRoot,
+  TABLE,
+  DEFAULT_CAPS,
+  DEFAULT_SEARCH_K,
+  DEFAULT_FIND_LIMIT,
+  MAX_FIND_LIMIT,
+} from "../core/config.js";
 import { readManifest, type Manifest } from "../core/manifest.js";
 import type { IndexHandle } from "../core/context.js";
-import { find, search, runSql, jsonify, partialIndex, DEFAULT_FIND_LIMIT, MAX_FIND_LIMIT } from "../core/searcher.js";
+import { find, search, runSql, jsonify, partialIndex } from "../core/searcher.js";
 import {
   newSession,
   receiptEnabled,

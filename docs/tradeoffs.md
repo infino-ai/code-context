@@ -17,10 +17,15 @@ Naming the one file a known symbol lives in is a single grep's job, and
 file counts, no file scanned. A grep hit still needs a follow-up read before
 it is a cited line; a `find` hit already is one, so on exact lookups the
 saving is the reads that never happen, not a change in what gets found.
-Ranked `search` is the wrong tool there: it returns chunks that carry their
-content, which is what pays off on "how does X work" and whole-repo questions
-and is dead weight when all you need is a path. The large savings are on
-questions that span the repo; the [benchmark](benchmark.md) records both.
+Measured against the grep path on eight such questions: -35% tokens, -17%
+dollars, -38% tool calls, with answer quality level under a blind judge (see
+the [benchmark](benchmark.md#find-the-grep-replacement)). Ranked `search` is
+the wrong tool there: it returns chunks that carry their content, which is
+what pays off on "how does X work" and whole-repo questions and is dead
+weight when all you need is a path. The large savings are still on questions
+that span the repo, and a fourth tool has a standing cost of about a thousand
+prompt tokens per turn plus the occasional wrong pick; the benchmark records
+both.
 
 ### The first index of a repo pays a one-time vector cost
 

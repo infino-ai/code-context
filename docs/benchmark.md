@@ -88,16 +88,133 @@ time follows (13%). The biggest wins land on the questions where the baseline
 reads the most (one dropped from 861k tokens to 292k). Every answer carries
 `path:start-end` citations, since hits arrive as ranked chunks with content.
 
-## Where it does not help
+## Where ranked search does not help
 
 Pinpoint symbol lookup - "jump to this one known identifier" - is a single
-grep's home turf, and an index does not beat it there: ranked search returns
+grep's home turf, and ranked search does not beat it there: it returns
 chunks that carry their content, which is dead weight when all you need is one
 path. That same content is exactly what lets the comprehension answers quote
 code without opening the file. Same mechanism, opposite sign, depending on
 whether the question is "where is this exact name" or "how does this work".
-The tool descriptions say as much, so the agent still uses a plain grep for
-pinpoint lookups.
+The `find` tool exists for that first question; the next section measures it.
+
+## `find`, the grep replacement
+
+Does adding `find` - every line containing an exact string, cited
+`path:line` - change what an agent answers, or what it costs? Measured
+2026-09-04 against the three-tool build, on the same repo, questions, model
+and judge.
+
+**Setup.** Two hermetic lanes from `bench/run-questions.mjs`, differing only
+in the server build: *main* (`search`, `sql`, `reindex`, from `main @ eec2fe7`)
+and *find* (the same plus `find`, from `feat/find-tool @ dc713da`). Both
+lanes keep the stock file tools including Grep; nothing is restricted. Repo
+under test: [infino](https://github.com/infino-ai/infino) pinned at
+`ed4e020` (402 files, 5,528 chunks), indexed once from that clone with
+auto-sync off, so every run sees the same index. Agent `claude-sonnet-4-6`,
+50-turn cap, fresh conversation per question. Two question sets: the shipped
+16 (10 aggregation, 6 comprehension; 3 repeats), and 8 pinpoint lookups
+written to be grep's home ground and phrased without naming a tool
+(`bench/questions/infino-pinpoint.json`; 2 repeats). 128 agent runs, 64
+judged pairs. Quality was measured two ways: a mechanical citation check
+(every cited file exists, every line range is in bounds, the identifier named
+beside a citation appears within five lines of it), and a blind pairwise
+judge (`claude-opus-5`, a different model from the agent) that sees both
+answers in random order with Read/Grep/Glob on the clone and returns a
+winner, a confidence, and unsupported-claim counts. Tokens are input + cache
+writes + cache reads + output; cost is the API's accounting; per-question
+figures are medians over repeats and totals sum the medians.
+
+### Answer quality: level
+
+| Blind judge | Pairs | main wins | find wins | Ties | Unsupported claims main / find | Median confidence |
+|---|---|---|---|---|---|---|
+| shipped, aggregation | 30 | 15 | 9 | 6 | 109 / 97 | 0.62 |
+| shipped, comprehension | 18 | 7 | 8 | 3 | 37 / 29 | 0.68 |
+| pinpoint | 16 | 7 | 5 | 4 | 13 / 17 | 0.84 |
+| **all** | 64 | 29 | 22 | 13 | 159 / 143 | 0.70 |
+
+The signals point both ways, which is what no effect looks like: main takes
+more wins, `find` has fewer unsupported claims on the shipped set and a few
+more on the pinpoint set, and where the judge is confident (pinpoint, 0.84)
+the split is 7 to 5 with 4 ties. No answer in either lane cited a line
+outside its file. The one change is in the form of the answers: on the
+pinpoint set, `find` answers carried 111 line-ranged citations across 16
+answers against main's 22, all 105 identifier-anchored ones anchored
+correctly. Same correctness, more of it shown.
+
+### Cost: exact lookups a third cheaper, everything else flat
+
+Pinpoint set, medians over repeats:
+
+| Q | Question | main tokens | find tokens | Tokens | Calls main → find | How find answered |
+|---|---|---|---|---|---|---|
+| 1 | Where `RRF_K` is defined and its value | 49k | 17k | -66% | 2.5 → 1 | one find |
+| 2 | Every call site of `reconcile_tombstone_seqs` | 20k | 17k | -14% | 1.5 → 1 | one find |
+| 3 | File defining `InfinoError` and its variant count | 108k | 45k | -58% | 5.5 → 2.5 | find, then Read |
+| 4 | Every `std::env::var` read, with name and file:line | 203k | 92k | -55% | 13.5 → 3 | two or three finds |
+| 5 | Where `pointer_refresh_due` is defined and called | 24k | 17k | -30% | 2 → 1 | one find |
+| 6 | Crate, arrow, datafusion versions in Cargo.toml | 22k | 49k | +121% | 1 → 3.5 | three finds, then Read; main did one Read |
+| 7 | `#[tokio::test]` counts per file under src/supertable/ | 16k | 17k | +6% | 1 → 1 | Grep, same as main |
+| 8 | tracing call sites in src/compaction/ with messages | 135k | 121k | -11% | 8.5 → 9 | mixed find, Grep, Read |
+| | **pinpoint (8), tokens** | 578k | 374k | **-35%** | 35.5 → 22 (**-38%**) | |
+| | **pinpoint (8), cost per pass** | $0.68 | $0.56 | **-17%** | | |
+
+Where it fits, it collapses the search: definitions, call sites and
+repo-wide inventories (Q1 to Q5) go from a grep-then-read sequence to one to
+three `find` calls. The env-var inventory is the clearest case - main's worst
+run was 23 calls and 380k tokens, `find`'s best was 2 calls and 57k, with
+every cited line verified by the judge. Where it does not fit, the agent
+sometimes uses it anyway: Q6 asks for a few lines of one known file, main did
+one Read, and the `find` lane ran three finds and then read the file (this is
+what the tool description's "a known file is a Read" sentence is for). The
+agent opened with `find` in 12 of 16 lookup runs; on main the first call was
+Grep in 8 of 16.
+
+Shipped set, by category:
+
+| Category | main tokens | find tokens | Tokens | Cost main → find | Calls main → find |
+|---|---|---|---|---|---|
+| aggregation (10) | 186k | 244k | +31% | $0.28 → $0.33 (+20%) | 11 → 16 |
+| comprehension (6) | 719k | 635k | -12% | $1.27 → $1.24 (-3%) | 30 → 27 |
+| **blended (16)** | 904k | 879k | **-3%** | $1.55 → $1.57 (**+1%**) | 41 → 43 |
+
+Flat overall, with the two categories moving in opposite directions by
+amounts inside the repeat-to-repeat spread. Two small effects are real. Seven
+of the ten aggregation questions are one `sql` call in both lanes, and each
+moved from 17k to 18k tokens uniformly: that is the fourth tool's schema and
+description in every turn's prompt, roughly a thousand tokens. And on two
+aggregation questions the agent tried `find` before falling back to `sql`.
+The agent used `find` in 5 of 48 shipped-set runs; these are not the
+questions it exists for.
+
+### What the run found, and what changed after it
+
+- Quality unchanged; cost down by a third in tokens and a sixth in dollars
+  where the tool applies; a standing cost of about a thousand prompt tokens
+  per turn plus occasional mis-selection.
+- One grep-shaped question was not covered: per-file counts (Q7). `find`
+  returned lines with a total, capped at 100 by default, where the true answer
+  was about 300 lines across 27 files, so the agent used Grep instead. Both
+  lanes answered that question identically, and identically wrong (13 files
+  where the tree has 27). The build measured here was `dc713da`; the commit
+  after it added `byFile` - matching lines per file over every match, never
+  cut - and the "known file is a Read" steer, neither of which is measured
+  above.
+- Steering is by description only and mostly works: nothing restricts Grep,
+  and the agent still preferred `find` on lookups.
+
+**Caveats.** Sonnet 4.6 is the bench default, and tool-selection behaviour -
+which drives both the gains and the mis-selection cost - is model-dependent.
+Repeats are 3 on the shipped set and 2 on pinpoint; per-question deltas under
+about ±50% are noise, so read the totals (main's own pinpoint total varied by
+50% between this run and one two days earlier on the same commit). A first
+run was discarded because the working tree under test had moved two versions
+ahead of its index, so `find` returned line numbers right for the indexed tree
+and wrong for the live one: exact-looking, no signal. The MCP server's
+auto-sync exists for exactly that; the bench disables it to keep the index
+identical across runs, so it must pin the tree instead. Spend for the two
+lanes: about $14 of agent runs and $14 of judging.
 
 ## Indexing at scale
 
@@ -130,7 +247,8 @@ node bench/run-questions.mjs /path/to/repo          # default question set
 ```
 
 Question sets are `bench/questions/*.json` (`{cat, q}` arrays) - point it at
-your own repo and questions with no code changes. Wall-clock is only clean
+your own repo and questions with no code changes. `infino-pinpoint.json` is
+the eight-lookup set from the `find` comparison above. Wall-clock is only clean
 run sequentially (`CX_BENCH_CONCURRENCY=1`); tool-call count is the
 concurrency-independent latency proxy. Expect the aggregation multiple to
 grow with repo size, and the whole gap to grow on weaker models.

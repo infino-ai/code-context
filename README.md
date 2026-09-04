@@ -108,6 +108,13 @@ explore less efficiently, so the savings tend to be **larger** there. On
 pinpoint symbol lookup, where a single grep is already cheap, an index
 matches file tools rather than beating them.
 
+Adding `find` was measured the same way, against the three-tool build on the
+same repo, questions, model, and a blind judge: answer quality level (judge
+29 / 22 / 13 main / find / tie over 64 pairs, no out-of-bounds citation in
+128 answers), exact-lookup questions **-35% tokens, -17% dollars, -38% tool
+calls**, the shipped question set flat (-3% tokens, +1% dollars), and about a
+thousand tokens per turn of added prompt for the fourth tool.
+
 Full methodology and per-question tables are in
 [docs/benchmark.md](docs/benchmark.md), with the harness in
 [`bench/`](bench/) so you can run the same lanes on your own repo.
@@ -271,6 +278,7 @@ no restart, no per-repo config.
 |---|---|---|
 | `CX_INDEX_DIR` | `<repo>/.infino` | where the index lives |
 | `CX_SEARCH_K` | 10 | default number of hits `search` returns (also settable per call and via the CLI `-k` flag) |
+| `CX_FIND_LIMIT` | 100 | default number of matching lines `find` returns, hard cap 500 (also settable per call and via the CLI `--limit` flag); `total` and `byFile` are complete either way |
 | `CX_MAX_FILES` / `CX_MAX_FILE_BYTES` | 20000 / 1MB | indexing caps (files over the file cap are left out; `find`/`search`/`sql` then flag the index as partial so an absence isn't read as proof) |
 | `CX_ROOT` | current directory | default repo root for the MCP server / CLI when not run from the repo (each tool call can override it with a `path` argument) |
 | `CX_AUTO_INDEX` | on | `0` makes a query on an unindexed repo error instead of building the index inline on the first `find`/`search`/`sql` |
