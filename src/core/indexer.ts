@@ -116,29 +116,6 @@ const CONTENT_COLUMN = "content";
  * column with. */
 const VECTOR_METRIC = "cosine";
 
-/** The FTS analyzer a hosted load asks the platform for (`CX_FTS_ANALYZER`).
- * Unset means HOSTED_DEFAULT_ANALYZER (`ascii_lower`, the one that finds code
- * identifiers whole - see its comment), sent to the platform explicitly rather
- * than left to the platform's bare-column default. The table's analyzer is
- * fixed at create time and recorded in the manifest, so queries mirror the
- * right one.
- * Read by the hosted loader only: a local build cannot choose (the binding's
- * bare `IndexSpec.fts(column)` takes the engine default). This belongs with
- * the other environment names in config.ts; it lives here because the hosted
- * loader is its only reader. */
-export const FTS_ANALYZER_ENV = "CX_FTS_ANALYZER";
-
-/** The analyzer a hosted load creates the `content` index with, from the
- * environment. A misspelling is an error rather than a silent fall back: the
- * name is sent to the platform and recorded, and a wrong one would make the
- * client's indexable-token check disagree with the table forever. */
-export function hostedAnalyzer(): Analyzer {
-  const raw = process.env[FTS_ANALYZER_ENV];
-  if (raw === undefined || raw === "") return HOSTED_DEFAULT_ANALYZER;
-  if (!isAnalyzer(raw)) throw new Error(`${FTS_ANALYZER_ENV} must be "standard" or "ascii_lower", got "${raw}"`);
-  return raw;
-}
-
 export interface IndexOptions {
   root: string;
   /** The in-process engine connection (local mode). Exactly one of `db` /

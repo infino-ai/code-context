@@ -17,7 +17,7 @@ import * as arrow from "apache-arrow";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { APPEND_BATCH, TABLE } from "../src/core/config.js";
 import { HostedDb } from "../src/core/hosted.js";
-import { FTS_ANALYZER_ENV, hostedAnalyzer, indexRepo, indexRepoStaged, syncRepo, type IndexOptions, type SyncResult } from "../src/core/indexer.js";
+import { indexRepo, indexRepoStaged, syncRepo, type IndexOptions, type SyncResult } from "../src/core/indexer.js";
 import { readManifest, writeManifest, INDEX_FORMAT_VERSION, type Manifest } from "../src/core/manifest.js";
 import { readFileState } from "../src/core/filestate.js";
 import type { Embedder } from "../src/core/embedder.js";
@@ -188,40 +188,18 @@ const createBody = (call: Call) => call.json as { table_name: string; schema: Ro
 
 const sidecarFiles = (dir: string): string[] => (existsSync(dir) ? readdirSync(dir).sort() : []);
 
-// --- environment ------------------------------------------------------------------------
+// --- fixture directories -----------------------------------------------------------------
 
 let root: string;
 let dir: string;
-let savedAnalyzer: string | undefined;
 
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "cx-hosted-index-"));
   dir = join(root, ".infino");
-  savedAnalyzer = process.env[FTS_ANALYZER_ENV];
-  delete process.env[FTS_ANALYZER_ENV];
 });
 
 afterEach(() => {
   rmSync(root, { recursive: true, force: true });
-  if (savedAnalyzer === undefined) delete process.env[FTS_ANALYZER_ENV];
-  else process.env[FTS_ANALYZER_ENV] = savedAnalyzer;
-});
-
-// --- the analyzer knob -------------------------------------------------------------------
-
-describe("hostedAnalyzer", () => {
-  it("defaults to ascii_lower, the analyzer that finds code identifiers whole, and declares it", () => {
-    expect(hostedAnalyzer()).toBe("ascii_lower");
-  });
-
-  it("reads CX_FTS_ANALYZER and refuses a name the engine does not have", () => {
-    process.env[FTS_ANALYZER_ENV] = "ascii_lower";
-    expect(hostedAnalyzer()).toBe("ascii_lower");
-    process.env[FTS_ANALYZER_ENV] = "standard";
-    expect(hostedAnalyzer()).toBe("standard");
-    process.env[FTS_ANALYZER_ENV] = "icu";
-    expect(() => hostedAnalyzer()).toThrow(/CX_FTS_ANALYZER must be "standard" or "ascii_lower"/);
-  });
 });
 
 // --- the hosted load -----------------------------------------------------------------------

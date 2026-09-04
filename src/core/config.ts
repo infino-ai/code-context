@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: Copyright The Infino Authors
 //
-// Paths, environment, and tuning constants shared by the CLI and MCP server.
+// Paths, tuning constants, and the hosted settings shared by the CLI and MCP server.
 
+import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { parseHostedUrl, DEFAULT_TIMEOUT_MS, DEFAULT_COLD_START_SECS, type HostedTarget } from "./hosted.js";
+import { HOSTED_DEFAULT_ANALYZER, isAnalyzer, type Analyzer } from "./analyzer.js";
 
 /** Directory name of the on-disk index, created in the repo root. In hosted
  * mode the same directory is the local SIDECAR: the manifest, the file state,
@@ -15,48 +17,25 @@ export const INDEX_DIR_NAME = ".infino";
 // --- hosted mode -----------------------------------------------------------------
 //
 // A hosted target moves the chunks table from the in-process engine to an
-// Infino platform database reached over HTTPS. Everything below reads the
-// environment at call time (not at module load) so the CLI's `--db` flag, which
-// sets the same variable, is seen by every layer, and so tests can set and
-// clear the variables between cases.
+// Infino platform database reached over HTTPS. Its settings are command-line
+// flags: the CLI parses them once into a HostedSettings (hostedSettingsFromFlags)
+// and installs it with configureHosted(); every layer below reads that object
+// through the accessor functions. Nothing here reads the environment except
+// the API key, the one value that must never be an argument - argv is visible
+// to every process on the machine - so it comes from a file named by
+// --api-key-file, or from INFINO_API_KEY.
 
-/** The hosted engine target: `https://host/<database>`. Plain `http://` is
- * accepted for a loopback host only (see parseHostedUrl). Unset = local mode. */
-export const DB_URL_ENV = "CX_DB_URL";
-
-/** The bearer key for the hosted target. The engine's remote binding, the
- * ask harness and the platform all read this one name, so code-context does
- * too. It is only ever read into a HostedTarget - never logged or echoed. */
+/** The environment variable holding the bearer key when --api-key-file is not
+ * given. The engine's remote binding, the ask harness and the platform all
+ * read this one name, so code-context does too. It is only ever read into a
+ * HostedTarget - never logged or echoed. */
 export const API_KEY_ENV = "INFINO_API_KEY";
 
-/** Who embeds: `local` (the in-process model, the default) or `platform`
- * (the table's embedding column is filled and queried server-side, and no
- * model runs on this machine). */
-export const EMBED_PROVIDER_ENV = "CX_EMBED_PROVIDER";
-
-/** Per-call wall clock for one hosted request, in milliseconds. */
-export const DB_TIMEOUT_MS_ENV = "CX_DB_TIMEOUT_MS";
-
-/** How long retryable "not yet" answers (a cold database whose worker is
- * spawning) are re-issued before giving up, in seconds. */
-export const DB_COLD_START_SECS_ENV = "CX_DB_COLD_START_SECS";
-
-/** Whether the MCP server registers the hosted `retrieval_agent` tool. Off by
- * default: every tool in the list is prompt text on every turn. */
-export const RETRIEVAL_AGENT_ENV = "CX_RETRIEVAL_AGENT";
-
-/** Turn cap for one hosted `retrieval_agent` loop. */
-export const RETRIEVAL_AGENT_MAX_TURNS_ENV = "CX_RETRIEVAL_AGENT_MAX_TURNS";
-
-/** Wall-clock cap for one hosted `retrieval_agent` loop, in seconds. */
-export const RETRIEVAL_AGENT_MAX_WALL_SECS_ENV = "CX_RETRIEVAL_AGENT_MAX_WALL_SECS";
-
-/** Default per-request timeout when CX_DB_TIMEOUT_MS is unset: the client's
- * own default, so the two cannot drift apart (the rationale lives with it). */
+/** Default per-request timeout: the client's own default, so the two cannot
+ * drift apart (the rationale lives with it). */
 export const DEFAULT_DB_TIMEOUT_MS = DEFAULT_TIMEOUT_MS;
 
-/** Default cold-start budget when CX_DB_COLD_START_SECS is unset: likewise the
- * client's own default. */
+/** Default cold-start budget: likewise the client's own default. */
 export const DEFAULT_DB_COLD_START_SECS = DEFAULT_COLD_START_SECS;
 
 /** Default turn cap for `retrieval_agent`: enough for card lookup, a few SQL
@@ -69,37 +48,142 @@ export const DEFAULT_RETRIEVAL_AGENT_MAX_WALL_SECS = 120;
 /** Spellings that turn a boolean env flag off (`CX_AUTO_INDEX=0`, ...). */
 const OFF_VALUES = ["0", "false", "no"];
 
-/** Spellings that turn a default-off boolean env flag on (`CX_RETRIEVAL_AGENT=1`). */
-const ON_VALUES = ["1", "true", "yes"];
-
+/** Who embeds a hosted table: `platform` (the table's embedding field is filled
+ * and queried server-side; no model runs on this machine) or `local` (the
+ * in-process model, whose vectors are shipped). A hosted target defaults to
+ * `platform` - point at a database and the whole system works with nothing
+ * else set - and a local index can only be `local`. */
 export type EmbedProvider = "local" | "platform";
 
-/** The embedding provider from CX_EMBED_PROVIDER; a misspelling is an error
- * rather than a silent fall back to the local model. */
-export function embedProvider(): EmbedProvider {
-  const raw = (process.env[EMBED_PROVIDER_ENV] ?? "local").toLowerCase();
-  if (raw === "local" || raw === "platform") return raw;
-  throw new Error(`${EMBED_PROVIDER_ENV} must be "local" or "platform", got "${raw}"`);
+/** The default provider for a hosted target. */
+export const DEFAULT_HOSTED_EMBED_PROVIDER: EmbedProvider = "platform";
+
+export interface RetrievalAgentSettings {
+  /** Whether the MCP server registers the tool. Off unless asked: every tool
+   * in the list is prompt text on every turn. */
+  enabled: boolean;
+  /** Turn cap for one loop (the platform lowers a value above its own cap). */
+  maxTurns: number;
+  /** Wall clock for one loop, in seconds (likewise capped server-side). */
+  maxWallSecs: number;
 }
 
-/** Whether a hosted target is configured (CX_DB_URL set and non-empty). */
+/** Everything hosted mode is configured with, resolved and validated once. */
+export interface HostedSettings {
+  target: HostedTarget;
+  embedProvider: EmbedProvider;
+  /** Per-request wall clock, in milliseconds. */
+  timeoutMs: number;
+  /** How long retryable "not yet" answers (a cold database whose worker is
+   * spawning, an embedder starting) are re-issued before giving up, in seconds. */
+  coldStartSecs: number;
+  /** The FTS analyzer `cx index --db` creates the content index with. */
+  analyzer: Analyzer;
+  retrievalAgent: RetrievalAgentSettings;
+}
+
+/** The hosted flags as commander parses them: camelCase of `--db`,
+ * `--api-key-file`, `--embed-provider`, `--db-timeout-ms`, `--cold-start-secs`,
+ * `--analyzer`, `--retrieval-agent`, `--agent-max-turns`, `--agent-max-wall-secs`.
+ * Every value is the raw string (or the bare boolean); validation is here, in
+ * one place, so a bad value is an error at startup and not on the first call. */
+export interface HostedFlags {
+  db?: string;
+  apiKeyFile?: string;
+  embedProvider?: string;
+  dbTimeoutMs?: string;
+  coldStartSecs?: string;
+  analyzer?: string;
+  retrievalAgent?: boolean;
+  agentMaxTurns?: string;
+  agentMaxWallSecs?: string;
+}
+
+/** The flags that mean nothing without --db, by their command-line spelling. */
+const HOSTED_ONLY_FLAGS: Array<[keyof HostedFlags, string]> = [
+  ["apiKeyFile", "--api-key-file"],
+  ["embedProvider", "--embed-provider"],
+  ["dbTimeoutMs", "--db-timeout-ms"],
+  ["coldStartSecs", "--cold-start-secs"],
+  ["analyzer", "--analyzer"],
+  ["retrievalAgent", "--retrieval-agent"],
+  ["agentMaxTurns", "--agent-max-turns"],
+  ["agentMaxWallSecs", "--agent-max-wall-secs"],
+];
+
+/** A positive-integer flag value, or its default when the flag was not given.
+ * A value that is not a positive integer is an error - a NaN timeout would
+ * disable the timeout. */
+function positiveIntFlag(flag: string, raw: string | undefined, fallback: number): number {
+  if (raw === undefined || raw === "") return fallback;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n <= 0) throw new Error(`${flag} must be a positive integer, got "${raw}"`);
+  return n;
+}
+
+/** Resolve the hosted settings from the command line, or null when --db was
+ * not given (local mode). Reads the key from --api-key-file, else from
+ * INFINO_API_KEY in `env`; a hosted target with neither is refused here rather
+ * than failing on the first request. Any other hosted flag without --db is a
+ * usage error rather than a silently ignored option. */
+export function hostedSettingsFromFlags(flags: HostedFlags, env: NodeJS.ProcessEnv = process.env): HostedSettings | null {
+  if (flags.db === undefined || flags.db === "") {
+    const stray = HOSTED_ONLY_FLAGS.find(([key]) => flags[key] !== undefined && flags[key] !== false);
+    if (stray) throw new Error(`${stray[1]} needs --db <url>: it configures the hosted database`);
+    return null;
+  }
+  const { baseUrl, database } = parseHostedUrl(flags.db);
+  const apiKey = flags.apiKeyFile !== undefined ? readFileSync(flags.apiKeyFile, "utf8").trim() : (env[API_KEY_ENV] ?? "");
+  if (apiKey.length === 0) {
+    throw new Error(`--db needs a key: pass --api-key-file <path> or set ${API_KEY_ENV} - the hosted engine is bearer-only`);
+  }
+  const providerRaw = (flags.embedProvider ?? DEFAULT_HOSTED_EMBED_PROVIDER).toLowerCase();
+  if (providerRaw !== "local" && providerRaw !== "platform") {
+    throw new Error(`--embed-provider must be "platform" or "local", got "${flags.embedProvider}"`);
+  }
+  const analyzer = flags.analyzer ?? HOSTED_DEFAULT_ANALYZER;
+  if (!isAnalyzer(analyzer)) throw new Error(`--analyzer must be "ascii_lower" or "standard", got "${flags.analyzer}"`);
+  return {
+    target: { baseUrl, database, apiKey },
+    embedProvider: providerRaw,
+    timeoutMs: positiveIntFlag("--db-timeout-ms", flags.dbTimeoutMs, DEFAULT_DB_TIMEOUT_MS),
+    coldStartSecs: positiveIntFlag("--cold-start-secs", flags.coldStartSecs, DEFAULT_DB_COLD_START_SECS),
+    analyzer,
+    retrievalAgent: {
+      enabled: flags.retrievalAgent === true,
+      maxTurns: positiveIntFlag("--agent-max-turns", flags.agentMaxTurns, DEFAULT_RETRIEVAL_AGENT_MAX_TURNS),
+      maxWallSecs: positiveIntFlag("--agent-max-wall-secs", flags.agentMaxWallSecs, DEFAULT_RETRIEVAL_AGENT_MAX_WALL_SECS),
+    },
+  };
+}
+
+/** The process-wide hosted settings: installed once by the CLI at startup
+ * (null = local mode), read by every layer through the accessors below. */
+let hosted: HostedSettings | null = null;
+
+export function configureHosted(settings: HostedSettings | null): void {
+  hosted = settings;
+}
+
+export function hostedSettings(): HostedSettings | null {
+  return hosted;
+}
+
+/** Whether a hosted target is configured. */
 export function isHosted(): boolean {
-  return (process.env[DB_URL_ENV] ?? "").length > 0;
+  return hosted !== null;
 }
 
-/** The hosted target from CX_DB_URL + INFINO_API_KEY, or null in local mode.
- * Throws on a malformed URL or a missing key: both would otherwise surface as
- * an opaque failure on the first request. The key travels only inside the
+/** The hosted target, or null in local mode. The key travels only inside the
  * returned object; callers log `hostedLabel(target)`, never the target. */
 export function hostedTarget(): HostedTarget | null {
-  const url = process.env[DB_URL_ENV];
-  if (!url) return null;
-  const { baseUrl, database } = parseHostedUrl(url);
-  const apiKey = process.env[API_KEY_ENV] ?? "";
-  if (apiKey.length === 0) {
-    throw new Error(`${DB_URL_ENV} is set but ${API_KEY_ENV} is not - the hosted engine is bearer-only`);
-  }
-  return { baseUrl, database, apiKey };
+  return hosted?.target ?? null;
+}
+
+/** The embedding provider: the hosted setting, or `local` for a local index
+ * (the in-process engine has no server-side model). */
+export function embedProvider(): EmbedProvider {
+  return hosted?.embedProvider ?? "local";
 }
 
 /** The loggable name of a hosted target: `https://host/<database>`, no key. */
@@ -107,37 +191,32 @@ export function hostedLabel(target: { baseUrl: string; database: string }): stri
   return `${target.baseUrl.replace(/\/+$/, "")}/${target.database}`;
 }
 
-/** A positive-integer env var, or its default when unset. A value that is not
- * a positive integer is an error - a NaN timeout would disable the timeout. */
-function positiveIntEnv(name: string, fallback: number): number {
-  const raw = process.env[name];
-  if (raw === undefined || raw === "") return fallback;
-  const n = Number(raw);
-  if (!Number.isInteger(n) || n <= 0) throw new Error(`${name} must be a positive integer, got "${raw}"`);
-  return n;
-}
-
-/** The hosted client's tuning from the environment (CX_DB_TIMEOUT_MS,
- * CX_DB_COLD_START_SECS), in the shape HostedOptions takes. */
+/** The hosted client's tuning, in the shape HostedOptions takes. */
 export function hostedClientOptions(): { timeoutMs: number; coldStartSecs: number } {
   return {
-    timeoutMs: positiveIntEnv(DB_TIMEOUT_MS_ENV, DEFAULT_DB_TIMEOUT_MS),
-    coldStartSecs: positiveIntEnv(DB_COLD_START_SECS_ENV, DEFAULT_DB_COLD_START_SECS),
+    timeoutMs: hosted?.timeoutMs ?? DEFAULT_DB_TIMEOUT_MS,
+    coldStartSecs: hosted?.coldStartSecs ?? DEFAULT_DB_COLD_START_SECS,
   };
 }
 
-/** Whether the hosted `retrieval_agent` tool is registered (CX_RETRIEVAL_AGENT,
- * default off). */
+/** The analyzer a hosted load creates the `content` index with: the --analyzer
+ * flag, else HOSTED_DEFAULT_ANALYZER. Sent to the platform explicitly and
+ * recorded in the manifest, so queries mirror the right one. */
+export function hostedAnalyzer(): Analyzer {
+  return hosted?.analyzer ?? HOSTED_DEFAULT_ANALYZER;
+}
+
+/** Whether the hosted `retrieval_agent` tool is registered (--retrieval-agent). */
 export function retrievalAgentEnabled(): boolean {
-  return ON_VALUES.includes((process.env[RETRIEVAL_AGENT_ENV] ?? "").toLowerCase());
+  return hosted?.retrievalAgent.enabled ?? false;
 }
 
 export function retrievalAgentMaxTurns(): number {
-  return positiveIntEnv(RETRIEVAL_AGENT_MAX_TURNS_ENV, DEFAULT_RETRIEVAL_AGENT_MAX_TURNS);
+  return hosted?.retrievalAgent.maxTurns ?? DEFAULT_RETRIEVAL_AGENT_MAX_TURNS;
 }
 
 export function retrievalAgentMaxWallSecs(): number {
-  return positiveIntEnv(RETRIEVAL_AGENT_MAX_WALL_SECS_ENV, DEFAULT_RETRIEVAL_AGENT_MAX_WALL_SECS);
+  return hosted?.retrievalAgent.maxWallSecs ?? DEFAULT_RETRIEVAL_AGENT_MAX_WALL_SECS;
 }
 
 /** Whether a first query on an unindexed repo builds the index (CX_AUTO_INDEX,

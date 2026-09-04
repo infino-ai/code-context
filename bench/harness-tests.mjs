@@ -16,6 +16,7 @@ import {
   laneOptions,
   checkLaneEnv,
   dbHost,
+  hostedFlags,
   foldToolMessage,
   newToolAccounting,
   toolResultText,
@@ -27,12 +28,15 @@ import { indexArgs, runIndexBuild, hostOf } from "./load-hosted.mjs";
 
 const FAKE_URL = "https://api.example.test/bench-db";
 const FAKE_KEY = "inf_secret_value_that_must_not_leak";
+const FAKE_KEY_FILE = "/keys/bench.key";
 
-/** Run fn with the hosted env set, restoring whatever was there before. */
+/** Run fn with the harness's hosted env set (and the server's own key
+ * variable unset, so a developer's key cannot make a lane look configured),
+ * restoring whatever was there before. */
 function withHostedEnv(fn, extra = {}) {
   const saved = {};
-  const set = { CX_DB_URL: FAKE_URL, INFINO_API_KEY: FAKE_KEY, ...extra };
-  for (const k of [...Object.keys(set), "CX_EMBED_PROVIDER"]) saved[k] = process.env[k];
+  const set = { CX_BENCH_DB_URL: FAKE_URL, CX_BENCH_KEY_FILE: FAKE_KEY_FILE, INFINO_API_KEY: undefined, ...extra };
+  for (const k of [...Object.keys(set), "CX_BENCH_EMBED_PROVIDER"]) saved[k] = process.env[k];
   for (const [k, v] of Object.entries(set)) {
     if (v === undefined) delete process.env[k];
     else process.env[k] = v;
@@ -68,52 +72,52 @@ test("files has the stock tools and no server; cx has Read only", () => {
   assert.equal(cx.mcpServers["code-context"].alwaysLoad, true);
 });
 
-test("combo and hosted share the built-in tools; hosted adds the platform env", () => {
+test("combo and hosted share the built-in tools; hosted configures the server by flags, never env", () => {
   withHostedEnv(() => {
     const combo = laneOptions("combo", "/r", "/r/.infino");
     const hosted = laneOptions("hosted", "/r", "/r/.infino");
     assert.deepEqual(hosted.tools, combo.tools);
-    const env = hosted.mcpServers["code-context"].env;
-    assert.equal(env.CX_DB_URL, FAKE_URL);
-    assert.equal(env.INFINO_API_KEY, FAKE_KEY);
-    assert.equal(env.CX_AUTO_INDEX, "0");
-    assert.equal(env.CX_AUTO_SYNC, "0");
-    assert.equal(env.CX_EMBED_PROVIDER, "local");
-    assert.equal(env.CX_RETRIEVAL_AGENT, undefined);
-    assert.equal(combo.mcpServers["code-context"].env.CX_AUTO_INDEX, undefined);
-  }, { CX_EMBED_PROVIDER: undefined });
+    const server = hosted.mcpServers["code-context"];
+    assert.deepEqual(server.args.slice(1), ["mcp", "--db", FAKE_URL, "--api-key-file", FAKE_KEY_FILE, "--embed-provider", "platform"]);
+    assert.equal(server.env.CX_AUTO_SYNC, "0");
+    assert.equal(server.env.CX_ROOT, "/r");
+    // nothing hosted reaches the server through its environment - not the
+    // URL, not the key, not a provider
+    assert.equal(server.env.CX_DB_URL, undefined);
+    assert.equal(server.env.INFINO_API_KEY, undefined);
+    assert.equal(server.env.CX_EMBED_PROVIDER, undefined);
+    assert.deepEqual(combo.mcpServers["code-context"].args.slice(1), ["mcp"]);
+  }, { CX_BENCH_EMBED_PROVIDER: undefined });
 });
 
-test("CX_EMBED_PROVIDER passes through when set; hosted-agent adds CX_RETRIEVAL_AGENT", () => {
+test("CX_BENCH_EMBED_PROVIDER passes through as --embed-provider; hosted-agent adds --retrieval-agent", () => {
   withHostedEnv(() => {
-    const env = laneOptions("hosted-agent", "/r", "/r/.infino").mcpServers["code-context"].env;
-    assert.equal(env.CX_EMBED_PROVIDER, "openai");
-    assert.equal(env.CX_RETRIEVAL_AGENT, "1");
-    assert.equal(env.CX_DB_URL, FAKE_URL);
-  }, { CX_EMBED_PROVIDER: "openai" });
+    const args = laneOptions("hosted-agent", "/r", "/r/.infino").mcpServers["code-context"].args;
+    assert.deepEqual(args.slice(1), ["mcp", "--db", FAKE_URL, "--api-key-file", FAKE_KEY_FILE, "--embed-provider", "local", "--retrieval-agent"]);
+  }, { CX_BENCH_EMBED_PROVIDER: "local" });
 });
 
-test("a hosted lane without its env fails fast, naming the variables and never the key", () => {
-  assert.throws(() => checkLaneEnv("hosted", {}), /needs CX_DB_URL and INFINO_API_KEY/);
-  assert.throws(() => checkLaneEnv("hosted-agent", { CX_DB_URL: FAKE_URL }), /needs INFINO_API_KEY .*it is not set/);
-  try {
-    checkLaneEnv("hosted", { CX_DB_URL: FAKE_URL });
-    assert.fail("should have thrown");
-  } catch (err) {
-    assert.equal(err.message.includes(FAKE_KEY), false);
-  }
-  assert.doesNotThrow(() => checkLaneEnv("hosted", { CX_DB_URL: FAKE_URL, INFINO_API_KEY: FAKE_KEY }));
+test("hostedFlags is the one place the server's hosted command line is built", () => {
+  const env = { CX_BENCH_DB_URL: FAKE_URL, CX_BENCH_KEY_FILE: FAKE_KEY_FILE };
+  assert.deepEqual(hostedFlags(env), ["--db", FAKE_URL, "--api-key-file", FAKE_KEY_FILE, "--embed-provider", "platform"]);
+  assert.deepEqual(hostedFlags({ ...env, CX_BENCH_EMBED_PROVIDER: "local" }).slice(-2), ["--embed-provider", "local"]);
+});
+
+test("a hosted lane without its env fails fast, naming the variables", () => {
+  assert.throws(() => checkLaneEnv("hosted", {}), /needs CX_BENCH_DB_URL and CX_BENCH_KEY_FILE/);
+  assert.throws(() => checkLaneEnv("hosted-agent", { CX_BENCH_DB_URL: FAKE_URL }), /needs CX_BENCH_KEY_FILE .*it is not set/);
+  assert.doesNotThrow(() => checkLaneEnv("hosted", { CX_BENCH_DB_URL: FAKE_URL, CX_BENCH_KEY_FILE: FAKE_KEY_FILE }));
   assert.doesNotThrow(() => checkLaneEnv("files", {}));
-  withHostedEnv(() => assert.throws(() => laneOptions("hosted", "/r", "/r/.infino"), /INFINO_API_KEY/), { INFINO_API_KEY: undefined });
+  withHostedEnv(() => assert.throws(() => laneOptions("hosted", "/r", "/r/.infino"), /CX_BENCH_KEY_FILE/), { CX_BENCH_KEY_FILE: undefined });
 });
 
 test("dbHost is the host only, and null for local lanes", () => {
-  const env = { CX_DB_URL: FAKE_URL, INFINO_API_KEY: FAKE_KEY };
+  const env = { CX_BENCH_DB_URL: FAKE_URL, CX_BENCH_KEY_FILE: FAKE_KEY_FILE };
   assert.equal(dbHost("hosted", env), "api.example.test");
   assert.equal(dbHost("hosted-agent", env), "api.example.test");
   assert.equal(dbHost("combo", env), null);
   assert.equal(dbHost("hosted", {}), null);
-  assert.equal(dbHost("hosted", { CX_DB_URL: "not a url" }), null);
+  assert.equal(dbHost("hosted", { CX_BENCH_DB_URL: "not a url" }), null);
 });
 
 // --- tool-result parsing ----------------------------------------------------
@@ -281,25 +285,28 @@ test("warmHosted surfaces a non-retryable error's message without the key", asyn
 
 // --- load-hosted --------------------------------------------------------------
 
-test("indexArgs adds --db only on the hosted side and always asks for --json", () => {
-  assert.deepEqual(indexArgs({ cli: "/x/cli.js", repo: "/r", side: "hosted", dbUrl: FAKE_URL }), ["/x/cli.js", "index", "--json", "--db", FAKE_URL, "/r"]);
+test("indexArgs carries the lane's hosted flags on the hosted side only and always asks for --json", () => {
+  const flags = hostedFlags({ CX_BENCH_DB_URL: FAKE_URL, CX_BENCH_KEY_FILE: FAKE_KEY_FILE });
+  assert.deepEqual(indexArgs({ cli: "/x/cli.js", repo: "/r", side: "hosted", flags }), ["/x/cli.js", "index", "--json", ...flags, "/r"]);
+  assert.deepEqual(indexArgs({ cli: "/x/cli.js", repo: "/r", side: "local", flags }), ["/x/cli.js", "index", "--json", "/r"]);
   assert.deepEqual(indexArgs({ cli: "/x/cli.js", repo: "/r", side: "local" }), ["/x/cli.js", "index", "--json", "/r"]);
 });
 
 test("runIndexBuild times the CLI and keeps its --json stats", () => {
   let clock = 0;
   const stats = { files: 10, chunks: 40, vectors: "ready", indexMs: 1200, embedMs: 800 };
+  const flags = ["--db", FAKE_URL, "--api-key-file", FAKE_KEY_FILE];
   const r = runIndexBuild({
     cli: "/x/cli.js",
     repo: "/r",
     side: "hosted",
-    dbUrl: FAKE_URL,
-    env: { INFINO_API_KEY: FAKE_KEY },
+    flags,
+    env: { PATH: "/bin" },
     now: () => (clock += 2500),
     spawn: (cmd, args, opts) => {
       assert.equal(cmd, "node");
-      assert.deepEqual(args, ["/x/cli.js", "index", "--json", "--db", FAKE_URL, "/r"]);
-      assert.equal(opts.env.INFINO_API_KEY, FAKE_KEY);
+      assert.deepEqual(args, ["/x/cli.js", "index", "--json", ...flags, "/r"]);
+      assert.deepEqual(opts.env, { PATH: "/bin" }); // the key is a file path in argv, not an env value
       return { status: 0, stdout: `progress line\n${JSON.stringify(stats, null, 2)}\n`, stderr: "" };
     },
   });
@@ -314,7 +321,7 @@ test("runIndexBuild records a CLI that does not know --db as a failure, verbatim
     cli: "/x/cli.js",
     repo: "/r",
     side: "hosted",
-    dbUrl: FAKE_URL,
+    flags: ["--db", FAKE_URL],
     spawn: () => ({ status: 1, stdout: "", stderr: "error: unknown option '--db'\n" }),
   });
   assert.equal(r.exitCode, 1);

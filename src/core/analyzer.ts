@@ -29,8 +29,8 @@ export const ENGINE_DEFAULT_ANALYZER: Analyzer = "ascii_lower";
  * bare column gets. */
 export const PLATFORM_DEFAULT_ANALYZER: Analyzer = "standard";
 
-/** The analyzer `cx index --db` asks the platform for when CX_FTS_ANALYZER is
- * unset. Code is not prose: `standard` follows UAX #29, whose word rules keep
+/** The analyzer `cx index --db` asks the platform for when --analyzer is not
+ * given. Code is not prose: `standard` follows UAX #29, whose word rules keep
  * `self.reconcile_tombstone_seqs` and `inner.reconcile_tombstone_seqs` as one
  * token each, so a find for the identifier alone missed four of its five
  * occurrences in the pinned infino clone (1/1 against the local index's 5/2;

@@ -7,17 +7,17 @@
 // staged story prints as it happens: keyword search goes live first,
 // vectors follow.
 //
-// With --db <url> (or CX_DB_URL) the chunks table is loaded into a platform
-// database instead: the same walk and sidecar, one pass over the network, and
+// With --db <url> the chunks table is loaded into a platform database
+// instead: the same walk and sidecar, one pass over the network, and
 // the platform-side cost (append calls, write tokens) in the printed and JSON
 // stats. This command is the only path that ever drops and reloads a hosted
 // table - see the indexer's hosted loader.
 
 import { watch } from "node:fs";
 import { openForIndexingAsync } from "../core/context.js";
-import { hostedAnalyzer, indexRepoStaged, syncRepo, type IndexOptions, type IndexStats, type SyncResult } from "../core/indexer.js";
+import { indexRepoStaged, syncRepo, type IndexOptions, type IndexStats, type SyncResult } from "../core/indexer.js";
 import { createEmbedder, createIndexingEmbedder, embedderInfo } from "../core/embedder.js";
-import { DEFAULT_CAPS, INDEX_DIR_NAME, embedProvider } from "../core/config.js";
+import { DEFAULT_CAPS, INDEX_DIR_NAME, embedProvider, hostedAnalyzer } from "../core/config.js";
 import { bold, dim, green, yellow, fmtMs, fmtCount, progressLine, progressDone } from "../core/output.js";
 
 export interface IndexCmdOptions {
@@ -47,7 +47,7 @@ const LANGUAGES_SHOWN = 8;
 export async function indexCmd(path: string | undefined, opts: IndexCmdOptions): Promise<void> {
   const target = await openForIndexingAsync(path);
   const { root, dir, db, hosted } = target;
-  // Null under CX_EMBED_PROVIDER=platform (the platform embeds); undefined
+  // Null under --embed-provider platform (the platform embeds); undefined
   // with --no-embed (no vectors at all). The indexer's `embedProvider` tells
   // those two apart for a hosted load, so it is only set when vectors are on.
   const embedder = opts.embed === false ? undefined : createEmbedder();

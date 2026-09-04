@@ -4,7 +4,7 @@
 // `cx find` / `cx search` / `cx sql` / `cx status` / `cx usage` - the query commands.
 //
 // Every query command opens the index in either mode (openIndexAsync): the
-// local catalog, or the hosted chunks table when CX_DB_URL is set. The printed
+// local catalog, or the hosted chunks table when --db is given. The printed
 // results are the same; in hosted mode the usage ledger additionally records
 // what the platform call behind each query cost.
 

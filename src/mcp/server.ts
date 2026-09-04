@@ -75,13 +75,13 @@ import { ensureIndexed, type EnsureResult } from "./ensure.js";
 export async function serveMcp(rootPath?: string): Promise<void> {
   const defaultRoot = resolveRoot(rootPath);
 
-  // Hosted mode (CX_DB_URL / --db): the default root's chunks table lives on a
+  // Hosted mode (--db <url>): the default root's chunks table lives on a
   // platform database. Resolved once here - a bad URL or a missing key fails
   // the server at startup, not on the first tool call. The key stays inside
   // the target; only `hostedLabel` ever reaches a log line.
   const hosted = hostedTarget();
 
-  // Null when the platform embeds server-side (CX_EMBED_PROVIDER=platform):
+  // Null when the platform embeds server-side (--embed-provider platform):
   // the query paths then run without a client-side vector.
   let embedder: Embedder | null = null;
   const getEmbedder = (): Embedder | null => (embedder ??= createEmbedder());
@@ -228,7 +228,7 @@ export async function serveMcp(rootPath?: string): Promise<void> {
       (stats.vectors === "building" ? " and vectors are backfilling in the background" : ""),
   });
 
-  // The hosted `retrieval_agent` tool (CX_RETRIEVAL_AGENT, default off). Its
+  // The hosted `retrieval_agent` tool (--retrieval-agent, default off). Its
   // routing line joins the instructions only when the tool is registered: the
   // instructions are prompt text on every turn, and a line for a tool that is
   // not there would cost tokens and steer toward nothing.
@@ -497,7 +497,7 @@ export async function serveMcp(rootPath?: string): Promise<void> {
         }
         // Only the hosted default root has a retrieval agent behind it; a
         // local repo (any `path` other than the default root) does not.
-        if (!ctx.hosted) return fail("retrieval_agent needs a hosted index: set CX_DB_URL");
+        if (!ctx.hosted) return fail("retrieval_agent needs a hosted index: serve with --db");
         // The same readiness check the other tools make: without a chunks
         // table the platform would spend the whole cold-start budget on
         // "no table described yet" before saying anything useful.

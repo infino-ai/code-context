@@ -140,7 +140,7 @@ const PROJECTION = ["path", "start_line", "end_line", "lang", "symbol", "content
 /** The vector leg of a search, or null for a keyword-only pass: the query
  * text itself for a platform-embedded table (the platform embeds it with the
  * column's model), the locally embedded vector when an embedder is at hand,
- * and nothing when there is no client-side embedder (CX_EMBED_PROVIDER=
+ * and nothing when there is no client-side embedder (--embed-provider
  * platform against a client-vector table) - no vector to fuse means the
  * search stays keyword-ranked. */
 async function vectorLeg(manifest: Manifest, embedder: Embedder | null, query: string): Promise<number[] | { text: string } | null> {
@@ -439,7 +439,7 @@ export async function applyEmbeds(
   if (!embeds) throw noEmbedMap(referenced);
   if (!embedder) {
     throw new Error(
-      `query has placeholder(s) {{${referenced.join("}}, {{")}}} but no client-side embedder is configured (CX_EMBED_PROVIDER=platform)`,
+      `query has placeholder(s) {{${referenced.join("}}, {{")}}} but no client-side embedder is configured (--embed-providerplatform)`,
     );
   }
   const literals = new Map<string, string>();

@@ -15,8 +15,8 @@
 //   repoPath      the indexed repo (or $CX_BENCH_REPO); `cx index <repo>` first
 //   lanes         "files,combo" (default) - comma-separated lane names from the
 //                 table in lanes.mjs (files|cx|combo|hosted|hosted-agent); the
-//                 hosted lanes need CX_DB_URL and INFINO_API_KEY set and the
-//                 repo loaded into that database first (load-hosted.mjs)
+//                 hosted lanes need CX_BENCH_DB_URL and CX_BENCH_KEY_FILE set
+//                 and the repo loaded into that database first (load-hosted.mjs)
 //   questionsFile path to a questions JSON (default questions/infino.json)
 // Model is set in lanes.mjs (BENCH_MODEL, default claude-sonnet-4-6).
 import { readFileSync } from "node:fs";
@@ -28,7 +28,7 @@ const repoPath = repoArg ?? process.env.CX_BENCH_REPO;
 if (!repoPath) {
   console.error("usage: node run-questions.mjs [repoPath] [lanes=files,combo] [questionsFile]");
   console.error("  index the repo first: cx index <repoPath>   (or set CX_BENCH_REPO)");
-  console.error(`  lanes: ${Object.keys(LANES).join("|")}; hosted lanes need CX_DB_URL + INFINO_API_KEY`);
+  console.error(`  lanes: ${Object.keys(LANES).join("|")}; hosted lanes need CX_BENCH_DB_URL + CX_BENCH_KEY_FILE`);
   console.error("  questionsFile defaults to questions/infino.json; see bench/questions/");
   process.exit(1);
 }

@@ -9,10 +9,12 @@
 // honouring Retry-After, and prints the round trip of that first good answer
 // and whether a cold start was seen, so a report can say which it measured.
 //
-// Usage: CX_DB_URL=https://host/<database> INFINO_API_KEY=... node warm-hosted.mjs
+// Usage: CX_BENCH_DB_URL=https://host/<database> CX_BENCH_KEY_FILE=<path> node warm-hosted.mjs
 // Exits non-zero when the database is not live within the cap (WARM_CAP_MS).
+import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { BENCH_DB_URL, BENCH_KEY_FILE } from "./lanes.mjs";
 
 /** How long to keep retrying before giving up: two minutes covers a worker
  * spawn many times over; a 529 (Retry-After: 600) will not clear inside it
@@ -34,7 +36,7 @@ const MS_PER_SEC = 1000;
 export function splitDbUrl(url) {
   const u = new URL(url);
   const db = u.pathname.replace(/^\/+|\/+$/g, "");
-  if (!db || db.includes("/")) throw new Error(`CX_DB_URL must be https://host/<database>, got a path of "${u.pathname}"`);
+  if (!db || db.includes("/")) throw new Error(`the database URL must be https://host/<database>, got a path of "${u.pathname}"`);
   return { base: u.origin, db };
 }
 
@@ -104,13 +106,15 @@ export async function warmHosted({
 }
 
 async function main() {
-  const { CX_DB_URL, INFINO_API_KEY } = process.env;
-  if (!CX_DB_URL || !INFINO_API_KEY) {
-    console.error("warm-hosted needs CX_DB_URL (https://host/<database>) and INFINO_API_KEY in the environment");
+  const url = process.env[BENCH_DB_URL];
+  const keyFile = process.env[BENCH_KEY_FILE];
+  if (!url || !keyFile) {
+    console.error(`warm-hosted needs ${BENCH_DB_URL} (https://host/<database>) and ${BENCH_KEY_FILE} (the file holding the key) in the environment`);
     process.exit(1);
   }
-  const { base, db } = splitDbUrl(CX_DB_URL);
-  const r = await warmHosted({ base, db, key: INFINO_API_KEY });
+  const { base, db } = splitDbUrl(url);
+  // The key is read for the one request loop and never printed.
+  const r = await warmHosted({ base, db, key: readFileSync(keyFile, "utf8").trim() });
   console.log(
     `${new URL(base).host}/${db}: live - rtt ${r.rttMs}ms, ${r.coldStart ? `cold start seen (${r.statuses.join(",")}, ${r.totalMs}ms to live)` : "warm (200 first try)"}` +
       `, ${Array.isArray(r.tables) ? r.tables.length : "?"} tables${r.readTokens === null ? "" : `, read tokens ${r.readTokens}`}`,

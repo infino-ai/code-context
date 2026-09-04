@@ -10,15 +10,15 @@
 //
 // Usage: node load-hosted.mjs [repoPath] [side=hosted]
 //   repoPath  the repo to index (or $CX_BENCH_REPO)
-//   side      hosted (default; needs CX_DB_URL + INFINO_API_KEY) or local
+//   side      hosted (default; needs CX_BENCH_DB_URL + CX_BENCH_KEY_FILE) or local
 // Appends to bench/.work/results/index-build.jsonl:
 //   { side, repo, dbHost, cli, build, wallMs, exitCode, error, ts, ...<cx index --json> }
-// dbHost is the host of CX_DB_URL only; the key is passed to the child by
-// environment and never written anywhere.
+// dbHost is the host of CX_BENCH_DB_URL only; the key reaches the child as
+// the path of the file holding it (--api-key-file) and is never read here.
 import { spawnSync } from "node:child_process";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { CX, BUILD, record } from "./lanes.mjs";
+import { CX, BUILD, BENCH_DB_URL, BENCH_KEY_FILE, hostedFlags, record } from "./lanes.mjs";
 
 export const INDEX_BUILD_FILE = "index-build.jsonl";
 /** How much of the CLI's stderr to keep on a failed record - enough for the
@@ -31,12 +31,13 @@ const BUILD_TIMEOUT_MS = 60 * 60 * 1000;
  * spawnSync kills the child when its output exceeds this. */
 const OUTPUT_BUFFER_BYTES = 64 * 1024 * 1024;
 
-/** The command a side runs. The `--db` flag is the hosted-mode entry the CLI
- * grows for this: `cx index --db https://host/<database> <repo>` indexes the
- * repo into that platform database instead of .infino/. */
-export function indexArgs({ cli, repo, side, dbUrl }) {
+/** The command a side runs. The hosted side carries the same flags the lane's
+ * MCP server gets (hostedFlags: --db, --api-key-file, --embed-provider), so
+ * `cx index` loads the table into the database the lane will query, embedded
+ * the way the lane expects. */
+export function indexArgs({ cli, repo, side, flags = [] }) {
   const args = [cli, "index", "--json"];
-  if (side === "hosted") args.push("--db", dbUrl);
+  if (side === "hosted") args.push(...flags);
   args.push(repo);
   return args;
 }
@@ -47,8 +48,8 @@ export function indexArgs({ cli, repo, side, dbUrl }) {
  * a CLI that does not know `--db` yet fails here with commander's
  * "unknown option" message, which the record keeps verbatim rather than
  * pretending a hosted build happened. */
-export function runIndexBuild({ cli, repo, side, dbUrl, env = process.env, spawn = spawnSync, now = () => performance.now() }) {
-  const args = indexArgs({ cli, repo, side, dbUrl });
+export function runIndexBuild({ cli, repo, side, flags, env = process.env, spawn = spawnSync, now = () => performance.now() }) {
+  const args = indexArgs({ cli, repo, side, flags });
   const t0 = now();
   const res = spawn("node", args, { encoding: "utf8", env, timeout: BUILD_TIMEOUT_MS, maxBuffer: OUTPUT_BUFFER_BYTES });
   const wallMs = Math.round(now() - t0);
@@ -86,20 +87,21 @@ async function main() {
     console.error("usage: node load-hosted.mjs [repoPath] [side=hosted|local]   (or set CX_BENCH_REPO)");
     process.exit(1);
   }
-  const { CX_DB_URL, INFINO_API_KEY } = process.env;
-  if (sideArg === "hosted" && (!CX_DB_URL || !INFINO_API_KEY)) {
-    console.error("the hosted side needs CX_DB_URL (https://host/<database>) and INFINO_API_KEY in the environment");
+  const dbUrl = process.env[BENCH_DB_URL];
+  if (sideArg === "hosted" && (!dbUrl || !process.env[BENCH_KEY_FILE])) {
+    console.error(`the hosted side needs ${BENCH_DB_URL} (https://host/<database>) and ${BENCH_KEY_FILE} (the file holding the key) in the environment`);
     process.exit(1);
   }
   const repo = resolve(repoPath);
-  const cmd = indexArgs({ cli: CX, repo, side: sideArg, dbUrl: CX_DB_URL });
+  const flags = sideArg === "hosted" ? hostedFlags() : [];
+  const cmd = indexArgs({ cli: CX, repo, side: sideArg, flags });
   console.log(`node ${cmd.join(" ")}`);
-  const r = runIndexBuild({ cli: CX, repo, side: sideArg, dbUrl: CX_DB_URL });
+  const r = runIndexBuild({ cli: CX, repo, side: sideArg, flags });
   const row = {
     ...(r.stats ?? {}),
     side: sideArg,
     repo,
-    dbHost: sideArg === "hosted" ? hostOf(CX_DB_URL) : null,
+    dbHost: sideArg === "hosted" ? hostOf(dbUrl) : null,
     cli: CX,
     build: BUILD,
     wallMs: r.wallMs,

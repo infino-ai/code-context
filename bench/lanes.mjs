@@ -28,26 +28,45 @@ const STOCK_TOOLS = ["Glob", "Grep", "Read", "LS", "Bash"];
 const CX_TOOL_PREFIX = "mcp__code-context__";
 const CX_SHORT_PREFIX = "cx:";
 /** The embedding provider a hosted lane's server uses when the caller does
- * not pick one: the same local model the local lanes run, so the two differ
- * in where the index lives and nothing else. */
-const DEFAULT_HOSTED_EMBED_PROVIDER = "local";
+ * not pick one: the product default - the platform embeds - since the hosted
+ * lanes measure the hosted product as shipped. CX_BENCH_EMBED_PROVIDER=local
+ * runs the same local model the local lanes use instead, so the two sides
+ * differ in where the index lives and nothing else. */
+export const DEFAULT_HOSTED_EMBED_PROVIDER = "platform";
+
+/** The harness's own env for a hosted lane: the database URL, the FILE holding
+ * its key, and the optional provider override. The server takes these as
+ * flags (--db, --api-key-file, --embed-provider), never from its environment;
+ * these names carry the CX_BENCH_ prefix of the other harness knobs so nothing
+ * the server could read is set by accident. */
+export const BENCH_DB_URL = "CX_BENCH_DB_URL";
+export const BENCH_KEY_FILE = "CX_BENCH_KEY_FILE";
+export const BENCH_EMBED_PROVIDER = "CX_BENCH_EMBED_PROVIDER";
+
+/** The env a hosted lane needs before it can run. */
+const HOSTED_REQUIRES = [BENCH_DB_URL, BENCH_KEY_FILE];
 
 /** Server env that is common to every MCP lane. Auto-sync is off in every
  * lane: the index is built before the run and a re-sync mid-question would
- * put a stat walk on the clock. */
+ * put a stat walk on the clock. (In hosted mode the server forces auto-index
+ * and auto-sync off itself: a hosted build is a separate, metered step -
+ * load-hosted.mjs - never something a question triggers.) */
 const mcpEnvBase = (repoDir, indexDir) => ({ CX_ROOT: repoDir, CX_INDEX_DIR: indexDir, CX_AUTO_SYNC: "0" });
 
-/** Server env for a hosted lane: the index lives in a platform database and
- * the server reaches it over HTTPS. Auto-index is off too - a hosted build is
- * a separate, metered step (load-hosted.mjs), never something a question
- * triggers. The key is passed through by name only; nothing here reads it. */
-const hostedEnv = (repoDir, indexDir) => ({
-  ...mcpEnvBase(repoDir, indexDir),
-  CX_DB_URL: process.env.CX_DB_URL,
-  INFINO_API_KEY: process.env.INFINO_API_KEY,
-  CX_AUTO_INDEX: "0",
-  CX_EMBED_PROVIDER: process.env.CX_EMBED_PROVIDER ?? DEFAULT_HOSTED_EMBED_PROVIDER,
-});
+/** The server flags that point a `cx` command at the hosted database: the
+ * same for the MCP server of a hosted lane and for the `cx index` of
+ * load-hosted.mjs, so the table is loaded the way the lane queries it. The
+ * key travels as the path of its file; nothing here reads it. */
+export function hostedFlags(env = process.env) {
+  return [
+    "--db",
+    env[BENCH_DB_URL],
+    "--api-key-file",
+    env[BENCH_KEY_FILE],
+    "--embed-provider",
+    env[BENCH_EMBED_PROVIDER] ?? DEFAULT_HOSTED_EMBED_PROVIDER,
+  ];
+}
 
 /** The lane table. Each lane is the identical hermetic base plus:
  *   kind      "local" (index in .infino/ on this machine) or "hosted" (index
@@ -56,7 +75,8 @@ const hostedEnv = (repoDir, indexDir) => ({
  *   tools     the built-in tools the agent gets
  *   mcp       whether the code-context server is attached
  *   env       server env for the MCP lanes (repoDir, indexDir) => object
- *   requires  env vars that must be set before the lane can run
+ *   args      extra flags for the server command line (env) => string[]
+ *   requires  harness env vars that must be set before the lane can run
  *
  *   files      - stock file tools only
  *   cx         - the MCP tools plus Read (retrieval via the index)
@@ -69,13 +89,14 @@ export const LANES = {
   files: { kind: "local", tools: STOCK_TOOLS, mcp: false, requires: [] },
   cx: { kind: "local", tools: ["Read"], mcp: true, env: mcpEnvBase, requires: [] },
   combo: { kind: "local", tools: STOCK_TOOLS, mcp: true, env: mcpEnvBase, requires: [] },
-  hosted: { kind: "hosted", tools: STOCK_TOOLS, mcp: true, env: hostedEnv, requires: ["CX_DB_URL", "INFINO_API_KEY"] },
+  hosted: { kind: "hosted", tools: STOCK_TOOLS, mcp: true, env: mcpEnvBase, args: hostedFlags, requires: HOSTED_REQUIRES },
   "hosted-agent": {
     kind: "hosted",
     tools: STOCK_TOOLS,
     mcp: true,
-    env: (repoDir, indexDir) => ({ ...hostedEnv(repoDir, indexDir), CX_RETRIEVAL_AGENT: "1" }),
-    requires: ["CX_DB_URL", "INFINO_API_KEY"],
+    env: mcpEnvBase,
+    args: (env) => [...hostedFlags(env), "--retrieval-agent"],
+    requires: HOSTED_REQUIRES,
   },
 };
 
@@ -100,15 +121,16 @@ export function checkLaneEnv(lane, env = process.env) {
 /** The host of the platform database a hosted lane targets - host only, never
  * the key and never the path; null for a local lane or when unset. */
 export function dbHost(lane, env = process.env) {
-  if (laneDef(lane).kind !== "hosted" || !env.CX_DB_URL) return null;
+  if (laneDef(lane).kind !== "hosted" || !env[BENCH_DB_URL]) return null;
   try {
-    return new URL(env.CX_DB_URL).host;
+    return new URL(env[BENCH_DB_URL]).host;
   } catch {
     return null;
   }
 }
 
-/** Lane options: identical hermetic base, only the toolset differs. */
+/** Lane options: identical hermetic base; only the toolset and, for a hosted
+ * lane, the server's command line differ. */
 export function laneOptions(lane, repoDir, indexDir) {
   const def = laneDef(lane);
   checkLaneEnv(lane);
@@ -119,7 +141,7 @@ export function laneOptions(lane, repoDir, indexDir) {
     mcpServers: {
       "code-context": {
         command: "node",
-        args: [CX, "mcp"],
+        args: [CX, "mcp", ...(def.args?.(process.env) ?? [])],
         // present in the turn-1 prompt (not deferred behind tool search),
         // and startup blocks until connected - no race on the first call
         alwaysLoad: true,

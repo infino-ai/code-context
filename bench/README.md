@@ -45,31 +45,33 @@ error, not a silent fall-through to the files lane. Every lane shares the same
 hermetic base and differs only in the toolset and, for the hosted pair, in
 where the server's index lives.
 
-| lane           | kind   | built-in tools            | MCP server | server env (on top of `CX_ROOT`, `CX_INDEX_DIR`, `CX_AUTO_SYNC=0`)                                                                  | needs in your env                 |
-| -------------- | ------ | ------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------- |
-| `files`        | local  | Glob, Grep, Read, LS, Bash | no         | -                                                                                                                                    | -                                 |
-| `cx`           | local  | Read                      | yes        | -                                                                                                                                    | -                                 |
-| `combo`        | local  | Glob, Grep, Read, LS, Bash | yes        | -                                                                                                                                    | -                                 |
-| `hosted`       | hosted | Glob, Grep, Read, LS, Bash | yes        | `CX_DB_URL`, `INFINO_API_KEY` (passed through), `CX_AUTO_INDEX=0`, `CX_EMBED_PROVIDER` (from your env, default `local`)                | `CX_DB_URL`, `INFINO_API_KEY`     |
-| `hosted-agent` | hosted | Glob, Grep, Read, LS, Bash | yes        | as `hosted` plus `CX_RETRIEVAL_AGENT=1`                                                                                              | `CX_DB_URL`, `INFINO_API_KEY`     |
+| lane           | kind   | built-in tools            | MCP server | server command line, after `cx mcp` (every MCP lane also gets `CX_ROOT`, `CX_INDEX_DIR`, `CX_AUTO_SYNC=0` in its env) | needs in your env                        |
+| -------------- | ------ | ------------------------- | ---------- | ---------------------------------------------------------------------------------------------------------------------- | ---------------------------------------- |
+| `files`        | local  | Glob, Grep, Read, LS, Bash | no         | -                                                                                                                      | -                                        |
+| `cx`           | local  | Read                      | yes        | -                                                                                                                      | -                                        |
+| `combo`        | local  | Glob, Grep, Read, LS, Bash | yes        | -                                                                                                                      | -                                        |
+| `hosted`       | hosted | Glob, Grep, Read, LS, Bash | yes        | `--db $CX_BENCH_DB_URL --api-key-file $CX_BENCH_KEY_FILE --embed-provider platform` (`CX_BENCH_EMBED_PROVIDER` overrides the provider) | `CX_BENCH_DB_URL`, `CX_BENCH_KEY_FILE`  |
+| `hosted-agent` | hosted | Glob, Grep, Read, LS, Bash | yes        | as `hosted` plus `--retrieval-agent`                                                                                   | `CX_BENCH_DB_URL`, `CX_BENCH_KEY_FILE`  |
 
 `combo` is what installing the MCP server actually produces in a real client;
 `hosted` is the same agent and the same three tools with the index in a
-platform database (`CX_DB_URL` is `https://host/<database>`, the shape the
-engine's own URI parser accepts); `hosted-agent` adds the `retrieval_agent`
+platform database (`CX_BENCH_DB_URL` is `https://host/<database>`, the shape
+the engine's own URI parser accepts); `hosted-agent` adds the `retrieval_agent`
 tool, one question answered by the platform's own agent loop.
-A hosted lane fails before the first paid model call when `CX_DB_URL` or
-`INFINO_API_KEY` is missing. Auto-index is off in the hosted lanes: loading a
-repo into the database is a separate, metered step (below), never something a
-question triggers. The key is passed to the server by name only; no script
-here reads or prints it, and results record `dbHost` (the host) and nothing
-else of the URL.
+A hosted lane fails before the first paid model call when `CX_BENCH_DB_URL` or
+`CX_BENCH_KEY_FILE` is missing. The server is configured by its command line
+alone (the `CX_BENCH_*` names are the harness's, never read by `cx`), and the
+key reaches it as the path of the file holding it: no script here reads or
+prints the key, and results record `dbHost` (the host) and nothing else of the
+URL. Auto-index is off in hosted mode by the server's own rule: loading a repo
+into the database is a separate, metered step (below), never something a
+question triggers.
 
 Getting a hosted database ready:
 
 ```bash
-export CX_DB_URL=https://<host>/<database> INFINO_API_KEY=...
-node load-hosted.mjs /path/to/repo              # cx index --db $CX_DB_URL --json <repo>, timed -> .work/results/index-build.jsonl
+export CX_BENCH_DB_URL=https://<host>/<database> CX_BENCH_KEY_FILE=~/.infino/key
+node load-hosted.mjs /path/to/repo              # cx index --json --db ... --api-key-file ... --embed-provider platform <repo>, timed -> .work/results/index-build.jsonl
 node load-hosted.mjs /path/to/repo local        # the same CLI against .infino/, for the comparison row
 node warm-hosted.mjs                            # POST /v1/list_tables until 200; prints rtt and whether a cold start was seen
 node run-questions.mjs /path/to/repo combo,hosted

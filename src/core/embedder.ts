@@ -18,7 +18,7 @@
 //                             ever embedded and never shrink, so bulk work
 //                             runs where exit() can give the memory back.
 //
-// With CX_EMBED_PROVIDER=platform there is no embedder on this machine at
+// With --embed-provider platform there is no embedder on this machine at
 // all: the hosted table's embedding column is filled and queried server-side,
 // so both constructors return null and every caller that gets null must not
 // embed (search stays keyword-ranked, a build skips its vector stage).
@@ -93,7 +93,7 @@ function getPipe() {
 }
 
 /** The in-process embedder, or null when the platform embeds server-side
- * (CX_EMBED_PROVIDER=platform) - there is nothing to run here then. */
+ * (--embed-provider platform) - there is nothing to run here then. */
 export function createEmbedder(): Embedder | null {
   return embedProvider() === "platform" ? null : createLocalEmbedder();
 }
@@ -159,7 +159,7 @@ interface WorkerOk {
  * the memory back on dispose(). Falls back to the in-process embedder if the
  * child can't start (missing dist worker when running from source, exotic
  * node setups) - indexing never fails over process plumbing. Null when the
- * platform embeds server-side (CX_EMBED_PROVIDER=platform). */
+ * platform embeds server-side (--embed-provider platform). */
 export function createIndexingEmbedder(): Embedder | null {
   if (embedProvider() === "platform") return null;
   let child: ChildProcess | null = null;

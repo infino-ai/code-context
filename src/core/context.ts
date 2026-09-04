@@ -5,7 +5,7 @@
 //
 // Two kinds of target. A LOCAL index is an engine catalog in the index dir,
 // opened synchronously in-process. A HOSTED index is the chunks table of a
-// platform database (CX_DB_URL): the index dir is then only a sidecar (the
+// platform database (--db <url>): the index dir is then only a sidecar (the
 // manifest, file state, usage ledger, spills), the connection is a REST
 // client, and readiness is the server's - the table exists or it does not.
 // Opening a hosted index is async, so the async openers are the ones every
@@ -19,7 +19,6 @@ import {
   indexDir,
   resolveRoot,
   TABLE,
-  DB_URL_ENV,
   hostedTarget,
   hostedLabel,
   hostedClientOptions,
@@ -111,8 +110,8 @@ export function localDb(handle: { db?: Connection; target: string }): Connection
   return handle.db;
 }
 
-/** The platform client for a hosted target, tuned from the environment
- * (CX_DB_TIMEOUT_MS, CX_DB_COLD_START_SECS); `opts` overrides, and is how tests
+/** The platform client for a hosted target, tuned from the hosted settings
+ * (--db-timeout-ms, --cold-start-secs); `opts` overrides, and is how tests
  * inject a fetch. One place constructs the client so every path shares the
  * tuning. */
 export function hostedDbFor(target: HostedTarget, opts: HostedOptions = {}): HostedDb {
@@ -126,7 +125,7 @@ function refuseHostedForSyncPath(): void {
   const target = hostedTarget();
   if (target) {
     throw new Error(
-      `${DB_URL_ENV} is set (${hostedLabel(target)}) but this command only knows the local index - unset it, or use a command with hosted support`,
+      `--db is set (${hostedLabel(target)}) but this command only knows the local index - drop the flag, or use a command with hosted support`,
     );
   }
 }
@@ -142,8 +141,8 @@ export function openIndex(path?: string): IndexHandle {
   return { root, dir, target: dir, db: connect(dir), manifest };
 }
 
-/** Open the index for a repo root in either mode. Hosted when CX_DB_URL is
- * set: the handle carries the platform client and a manifest that is the
+/** Open the index for a repo root in either mode. Hosted when --db was
+ * given: the handle carries the platform client and a manifest that is the
  * sidecar's when it describes a hosted table, else one synthesized from the
  * server. Throws NoIndexError when the table (or the local index) is missing. */
 export async function openIndexAsync(path?: string, hostedOpts?: HostedOptions): Promise<IndexHandle> {

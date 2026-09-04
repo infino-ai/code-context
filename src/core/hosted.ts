@@ -16,8 +16,8 @@ import * as arrow from "apache-arrow";
 
 /** Per-call wall clock before a request is abandoned, when the caller sets
  * none: a cold read against a large table can take tens of seconds; a minute
- * leaves room without hiding a hung connection. Exported so the environment
- * layer (config.ts) resolves CX_DB_TIMEOUT_MS to this same value. */
+ * leaves room without hiding a hung connection. Exported so the settings
+ * layer (config.ts) gives --db-timeout-ms this same default. */
 export const DEFAULT_TIMEOUT_MS = 60_000;
 
 /** How long the retry loop keeps re-issuing a retryable failure (a database

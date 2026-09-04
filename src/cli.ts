@@ -3,20 +3,49 @@
 // SPDX-FileCopyrightText: Copyright The Infino Authors
 //
 // code-context / cx - local code search for AI coding agents.
+//
+// Configuration is command-line flags. Every hosted knob is a flag on the
+// commands that use it; the flags are resolved once, here, into the hosted
+// settings every layer reads (config.ts). The API key is the one value that is
+// never a flag - argv is visible to every process on the machine - so it comes
+// from a file (--api-key-file) or the INFINO_API_KEY environment variable.
 
 import { Command } from "commander";
 import { indexCmd, type IndexCmdOptions } from "./commands/index-cmd.js";
 import { findCmd, searchCmd, sqlCmd, statusCmd, usageCmd } from "./commands/query-cmds.js";
-import { DEFAULT_SEARCH_K, DEFAULT_FIND_LIMIT, MAX_FIND_LIMIT, DB_URL_ENV, API_KEY_ENV } from "./core/config.js";
+import {
+  DEFAULT_SEARCH_K,
+  DEFAULT_FIND_LIMIT,
+  MAX_FIND_LIMIT,
+  API_KEY_ENV,
+  DEFAULT_DB_TIMEOUT_MS,
+  DEFAULT_DB_COLD_START_SECS,
+  DEFAULT_RETRIEVAL_AGENT_MAX_TURNS,
+  DEFAULT_RETRIEVAL_AGENT_MAX_WALL_SECS,
+  configureHosted,
+  hostedSettingsFromFlags,
+  type HostedFlags,
+} from "./core/config.js";
 
-/** Help text shared by every command that takes `--db`. */
-const DB_OPTION_HELP = `hosted engine target, https://host/<database> (same as ${DB_URL_ENV}; the key comes from ${API_KEY_ENV})`;
+/** The flags every command that can run against a hosted database takes:
+ * where the database is, how to authenticate, who embeds (the table at load
+ * time, the query at search time - the two must agree, so every command takes
+ * it), and the two request budgets. */
+function hostedOptions(command: Command): Command {
+  return command
+    .option("--db <url>", "hosted database, https://host/<database> (plain http only for localhost)")
+    .option("--api-key-file <path>", `file holding the API key for --db (default: the ${API_KEY_ENV} environment variable)`)
+    .option(
+      "--embed-provider <platform|local>",
+      "who embeds for --db: platform (default; no model on this machine) or local (this machine's model, vectors shipped)",
+    )
+    .option("--db-timeout-ms <n>", `per-request timeout for --db (default ${DEFAULT_DB_TIMEOUT_MS})`)
+    .option("--cold-start-secs <n>", `how long to wait out a cold database or a starting embedder (default ${DEFAULT_DB_COLD_START_SECS})`);
+}
 
-/** `--db <url>` is the flag form of CX_DB_URL: it sets that very variable, so
- * every layer below reads one source of truth and the flag and the variable
- * cannot disagree. */
-function applyDbOption(db?: string): void {
-  if (db !== undefined) process.env[DB_URL_ENV] = db;
+/** Resolve and install the hosted settings from a command's parsed flags. */
+function applyHosted(flags: HostedFlags): void {
+  configureHosted(hostedSettingsFromFlags(flags));
 }
 
 const program = new Command();
@@ -24,7 +53,8 @@ const program = new Command();
 program
   .name("cx")
   .description(
-    "Local code search for AI coding agents - an index in plain files under .infino/.\n" +
+    "Local code search for AI coding agents - an index in plain files under .infino/,\n" +
+      "or on an infino-platform database with --db.\n" +
       "Keyword search seconds after `cx index`; semantic and hybrid search when vectors\n" +
       "finish backfilling; SQL with relevance-ranked aggregation over the whole repo.",
   )
@@ -40,65 +70,90 @@ Examples:
   cx sql "SELECT path, SUM(end_line - start_line + 1) AS lines \\
           FROM bm25_search('chunks','content','vector index', 300) \\
           GROUP BY path ORDER BY lines DESC LIMIT 10"
-  cx mcp                              serve the MCP tools (find/search/sql) over stdio`,
+  cx mcp                              serve the MCP tools (find/search/sql) over stdio
+  cx index --db https://api.platform.infino.ws/my-repo --api-key-file ~/.infino/key
+                                      load the repo into a hosted database; the platform embeds it
+  cx mcp --db https://api.platform.infino.ws/my-repo --api-key-file ~/.infino/key --retrieval-agent
+                                      serve find/search/sql over the hosted index, plus retrieval_agent`,
   );
 
-program
-  .command("find")
-  .description("every line containing an exact string, like grep -n: complete and unranked")
-  .argument("<text>", "the exact text to find, as it appears in the code")
-  .option("-i, --ignore-case", "match regardless of letter case")
-  .option("-c, --count", "print matching lines per file instead of the lines, like grep -c")
-  .option("--limit <n>", `maximum matching lines to print (default ${DEFAULT_FIND_LIMIT}, max ${MAX_FIND_LIMIT})`)
-  .option("--json", "machine-readable output")
-  .option("-C, --path <dir>", "repo root (default: current directory)")
-  .action(findCmd);
+hostedOptions(
+  program
+    .command("find")
+    .description("every line containing an exact string, like grep -n: complete and unranked")
+    .argument("<text>", "the exact text to find, as it appears in the code")
+    .option("-i, --ignore-case", "match regardless of letter case")
+    .option("-c, --count", "print matching lines per file instead of the lines, like grep -c")
+    .option("--limit <n>", `maximum matching lines to print (default ${DEFAULT_FIND_LIMIT}, max ${MAX_FIND_LIMIT})`)
+    .option("--json", "machine-readable output")
+    .option("-C, --path <dir>", "repo root (default: current directory)"),
+).action(async (text: string, opts: Parameters<typeof findCmd>[1] & HostedFlags) => {
+  applyHosted(opts);
+  await findCmd(text, opts);
+});
 
-program
-  .command("index")
-  .description("bring the index up to date (incremental; full build on first run)")
-  .argument("[path]", "repo root to index")
-  .option("--full", "force a full rebuild instead of an incremental sync")
-  .option("-w, --watch", "keep watching the tree and sync on changes")
-  .option("--no-embed", "keyword index only - skip the vector stage")
-  .option("--max-files <n>", "cap on files indexed (default 20000)")
-  .option("--db <url>", DB_OPTION_HELP)
-  .option("--json", "machine-readable stats")
-  .action(async (path: string | undefined, opts: IndexCmdOptions & { db?: string }) => {
-    applyDbOption(opts.db);
+hostedOptions(
+  program
+    .command("index")
+    .description("bring the index up to date (incremental; full build on first run)")
+    .argument("[path]", "repo root to index")
+    .option("--full", "force a full rebuild instead of an incremental sync")
+    .option("-w, --watch", "keep watching the tree and sync on changes")
+    .option("--no-embed", "keyword index only - skip the vector stage")
+    .option("--max-files <n>", "cap on files indexed (default 20000)")
+    .option("--json", "machine-readable stats"),
+)
+  .option(
+    "--analyzer <ascii_lower|standard>",
+    "FTS analyzer a hosted table is created with (default ascii_lower: splits code identifiers on . _ and ::)",
+  )
+  .action(async (path: string | undefined, opts: IndexCmdOptions & HostedFlags) => {
+    applyHosted(opts);
     await indexCmd(path, opts);
   });
 
-program
-  .command("search")
-  .description("find code: exact terms and meaning in one ranked pass")
-  .argument("<query>", "what you're looking for")
-  .option("-k <n>", "maximum hits", String(DEFAULT_SEARCH_K))
-  .option("--json", "machine-readable output")
-  .option("-C, --path <dir>", "repo root (default: current directory)")
-  .action(searchCmd);
+hostedOptions(
+  program
+    .command("search")
+    .description("find code: exact terms and meaning in one ranked pass")
+    .argument("<query>", "what you're looking for")
+    .option("-k <n>", "maximum hits", String(DEFAULT_SEARCH_K))
+    .option("--json", "machine-readable output")
+    .option("-C, --path <dir>", "repo root (default: current directory)"),
+).action(async (query: string, opts: Parameters<typeof searchCmd>[1] & HostedFlags) => {
+  applyHosted(opts);
+  await searchCmd(query, opts);
+});
 
-program
-  .command("sql")
-  .description("read-only SQL over the index, including ranked search table functions")
-  .argument("<statement>", "a single SELECT/WITH statement")
-  .option(
-    "--embed <name=text...>",
-    "embed text for a {{name}} vector placeholder (repeatable)",
-    (v: string, acc: string[]) => [...acc, v],
-    [] as string[],
-  )
-  .option("--json", "machine-readable output")
-  .option("-C, --path <dir>", "repo root (default: current directory)")
-  .action(sqlCmd);
+hostedOptions(
+  program
+    .command("sql")
+    .description("read-only SQL over the index, including ranked search table functions")
+    .argument("<statement>", "a single SELECT/WITH statement")
+    .option(
+      "--embed <name=text...>",
+      "embed text for a {{name}} vector placeholder (repeatable)",
+      (v: string, acc: string[]) => [...acc, v],
+      [] as string[],
+    )
+    .option("--json", "machine-readable output")
+    .option("-C, --path <dir>", "repo root (default: current directory)"),
+).action(async (statement: string, opts: Parameters<typeof sqlCmd>[1] & HostedFlags) => {
+  applyHosted(opts);
+  await sqlCmd(statement, opts);
+});
 
-program
-  .command("status")
-  .description("show what the index holds and how fresh it is")
-  .option("--json", "machine-readable output")
-  .option("--hook", "one-line output for a SessionStart hook (silent when unindexed)")
-  .option("-C, --path <dir>", "repo root (default: current directory)")
-  .action(statusCmd);
+hostedOptions(
+  program
+    .command("status")
+    .description("show what the index holds and how fresh it is")
+    .option("--json", "machine-readable output")
+    .option("--hook", "one-line output for a SessionStart hook (silent when unindexed)")
+    .option("-C, --path <dir>", "repo root (default: current directory)"),
+).action(async (opts: Parameters<typeof statusCmd>[0] & HostedFlags) => {
+  applyHosted(opts);
+  await statusCmd(opts);
+});
 
 program
   .command("usage")
@@ -111,13 +166,17 @@ program
   .option("-C, --path <dir>", "repo root (default: current directory)")
   .action(usageCmd);
 
-program
-  .command("mcp")
-  .description("serve the MCP tools (find / search / sql) over stdio")
-  .option("-C, --path <dir>", "repo root (default: current directory)")
-  .option("--db <url>", DB_OPTION_HELP)
-  .action(async (opts: { path?: string; db?: string }) => {
-    applyDbOption(opts.db);
+hostedOptions(
+  program
+    .command("mcp")
+    .description("serve the MCP tools (find / search / sql) over stdio; with --db, over a hosted database")
+    .option("-C, --path <dir>", "repo root (default: current directory)"),
+)
+  .option("--retrieval-agent", "with --db: also register retrieval_agent, one question answered by the platform's agent")
+  .option("--agent-max-turns <n>", `turn cap for retrieval_agent (default ${DEFAULT_RETRIEVAL_AGENT_MAX_TURNS})`)
+  .option("--agent-max-wall-secs <n>", `wall-clock cap for retrieval_agent, in seconds (default ${DEFAULT_RETRIEVAL_AGENT_MAX_WALL_SECS})`)
+  .action(async (opts: { path?: string } & HostedFlags) => {
+    applyHosted(opts);
     const { serveMcp } = await import("./mcp/server.js");
     await serveMcp(opts.path);
   });

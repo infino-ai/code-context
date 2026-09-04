@@ -1,31 +1,29 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: Copyright The Infino Authors
 //
-// Hosted mode through config, context and embedder: the environment surface
-// (CX_DB_URL, INFINO_API_KEY, CX_EMBED_PROVIDER, the forced-off auto switches),
-// opening a hosted index against a scripted fake fetch (readiness from
-// list_tables, the manifest synthesized from the server or read from a hosted
-// sidecar), and the null embedder the platform provider yields. No network,
-// no engine: a hosted open never touches a local catalog.
+// Hosted mode through config, context and embedder: the command-line surface
+// (--db, the key from --api-key-file or INFINO_API_KEY, --embed-provider, the
+// client and agent budgets, --analyzer, the forced-off auto switches), opening
+// a hosted index against a scripted fake fetch (readiness from list_tables, the
+// manifest synthesized from the server or read from a hosted sidecar), and the
+// null embedder the platform provider yields. No network, no engine: a hosted
+// open never touches a local catalog.
 
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   API_KEY_ENV,
-  DB_URL_ENV,
-  EMBED_PROVIDER_ENV,
-  DB_TIMEOUT_MS_ENV,
-  DB_COLD_START_SECS_ENV,
-  RETRIEVAL_AGENT_ENV,
-  RETRIEVAL_AGENT_MAX_TURNS_ENV,
-  RETRIEVAL_AGENT_MAX_WALL_SECS_ENV,
   DEFAULT_DB_TIMEOUT_MS,
   DEFAULT_DB_COLD_START_SECS,
+  DEFAULT_HOSTED_EMBED_PROVIDER,
   DEFAULT_RETRIEVAL_AGENT_MAX_TURNS,
   DEFAULT_RETRIEVAL_AGENT_MAX_WALL_SECS,
   TABLE,
+  configureHosted,
+  hostedSettingsFromFlags,
+  hostedAnalyzer,
   retrievalAgentMaxTurns,
   retrievalAgentMaxWallSecs,
   retrievalAgentEnabled,
@@ -36,6 +34,7 @@ import {
   hostedLabel,
   hostedTarget,
   isHosted,
+  type HostedFlags,
 } from "../src/core/config.js";
 import {
   NoIndexError,
@@ -54,22 +53,11 @@ import {
 import { INDEX_FORMAT_VERSION, readManifest, writeManifest, type Manifest } from "../src/core/manifest.js";
 import { createEmbedder, createIndexingEmbedder, embedderInfo } from "../src/core/embedder.js";
 
-// --- environment fixture ------------------------------------------------------------
+// --- settings fixture -----------------------------------------------------------------
 
-const ENV_NAMES = [
-  DB_URL_ENV,
-  API_KEY_ENV,
-  EMBED_PROVIDER_ENV,
-  DB_TIMEOUT_MS_ENV,
-  DB_COLD_START_SECS_ENV,
-  RETRIEVAL_AGENT_ENV,
-  RETRIEVAL_AGENT_MAX_TURNS_ENV,
-  RETRIEVAL_AGENT_MAX_WALL_SECS_ENV,
-  "CX_AUTO_INDEX",
-  "CX_AUTO_SYNC",
-  "CX_INDEX_DIR",
-  "CX_ROOT",
-];
+/** Environment the tests must not inherit: the key (a developer's real one
+ * would leak into the "no key" test) and the pre-existing local knobs. */
+const ENV_NAMES = [API_KEY_ENV, "CX_AUTO_INDEX", "CX_AUTO_SYNC", "CX_INDEX_DIR", "CX_ROOT"];
 
 const saved = new Map<string, string | undefined>();
 beforeEach(() => {
@@ -77,6 +65,7 @@ beforeEach(() => {
     saved.set(name, process.env[name]);
     delete process.env[name];
   }
+  configureHosted(null);
 });
 afterEach(() => {
   for (const name of ENV_NAMES) {
@@ -84,14 +73,21 @@ afterEach(() => {
     if (value === undefined) delete process.env[name];
     else process.env[name] = value;
   }
+  configureHosted(null);
 });
 
 const URL = "https://api.example.test/cx";
 const KEY = "inf_test_key_do_not_log";
 
-function hostedEnv(): void {
-  process.env[DB_URL_ENV] = URL;
-  process.env[API_KEY_ENV] = KEY;
+/** The settings `cx <command> --db URL ...` resolves to, the key coming from a
+ * scripted environment rather than the process's own. */
+function settingsFor(flags: HostedFlags = {}) {
+  return hostedSettingsFromFlags({ db: URL, ...flags }, { [API_KEY_ENV]: KEY });
+}
+
+/** Install a hosted target, as the CLI does once it has parsed the flags. */
+function hostedMode(flags: HostedFlags = {}): void {
+  configureHosted(settingsFor(flags));
 }
 
 // --- the fake fetch -------------------------------------------------------------------
@@ -154,69 +150,88 @@ afterEach(() => {
 
 // --- config -----------------------------------------------------------------------------
 
-describe("hosted config", () => {
-  it("is local when CX_DB_URL is unset", () => {
+describe("hosted settings", () => {
+  it("is local without --db, and a hosted flag without --db is a usage error, not ignored", () => {
+    expect(hostedSettingsFromFlags({}, {})).toBeNull();
     expect(isHosted()).toBe(false);
     expect(hostedTarget()).toBeNull();
+    expect(() => hostedSettingsFromFlags({ embedProvider: "platform" }, {})).toThrow(/--embed-provider needs --db <url>/);
+    expect(() => hostedSettingsFromFlags({ retrievalAgent: true }, {})).toThrow(/--retrieval-agent needs --db <url>/);
+    expect(() => hostedSettingsFromFlags({ analyzer: "standard" }, {})).toThrow(/--analyzer needs --db <url>/);
+    // commander hands an unset boolean flag through as undefined or false; neither is a stray
+    expect(hostedSettingsFromFlags({ retrievalAgent: false }, {})).toBeNull();
   });
 
-  it("builds the target from CX_DB_URL and INFINO_API_KEY", () => {
-    hostedEnv();
+  it("builds the target from --db with the key from INFINO_API_KEY", () => {
+    hostedMode();
     expect(isHosted()).toBe(true);
     expect(hostedTarget()).toEqual({ baseUrl: "https://api.example.test", database: "cx", apiKey: KEY });
+  });
+
+  it("reads the key from --api-key-file, trimmed, ahead of the environment", () => {
+    const file = join(root, "key");
+    writeFileSync(file, "inf_from_file\n");
+    const settings = hostedSettingsFromFlags({ db: URL, apiKeyFile: file }, { [API_KEY_ENV]: KEY });
+    expect(settings?.target.apiKey).toBe("inf_from_file");
+    expect(() => hostedSettingsFromFlags({ db: URL, apiKeyFile: join(root, "missing") }, {})).toThrow(/ENOENT/);
   });
 
   it("names the target without the key", () => {
     expect(hostedLabel({ baseUrl: "https://api.example.test/", database: "cx" })).toBe(URL);
   });
 
-  it("refuses a hosted URL with no key rather than failing on the first request", () => {
-    process.env[DB_URL_ENV] = URL;
-    expect(() => hostedTarget()).toThrow(new RegExp(`${API_KEY_ENV} is not`));
+  it("refuses --db with no key rather than failing on the first request", () => {
+    expect(() => hostedSettingsFromFlags({ db: URL }, {})).toThrow(new RegExp(`--api-key-file <path> or set ${API_KEY_ENV}`));
+    expect(isHosted()).toBe(false);
   });
 
   it("refuses a plaintext URL for a remote host and allows loopback", () => {
-    process.env[API_KEY_ENV] = KEY;
-    process.env[DB_URL_ENV] = "http://example.com/cx";
-    expect(() => hostedTarget()).toThrow(/https:\/\/ for a remote host/);
-    process.env[DB_URL_ENV] = "http://127.0.0.1:9110/cx";
-    expect(hostedTarget()).toMatchObject({ baseUrl: "http://127.0.0.1:9110", database: "cx" });
+    expect(() => settingsFor({ db: "http://example.com/cx" })).toThrow(/https:\/\/ for a remote host/);
+    expect(settingsFor({ db: "http://127.0.0.1:9110/cx" })?.target).toMatchObject({ baseUrl: "http://127.0.0.1:9110", database: "cx" });
   });
 
-  it("reads the embed provider, defaulting to local and rejecting a misspelling", () => {
+  it("embeds on the platform by default for a hosted target, locally for a local index, and refuses a misspelling", () => {
     expect(embedProvider()).toBe("local");
-    process.env[EMBED_PROVIDER_ENV] = "platform";
+    expect(DEFAULT_HOSTED_EMBED_PROVIDER).toBe("platform");
+    hostedMode();
     expect(embedProvider()).toBe("platform");
-    process.env[EMBED_PROVIDER_ENV] = "openai";
-    expect(() => embedProvider()).toThrow(/must be "local" or "platform"/);
+    hostedMode({ embedProvider: "local" });
+    expect(embedProvider()).toBe("local");
+    expect(settingsFor({ embedProvider: "Platform" })?.embedProvider).toBe("platform");
+    expect(() => settingsFor({ embedProvider: "openai" })).toThrow(/--embed-provider must be "platform" or "local"/);
   });
 
-  it("tunes the client from CX_DB_TIMEOUT_MS / CX_DB_COLD_START_SECS with the documented defaults", () => {
+  it("tunes the client from --db-timeout-ms / --cold-start-secs with the documented defaults", () => {
     expect(hostedClientOptions()).toEqual({ timeoutMs: DEFAULT_DB_TIMEOUT_MS, coldStartSecs: DEFAULT_DB_COLD_START_SECS });
     expect(DEFAULT_DB_TIMEOUT_MS).toBe(60_000);
     expect(DEFAULT_DB_COLD_START_SECS).toBe(120);
-    process.env[DB_TIMEOUT_MS_ENV] = "1500";
-    process.env[DB_COLD_START_SECS_ENV] = "7";
+    hostedMode({ dbTimeoutMs: "1500", coldStartSecs: "7" });
     expect(hostedClientOptions()).toEqual({ timeoutMs: 1500, coldStartSecs: 7 });
-    process.env[DB_TIMEOUT_MS_ENV] = "soon";
-    expect(() => hostedClientOptions()).toThrow(/CX_DB_TIMEOUT_MS must be a positive integer/);
+    expect(() => settingsFor({ dbTimeoutMs: "soon" })).toThrow(/--db-timeout-ms must be a positive integer/);
+    expect(() => settingsFor({ coldStartSecs: "0" })).toThrow(/--cold-start-secs must be a positive integer/);
   });
 
-  it("keeps the retrieval_agent tool off by default and reads its caps", () => {
-    expect(RETRIEVAL_AGENT_ENV).toBe("CX_RETRIEVAL_AGENT");
-    expect(RETRIEVAL_AGENT_MAX_TURNS_ENV).toBe("CX_RETRIEVAL_AGENT_MAX_TURNS");
-    expect(RETRIEVAL_AGENT_MAX_WALL_SECS_ENV).toBe("CX_RETRIEVAL_AGENT_MAX_WALL_SECS");
+  it("creates the hosted table with ascii_lower unless --analyzer says otherwise, and refuses a name the engine lacks", () => {
+    expect(hostedAnalyzer()).toBe("ascii_lower");
+    hostedMode();
+    expect(hostedAnalyzer()).toBe("ascii_lower");
+    hostedMode({ analyzer: "standard" });
+    expect(hostedAnalyzer()).toBe("standard");
+    expect(() => settingsFor({ analyzer: "icu" })).toThrow(/--analyzer must be "ascii_lower" or "standard"/);
+  });
+
+  it("keeps the retrieval_agent tool off by default and reads its caps from the flags", () => {
+    hostedMode();
     expect(retrievalAgentEnabled()).toBe(false);
     expect(retrievalAgentMaxTurns()).toBe(DEFAULT_RETRIEVAL_AGENT_MAX_TURNS);
     expect(retrievalAgentMaxWallSecs()).toBe(DEFAULT_RETRIEVAL_AGENT_MAX_WALL_SECS);
     expect(DEFAULT_RETRIEVAL_AGENT_MAX_TURNS).toBe(8);
     expect(DEFAULT_RETRIEVAL_AGENT_MAX_WALL_SECS).toBe(120);
-    process.env[RETRIEVAL_AGENT_ENV] = "1";
-    process.env[RETRIEVAL_AGENT_MAX_TURNS_ENV] = "3";
-    process.env[RETRIEVAL_AGENT_MAX_WALL_SECS_ENV] = "30";
+    hostedMode({ retrievalAgent: true, agentMaxTurns: "3", agentMaxWallSecs: "30" });
     expect(retrievalAgentEnabled()).toBe(true);
     expect(retrievalAgentMaxTurns()).toBe(3);
     expect(retrievalAgentMaxWallSecs()).toBe(30);
+    expect(() => settingsFor({ agentMaxTurns: "-1" })).toThrow(/--agent-max-turns must be a positive integer/);
   });
 
   it("forces auto-index and auto-sync off for a hosted target whatever the env says", () => {
@@ -225,7 +240,7 @@ describe("hosted config", () => {
     process.env.CX_AUTO_INDEX = "0";
     expect(autoIndexEnabled()).toBe(false);
     delete process.env.CX_AUTO_INDEX;
-    hostedEnv();
+    hostedMode();
     process.env.CX_AUTO_INDEX = "1";
     process.env.CX_AUTO_SYNC = "true";
     expect(autoIndexEnabled()).toBe(false);
@@ -237,7 +252,7 @@ describe("hosted config", () => {
 
 describe("embedder under the platform provider", () => {
   it("creates no embedder and says so", () => {
-    process.env[EMBED_PROVIDER_ENV] = "platform";
+    hostedMode(); // platform is the hosted default
     expect(createEmbedder()).toBeNull();
     expect(createIndexingEmbedder()).toBeNull();
     expect(embedderInfo()).toBe("platform (server-side)");
@@ -252,7 +267,7 @@ describe("embedder under the platform provider", () => {
 
 describe("openIndexAsync (hosted)", () => {
   it("is ready when list_tables names the chunks table and synthesizes the manifest from the server", async () => {
-    hostedEnv();
+    hostedMode();
     const fake = fakeFetch([[TABLE, "other"], PLATFORM_EMBEDDED_SCHEMA, COUNTS]);
     const handle = await openIndexAsync(root, { fetch: fake.fetch });
 
@@ -290,7 +305,7 @@ describe("openIndexAsync (hosted)", () => {
   });
 
   it("throws NoIndexError naming the target and the load command when the table is absent", async () => {
-    hostedEnv();
+    hostedMode();
     const fake = fakeFetch([["something_else"]]);
     const err = await openIndexAsync(root, { fetch: fake.fetch }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(NoIndexError);
@@ -302,7 +317,7 @@ describe("openIndexAsync (hosted)", () => {
   });
 
   it("records ready vectors but no embedder for a client-vector column", async () => {
-    hostedEnv();
+    hostedMode();
     const fake = fakeFetch([[TABLE], CLIENT_VECTOR_SCHEMA, COUNTS]);
     const { manifest } = await openIndexAsync(root, { fetch: fake.fetch });
     expect(manifest.vectors).toBe("ready");
@@ -310,7 +325,7 @@ describe("openIndexAsync (hosted)", () => {
   });
 
   it("records no vectors for a keyword-only table", async () => {
-    hostedEnv();
+    hostedMode();
     const fake = fakeFetch([[TABLE], KEYWORD_SCHEMA, []]);
     const { manifest } = await openIndexAsync(root, { fetch: fake.fetch });
     expect(manifest.vectors).toBe("none");
@@ -320,7 +335,7 @@ describe("openIndexAsync (hosted)", () => {
   });
 
   it("trusts a hosted sidecar manifest and skips the schema round trip", async () => {
-    hostedEnv();
+    hostedMode();
     const dir = join(root, ".infino");
     const recorded: Manifest = {
       version: INDEX_FORMAT_VERSION,
@@ -343,7 +358,7 @@ describe("openIndexAsync (hosted)", () => {
   });
 
   it("does not trust a LOCAL sidecar manifest for a hosted target, and leaves it in place", async () => {
-    hostedEnv();
+    hostedMode();
     const dir = join(root, ".infino");
     const local: Manifest = {
       version: INDEX_FORMAT_VERSION,
@@ -374,7 +389,7 @@ describe("openIndexAsync (hosted)", () => {
 
 describe("openHostedHandle memo", () => {
   it("lists tables until the table is seen, then never again, and synthesizes once", async () => {
-    hostedEnv();
+    hostedMode();
     const fake = fakeFetch([["nope"], [TABLE], PLATFORM_EMBEDDED_SCHEMA, COUNTS]);
     const db = hostedDbFor(hostedTarget()!, { fetch: fake.fetch });
     const memo = newHostedMemo();
@@ -404,15 +419,15 @@ describe("openHostedHandle memo", () => {
 });
 
 describe("the sync openers in hosted mode", () => {
-  it("refuse to open a local catalog while CX_DB_URL is set", () => {
-    hostedEnv();
-    expect(() => openIndex(root)).toThrow(new RegExp(`${DB_URL_ENV} is set \\(${URL.replace(/[.]/g, "\\.")}\\)`));
-    expect(() => openForIndexing(root)).toThrow(new RegExp(`${DB_URL_ENV} is set`));
+  it("refuse to open a local catalog while --db is set", () => {
+    hostedMode();
+    expect(() => openIndex(root)).toThrow(new RegExp(`--db is set \\(${URL.replace(/[.]/g, "\\.")}\\)`));
+    expect(() => openForIndexing(root)).toThrow(/--db is set/);
     expect(existsSync(join(root, ".infino"))).toBe(false);
   });
 
   it("openForIndexingAsync yields the hosted client and the sidecar, no connection, no request", async () => {
-    hostedEnv();
+    hostedMode();
     const fake = fakeFetch([]);
     const target = await openForIndexingAsync(root, { fetch: fake.fetch });
     expect(target.hosted).toBeDefined();
