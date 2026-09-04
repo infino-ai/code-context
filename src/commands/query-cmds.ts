@@ -197,6 +197,15 @@ export interface UsageCmdOptions {
 
 const truncate = (s: string, n: number): string => (s.length > n ? s.slice(0, n - 3) + "..." : s);
 
+/** `find 4 · Grep 2 · Read 1`, most first; empty string when there is nothing. */
+function countsLine(counts: Record<string, number> | undefined): string {
+  if (!counts) return "";
+  return Object.entries(counts)
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([name, n]) => `${name} ${n}`)
+    .join(" · ");
+}
+
 /** `cx usage` - the local ledger of what queries went through the index and a
  * compact summary of what each returned. Read straight off `.infino/usage.jsonl`,
  * so it's deterministic and needs no running server or model. */
@@ -247,6 +256,12 @@ export async function usageCmd(opts: UsageCmdOptions): Promise<void> {
     const used = Math.min(session.promptsWithCx, session.prompts);
     const calls = `${session.cxCalls} call${session.cxCalls === 1 ? "" : "s"}`;
     console.log(dim(`  this session: code-context used in ${used} of ${session.prompts} prompts (${calls})`));
+    // Which door, and what the agent reached for first: the two numbers that
+    // say whether the tool surface steers as intended.
+    const byTool = countsLine(session.cxCallsByTool);
+    if (byTool) console.log(dim(`  by tool: ${byTool}`));
+    const first = countsLine(session.firstToolByPrompt);
+    if (first) console.log(dim(`  first tool of a prompt: ${first}`));
   }
   console.log("");
 

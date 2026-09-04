@@ -220,6 +220,20 @@ export interface PromptStats {
   promptsWithCx: number;
   /** transient: has the current prompt already used code-context. */
   curPromptUsedCx: boolean;
+  /** code-context invocations by tool (`find`, `search`, `sql`, `reindex`):
+   * which door the agent actually walks through. Absent on stats files
+   * written before it was recorded. */
+  cxCallsByTool?: Record<string, number>;
+  /** The first tool the agent called in each prompt, counted by name - a
+   * code-context tool by its short name, anything else (Grep, Read, Bash)
+   * by the name the hook delivered. This is the selection signal: whether a
+   * grep-shaped prompt opens with `find` or with Grep. Only the tools the
+   * PostToolUse hook is configured to forward are visible, so with the
+   * default `mcp__code-context.*` matcher it records code-context tools
+   * only; widen the matcher to see the rest. Absent on older stats files. */
+  firstToolByPrompt?: Record<string, number>;
+  /** transient: has the current prompt's first tool call been recorded. */
+  curPromptFirstToolSeen?: boolean;
 }
 
 /** The shape Claude Code delivers to a hook command on stdin (subset we use). */
@@ -233,6 +247,21 @@ export interface HookPayload {
 /** A tool name is code-context's when it's one of our MCP tools - matches the
  * default server and any renamed variant (e.g. code-context-local). */
 const isCodeContextTool = (name?: string): boolean => !!name && /^mcp__code[-_]?context/i.test(name);
+
+/** The short tool name inside a code-context MCP tool id:
+ * `mcp__code-context__find` -> `find`, `mcp__code-context-dev__sql` -> `sql`.
+ * The server segment may carry a suffix, so the split is on the last `__`. */
+export function codeContextToolName(name: string): string {
+  const at = name.lastIndexOf("__");
+  return at >= 0 ? name.slice(at + 2) : name;
+}
+
+/** Add one to `counts[key]`, creating the map or the key as needed. */
+function bump(counts: Record<string, number> | undefined, key: string): Record<string, number> {
+  const out = counts ?? {};
+  out[key] = (out[key] ?? 0) + 1;
+  return out;
+}
 
 const MAX_SESSIONS = 25;
 
@@ -258,10 +287,14 @@ function savePromptStats(indexDir: string, all: Record<string, PromptStats>): vo
   }
 }
 
-/** Fold one Claude Code hook event into the local counters. Best-effort. */
+/** Fold one Claude Code hook event into the local counters. Best-effort.
+ * Every PostToolUse event counts toward the first-tool-per-prompt tally
+ * (whatever tools the hook matcher forwards); only code-context's own tools
+ * count as invocations. */
 export function recordHookEvent(indexDir: string, payload: HookPayload): void {
   const event = payload.hook_event_name ?? "";
-  const tracked = event === "UserPromptSubmit" || (event === "PostToolUse" && isCodeContextTool(payload.tool_name));
+  const isCx = event === "PostToolUse" && isCodeContextTool(payload.tool_name);
+  const tracked = event === "UserPromptSubmit" || (event === "PostToolUse" && !!payload.tool_name);
   if (!tracked) return;
 
   const sid = payload.session_id ?? "unknown";
@@ -273,11 +306,23 @@ export function recordHookEvent(indexDir: string, payload: HookPayload): void {
   if (event === "UserPromptSubmit") {
     s.prompts++;
     s.curPromptUsedCx = false;
+    s.curPromptFirstToolSeen = false;
   } else {
-    s.cxCalls++;
-    if (!s.curPromptUsedCx && s.prompts > 0) {
-      s.promptsWithCx++;
-      s.curPromptUsedCx = true;
+    const rawName = payload.tool_name ?? "";
+    const label = isCx ? codeContextToolName(rawName) : rawName;
+    // The first tool of a prompt is the selection signal; a call that lands
+    // before any prompt was seen has no prompt to belong to and is not counted.
+    if (!s.curPromptFirstToolSeen && s.prompts > 0) {
+      s.firstToolByPrompt = bump(s.firstToolByPrompt, label);
+      s.curPromptFirstToolSeen = true;
+    }
+    if (isCx) {
+      s.cxCalls++;
+      s.cxCallsByTool = bump(s.cxCallsByTool, label);
+      if (!s.curPromptUsedCx && s.prompts > 0) {
+        s.promptsWithCx++;
+        s.curPromptUsedCx = true;
+      }
     }
   }
   s.lastAt = now;

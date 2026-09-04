@@ -248,7 +248,10 @@ node bench/run-questions.mjs /path/to/repo          # default question set
 
 Question sets are `bench/questions/*.json` (`{cat, q}` arrays) - point it at
 your own repo and questions with no code changes. `infino-pinpoint.json` is
-the eight-lookup set from the `find` comparison above. Wall-clock is only clean
+the eight-lookup set from the `find` comparison above; `infino-known-file.json`
+(questions whose right first call is Read) and `infino-by-meaning.json`
+(questions that name no identifier) measure tool selection for the surface
+comparison that follows it. Wall-clock is only clean
 run sequentially (`CX_BENCH_CONCURRENCY=1`); tool-call count is the
 concurrency-independent latency proxy. Expect the aggregation multiple to
 grow with repo size, and the whole gap to grow on weaker models.

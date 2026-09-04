@@ -348,6 +348,14 @@ to your Claude Code settings (`~/.claude/settings.json` or a project
 and prints nothing. If you run code-context via `npx`, use
 `npx -y @infino-ai/code-context usage --hook` as the command.
 
+The same tally breaks the calls down by tool (`by tool: find 4 · search 2 ·
+sql 1`) and records which tool the agent reached for first in each prompt
+(`first tool of a prompt: find 4 · Grep 2`), which is what tells you whether
+the tool surface steers as intended. With the matcher above only
+code-context's own tools are forwarded, so the first-tool line names them
+alone; set the `PostToolUse` matcher to `.*` to see Grep, Read, and the rest
+in that line too, at the cost of one hook process per tool call.
+
 ## What it is, and what it isn't
 
 code-context's lane is ranked **content** retrieval and content-relevance
