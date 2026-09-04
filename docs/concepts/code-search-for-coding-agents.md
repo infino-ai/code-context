@@ -33,13 +33,29 @@ files read one at a time.
   paraphrases, so "where is auth handled" works without knowing the exact
   identifier.
 
-## Where crawling still wins
+## Why grep is blocked anyway
 
-Jumping to one known symbol or literal string is a single grep's job, and
-there an index does not save tokens: the grep returns one line, while ranked
-search returns content the agent did not need for a path. code-context routes
-this correctly (its tool descriptions tell an agent to prefer native grep for
-pinpoint lookups) and reaches for the index when a question spans files.
+On tokens alone, jumping to one known symbol is a single grep's job: one
+line out. But an agent working from grep fragments reasons about code it
+never read, and fragment-born claims are confidently wrong in ways a ranked
+chunk - which carries its content - is not. code-context therefore ships a
+PreToolUse guard that denies grep-family commands; `bm25_search` covers the
+pinpoint case, and Read fills in whatever the chunk does not show.
+
+Blocking grep by itself does not hold, which is not obvious until you watch
+an agent work with it denied: it reaches for `awk`, then `sed`, then `cut`,
+then a one-line `python3 -c`, and answers from the handful of lines whichever
+one printed. The failure is reasoning from an extracted fragment, not the
+name of the program that extracted it, so the guard denies the whole family
+of utilities whose job is to emit file contents — readers and pagers, the
+text filters, and interpreters run as one-liners.
+
+Nothing in that blocks doing work. Builds, tests, benchmarks, git, file
+moves, and scripts run from a file are untouched; only "show me the bytes"
+is redirected to Read and to the index. Neither is a downgrade: Read takes
+an offset and the index answers over a corpus of any size, so file size is
+never a reason to reach for a filter, and both return the surrounding
+context that a matched line leaves out.
 
 ## Hybrid, not just semantic
 

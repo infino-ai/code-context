@@ -6,7 +6,7 @@
 
 import { Command } from "commander";
 import { indexCmd } from "./commands/index-cmd.js";
-import { searchCmd, sqlCmd, statusCmd, usageCmd } from "./commands/query-cmds.js";
+import { searchCmd, sqlCmd, statusCmd, guardCmd, usageCmd } from "./commands/query-cmds.js";
 import { DEFAULT_SEARCH_K } from "./core/config.js";
 
 const program = new Command();
@@ -84,6 +84,12 @@ program
   .option("--json", "machine-readable output")
   .option("-C, --path <dir>", "repo root (default: current directory)")
   .action(usageCmd);
+
+program
+  .command("guard")
+  .description("PreToolUse hook: deny grep-family commands in favor of the ranked index")
+  .option("--hook", "consume a Claude Code PreToolUse event on stdin and print a decision")
+  .action(guardCmd);
 
 program
   .command("mcp")

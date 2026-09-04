@@ -10,15 +10,18 @@ symbol-precise references. It ranks and retrieves content and aggregates by
 relevance. Tools that resolve structure (LSP servers, graph indexes) are
 complementary: MCP servers stack, so run both when you need both.
 
-### It does not beat grep on pinpoint lookups
+### It blocks grep, on purpose
 
-Naming the one file a known symbol lives in is a single grep's job. There the
-index does not save tokens: a grep returns one matching line, while ranked
-search returns chunks that carry their content. That content is what pays off
-on "how does X work" and whole-repo questions, and it is dead weight when all
-you need is a path. Adding code-context does not reduce accuracy on
-localization; it just does not win on cost there. Both are measured in the
-[benchmark](benchmark.md).
+The plugin ships a PreToolUse guard (`cx guard --hook`) that denies
+grep-family commands - `grep`, `egrep`, `fgrep`, `rg`, `git grep`, and the
+Grep tool. On raw token economics a pinpoint lookup is a single grep's job:
+one matching line beats ranked chunks, and the [benchmark](benchmark.md)
+measures exactly that. The block exists because of what agents do with
+match fragments: reason from them without reading the code, and state
+mechanisms the code does not contain. `bm25_search` answers the same
+exact-identifier lookups with chunks that carry their content, and the
+deliberate cost is the rare pinpoint hit grep would have answered a few
+tokens cheaper.
 
 ### The first index of a repo pays a one-time vector cost
 
