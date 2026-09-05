@@ -8,7 +8,7 @@
 
 # Infino Subagent for Claude Code. Save 75% on your Anthropic bill. 
 
-**Same accuracy as Sonnet Explore at 4x the performance.**
+**Farm out retrieval work to small language models. Same accuracy as Sonnet Explore at 4x the performance.**
 
 Claude Code keeps the reasoning. Infino Subagent takes the exploration off
 it: the retrieval, the fan-out, the fifty "go look at this" jobs a hard task
