@@ -67,7 +67,10 @@ async function worker() {
   while (cursor < jobs.length) {
     const job = jobs[cursor++];
     const r = await runLane({ lane: job.lane, prompt: job.q, system, repoDir, indexDir });
-    record("questions.jsonl", { q: job.i, cat: job.cat, lane: job.lane, repo: repoDir, ...r, answer: r.answer.slice(0, 1500) });
+    // The whole answer goes on the row: the judge and cite-check read it from
+    // here, and a cut answer (1,500 characters, until 2026-09-05) had the judge
+    // scoring truncated text on both sides.
+    record("questions.jsonl", { q: job.i, cat: job.cat, lane: job.lane, repo: repoDir, ...r });
     results.push({ ...job, tokens: r.tokens, cost: r.costUsd ?? 0, calls: r.calls, wallMs: r.wallMs, cxTookMs: r.cxTookMs, error: r.error });
     done++;
     console.log(

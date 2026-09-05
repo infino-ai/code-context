@@ -138,7 +138,8 @@ Every row in `.work/results/questions.jsonl` has the question (`q`, `cat`,
 `repo`), the lane (`lane`, `laneKind` = `local`|`hosted`, `dbHost` = the
 platform host for a platform lane, else `null`), the build (`build`, `cli`,
 `model`), the run totals (`tokens`, `usage`, `costUsd`, `wallMs`, `calls`,
-`answer`, `error`, `ts`) and the tool trace:
+`answer` - the whole answer; rows before 2026-09-05 hold its first 1,500
+characters - `error`, `ts`) and the tool trace:
 
 - `toolCalls` - the tool names in call order, code-context tools as
   `cx:find` / `cx:search` / `cx:sql` (unchanged; every reader keys on it).
