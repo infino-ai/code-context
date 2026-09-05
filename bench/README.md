@@ -189,7 +189,9 @@ The `cx ms` column is the sum over questions of the median `cxTookMs`; rows
 from before it was recorded count as 0. The judge sees both answers in random
 order and returns a winner, a confidence, and how many claims each answer
 makes that the repository does not support; `JUDGE_LIMIT=n` caps the pairs
-for a smoke run. Judging costs about a quarter of a dollar per pair.
+for a smoke run. Judging costs a quarter to half a dollar per pair (the
+upper end on aggregation questions, where the judge reproduces counts on
+both sides).
 
 The judge verifies each claim at the grain the answer states, with the tool
 that measures that grain: Read, Grep and Glob on the checkout for code, lines
