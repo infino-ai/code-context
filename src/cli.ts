@@ -6,8 +6,8 @@
 
 import { Command } from "commander";
 import { indexCmd } from "./commands/index-cmd.js";
-import { searchCmd, sqlCmd, statusCmd, usageCmd } from "./commands/query-cmds.js";
-import { DEFAULT_SEARCH_K } from "./core/config.js";
+import { findCmd, searchCmd, sqlCmd, statusCmd, usageCmd } from "./commands/query-cmds.js";
+import { DEFAULT_SEARCH_K, DEFAULT_FIND_LIMIT, MAX_FIND_LIMIT } from "./core/config.js";
 
 const program = new Command();
 
@@ -18,19 +18,31 @@ program
       "Keyword search seconds after `cx index`; semantic and hybrid search when vectors\n" +
       "finish backfilling; SQL with relevance-ranked aggregation over the whole repo.",
   )
-  .version("0.1.4")
+  .version("0.5.0")
   .addHelpText(
     "after",
     `
 Examples:
   cx index                            index the current repo (keyword search is live in seconds)
+  cx find "parse_config"              every line containing it, path:line - like grep -n
   cx search "parse_config"            exact terms and meaning, one ranked pass
   cx search "where is auth handled"   works when you don't know the words
   cx sql "SELECT path, SUM(end_line - start_line + 1) AS lines \\
           FROM bm25_search('chunks','content','vector index', 300) \\
           GROUP BY path ORDER BY lines DESC LIMIT 10"
-  cx mcp                              serve the MCP tools (search/sql/reindex) over stdio`,
+  cx mcp                              serve the MCP tools (find/search/sql) over stdio`,
   );
+
+program
+  .command("find")
+  .description("every line containing an exact string, like grep -n: complete and unranked")
+  .argument("<text>", "the exact text to find, as it appears in the code")
+  .option("-i, --ignore-case", "match regardless of letter case")
+  .option("-c, --count", "print matching lines per file instead of the lines, like grep -c")
+  .option("--limit <n>", `maximum matching lines to print (default ${DEFAULT_FIND_LIMIT}, max ${MAX_FIND_LIMIT})`)
+  .option("--json", "machine-readable output")
+  .option("-C, --path <dir>", "repo root (default: current directory)")
+  .action(findCmd);
 
 program
   .command("index")
@@ -87,7 +99,7 @@ program
 
 program
   .command("mcp")
-  .description("serve the MCP tools (search / sql / reindex) over stdio")
+  .description("serve the MCP tools (find / search / sql) over stdio")
   .option("-C, --path <dir>", "repo root (default: current directory)")
   .action(async (opts: { path?: string }) => {
     const { serveMcp } = await import("./mcp/server.js");

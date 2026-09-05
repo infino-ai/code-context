@@ -57,3 +57,17 @@ export const EMBED_MAX_CHARS = Number(process.env.CX_EMBED_MAX_CHARS ?? 8000);
 /** Default number of search hits. Configurable per call (the `k` tool param /
  * CLI `-k`) and via CX_SEARCH_K for config/CI-level defaults. */
 export const DEFAULT_SEARCH_K = Number(process.env.CX_SEARCH_K ?? 10);
+
+/** Hard cap on matching lines in one `find` result. At roughly fifty tokens
+ * per returned line (path, line number, text) this is about 25k tokens: a
+ * large tool result, but one a session survives, where an unbounded find of
+ * a ubiquitous term could return a hundred thousand lines. A cut list still
+ * carries the full total and the per-file counts. */
+export const MAX_FIND_LIMIT = 500;
+
+/** Default number of matching lines `find` returns when the caller passes no
+ * limit: the cap itself, so the cut only ever lands on a flood, never on a
+ * real answer (the largest measured lookup needed about 300 lines). The
+ * result's `total` and `byFile` are complete either way. Configurable per call
+ * (the `limit` tool param / CLI `--limit`) and via CX_FIND_LIMIT. */
+export const DEFAULT_FIND_LIMIT = Number(process.env.CX_FIND_LIMIT ?? MAX_FIND_LIMIT);

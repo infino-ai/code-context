@@ -1,6 +1,74 @@
 import { describe, expect, it } from "vitest";
-import { applyEmbeds, guardSql } from "../src/core/searcher.js";
+import { analyzerTokens, applyEmbeds, excerpt, guardSql, matchLines } from "../src/core/searcher.js";
 import type { Embedder } from "../src/core/embedder.js";
+
+describe("analyzerTokens", () => {
+  it("splits on anything outside [A-Za-z0-9] and lowercases, like the index analyzer", () => {
+    // `parse_config` indexes as two tokens: the underscore is a separator.
+    expect(analyzerTokens("parse_config(Path)")).toEqual(["parse", "config", "path"]);
+  });
+
+  it("dedupes repeated tokens", () => {
+    expect(analyzerTokens("a.a A")).toEqual(["a"]);
+  });
+
+  it("drops a run that touches non-ASCII text, as the analyzer does", () => {
+    expect(analyzerTokens("Süd ok")).toEqual(["ok"]);
+    // The non-ASCII character extends the run rather than splitting it, so
+    // the ASCII neighbours go with it.
+    expect(analyzerTokens("abcédef ghi")).toEqual(["ghi"]);
+  });
+
+  it("yields nothing for punctuation-only text", () => {
+    expect(analyzerTokens("->")).toEqual([]);
+    expect(analyzerTokens("")).toEqual([]);
+  });
+});
+
+describe("matchLines", () => {
+  const content = "let parse_config = 1;\nparse config\nPARSE_CONFIG";
+
+  it("cites 1-based lines offset from the chunk start and matches the literal, not its tokens", () => {
+    // Line 2 has both tokens but not the literal.
+    expect(matchLines(content, 10, "parse_config", false)).toEqual([{ line: 10, text: "let parse_config = 1;", at: 4 }]);
+  });
+
+  it("is case-sensitive unless asked otherwise", () => {
+    expect(matchLines(content, 10, "parse_config", true).map((m) => m.line)).toEqual([10, 12]);
+  });
+
+  it("strips a CRLF file's carriage return from the cited text", () => {
+    expect(matchLines("x = 1;\r\ny = 2;\r\n", 1, "y =", false)).toEqual([{ line: 2, text: "y = 2;", at: 0 }]);
+  });
+});
+
+describe("excerpt", () => {
+  it("returns a short line whole", () => {
+    expect(excerpt("let x = needle;", 8, 6)).toBe("let x = needle;");
+  });
+
+  it("windows a long line around the match and marks both cut ends", () => {
+    // A match past column 240 must still be in the cited text, or the hit
+    // reads as wrong. Some lead-in is kept so the excerpt shows what the match
+    // sits in, and both cuts are marked.
+    const line = "a".repeat(600) + "NEEDLE" + "b".repeat(300);
+    const out = excerpt(line, 600, "NEEDLE".length);
+    expect(out).toContain("NEEDLE");
+    expect(out.startsWith("...")).toBe(true);
+    expect(out.endsWith("...")).toBe(true);
+    expect(out.length).toBeLessThanOrEqual(240 + "......".length);
+    expect(out.indexOf("NEEDLE")).toBeGreaterThan("...".length);
+  });
+
+  it("marks only the end that was cut", () => {
+    const head = excerpt("NEEDLE" + "b".repeat(600), 0, 6);
+    expect(head.startsWith("NEEDLE")).toBe(true);
+    expect(head.endsWith("...")).toBe(true);
+    const tail = excerpt("a".repeat(600) + "NEEDLE", 600, 6);
+    expect(tail.startsWith("...")).toBe(true);
+    expect(tail.endsWith("NEEDLE")).toBe(true);
+  });
+});
 
 describe("guardSql", () => {
   it("accepts a single SELECT / WITH statement and strips the trailing semicolon", () => {

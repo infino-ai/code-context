@@ -8,7 +8,13 @@ import { query } from "@anthropic-ai/claude-agent-sdk";
 export const BENCH = dirname(fileURLToPath(import.meta.url));
 export const WORK = join(BENCH, ".work");
 export const RESULTS = join(WORK, "results");
-export const CX = resolve(BENCH, "..", "dist", "cli.js");
+/** The server build the MCP lanes run: this checkout's `dist/cli.js`, or
+ * `CX_BENCH_CLI` to point the same harness at another build (a variant of the
+ * tool surface in a sibling worktree), so lanes differ in the server alone. */
+export const CX = process.env.CX_BENCH_CLI ? resolve(process.env.CX_BENCH_CLI) : resolve(BENCH, "..", "dist", "cli.js");
+/** A label for the build under test, recorded on every result so runs from
+ * different variants can be told apart in one results file. */
+export const BUILD = process.env.CX_BENCH_BUILD ?? null;
 export const MODEL = process.env.BENCH_MODEL ?? "claude-sonnet-4-6";
 
 /** Lane options: identical hermetic base, only the toolset differs.
@@ -82,6 +88,8 @@ export async function runLane({ lane, prompt, system, repoDir, indexDir, maxTurn
   return {
     lane,
     model: MODEL,
+    build: BUILD,
+    cli: CX,
     tokens,
     usage: u,
     costUsd,
