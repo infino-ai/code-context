@@ -2,27 +2,27 @@
 // SPDX-FileCopyrightText: Copyright The Infino Authors
 //
 // The subagent tool's logic, without an MCP transport: how a sub_agent
-// response - the fact table - becomes the tool result (the statement, the
-// table's rows as hits and aggregate rows, the coverage; never anything the
-// model wrote), the no-table reporting, and what runRetrievalAgent sends.
-// No network.
+// response - the facts, the statement, the coverage - becomes the tool
+// result (hits and aggregate rows; never anything the model wrote), the
+// no-facts reporting, and what runRetrievalAgent sends. No network.
 
 import { describe, expect, it } from "vitest";
 import {
   runRetrievalAgent,
   retrievalAgentRunFrom,
-  tableOf,
+  factRowsOf,
   factsFrom,
   MAX_HITS,
   MAX_ROWS,
   HIT_CONTENT_CHARS,
   TERMINATE_ANSWERED,
+  TERMINATE_ESCALATED,
   type RetrievalAgentResult,
 } from "../src/core/retrieval-agent.js";
 
 // --- fixtures: the platform's response shape ---------------------------------------------
 
-/** A chunks-table row as a record, the shape factsFrom reads. */
+/** A chunks-table row as a record, the shape the facts carry. */
 const chunkRow = (i: number, content = `fn f${i}() {\n  body\n}`) => ({
   path: `src/f${i}.ts`,
   start_line: 10 * i + 1,
@@ -30,21 +30,23 @@ const chunkRow = (i: number, content = `fn f${i}() {\n  body\n}`) => ({
   content,
 });
 
-/** The statement the loop settled on, and its fact table as the platform
- * returns it: columns once, rows positional. */
+/** The query the loop validated, and its first rows as the platform returns
+ * them: one fact per row, the row a record. */
 const STATEMENT = "SELECT path, COUNT(*) AS n FROM token_match('chunks','content','compaction') GROUP BY path ORDER BY n DESC";
-const TABLE = { statement: STATEMENT, columns: ["path", "n"], rows: [["src/f1.ts", 7], ["src/f0.ts", 2]] };
+const FACTS = [{ table: "chunks", row: { path: "src/f1.ts", n: 7 } }, { table: "chunks", row: { path: "src/f0.ts", n: 2 } }];
 const COVERAGE = { rows_total: 2, rows_returned: 2, truncated: false };
 
 /** A complete `answered` response, as the platform returns it. */
 function answered(overrides: Record<string, unknown> = {}) {
   return {
-    table: TABLE,
+    facts: FACTS,
+    statement: STATEMENT,
     coverage: COVERAGE,
     terminate: "answered",
-    turns: 3,
-    answer_retries: 0,
-    bare_reply: false,
+    turns: 1,
+    retries: 0,
+    card_tier: "lean",
+    rung: 0,
     prompt_tokens: 1200,
     completion_tokens: 80,
     usage: [{ prompt_tokens: 400, completion_tokens: 30 }],
@@ -53,26 +55,22 @@ function answered(overrides: Record<string, unknown> = {}) {
   };
 }
 
-/** The same response with the loop ending short of a statement. */
+/** The same response with the loop finding no query. */
 const unanswered = (terminate: string, extra: Record<string, unknown> = {}) =>
-  answered({ table: null, coverage: { rows_total: 0, rows_returned: 0, truncated: false }, terminate, ...extra });
+  answered({ facts: [], statement: null, coverage: { rows_total: 0, rows_returned: 0, truncated: false }, terminate, ...extra });
 
-/** A table whose rows name places, with content. */
-const PLACES_TABLE = {
-  statement: "SELECT path, start_line, end_line, content FROM chunks WHERE path LIKE 'src/f%'",
-  columns: ["path", "start_line", "end_line", "content"],
-  rows: [
-    ["src/f0.ts", 1, 9, "fn f0() {\n  body\n}"],
-    ["src/f1.ts", 11, 19, "fn f1() {\n  body\n}"],
-  ],
-};
+/** Facts that name places, with content - what a search-shaped statement returns. */
+const PLACE_FACTS = [
+  { table: "chunks", row: chunkRow(0) },
+  { table: "chunks", row: chunkRow(1) },
+];
 
 const QUESTION = "which files mention compaction?";
 
 // --- retrievalAgentRunFrom ------------------------------------------------------------
 
 describe("retrievalAgentRunFrom", () => {
-  it("returns the statement, its coverage, and its rows as aggregate facts - and nothing the model wrote", () => {
+  it("returns the statement, its coverage, and the facts as aggregate rows - and nothing the model wrote", () => {
     const { result } = retrievalAgentRunFrom(QUESTION, answered());
     expect(result).toEqual({
       question: QUESTION,
@@ -85,15 +83,15 @@ describe("retrievalAgentRunFrom", () => {
       ],
       hitsTotal: 0,
       rowsTotal: 2,
-      turns: 3,
+      turns: 1,
     });
     expect(result.error).toBeUndefined();
     expect(Object.keys(result).sort()).toEqual(["coverage", "hits", "hitsTotal", "question", "rows", "rowsTotal", "sql", "turns"]);
   });
 
-  it("turns a table whose rows name places into hits with their content", () => {
-    const { result } = retrievalAgentRunFrom(QUESTION, answered({ table: PLACES_TABLE }));
-    expect(result.sql).toBe(PLACES_TABLE.statement);
+  it("turns facts that name places into hits with their content", () => {
+    const { result } = retrievalAgentRunFrom(QUESTION, answered({ facts: PLACE_FACTS, statement: "find('chunks', 'content', 'f0')" }));
+    expect(result.sql).toBe("find('chunks', 'content', 'f0')");
     expect(result.hits).toEqual([
       { path: "src/f0.ts", startLine: 1, endLine: 9, content: "fn f0() {\n  body\n}" },
       { path: "src/f1.ts", startLine: 11, endLine: 19, content: "fn f1() {\n  body\n}" },
@@ -106,39 +104,36 @@ describe("retrievalAgentRunFrom", () => {
     const { result, spend } = retrievalAgentRunFrom(QUESTION, answered({ transcript: [{ role: "system", content: "the whole system prompt" }] }));
     expect(spend).toEqual({ promptTokens: 1200, completionTokens: 80 });
     const asRecord = result as RetrievalAgentResult & Record<string, unknown>;
-    for (const dropped of ["table", "model", "prompt_tokens", "completion_tokens", "terminate", "transcript", "usage", "answer_retries", "bare_reply", "card_tier", "rung", "queries"]) {
+    for (const dropped of ["facts", "statement", "model", "prompt_tokens", "completion_tokens", "terminate", "transcript", "usage", "retries", "card_tier", "rung"]) {
       expect(asRecord[dropped]).toBeUndefined();
     }
     expect(JSON.stringify(result)).not.toContain("the whole system prompt");
   });
 
-  it("reports the platform's coverage when the statement's result was cut", () => {
-    const { result } = retrievalAgentRunFrom(QUESTION, answered({ coverage: { rows_total: 1500, rows_returned: 1000, truncated: true } }));
-    expect(result.coverage).toEqual({ rowsTotal: 1500, rowsReturned: 1000, truncated: true });
+  it("reports the platform's coverage when the query's result was cut", () => {
+    const { result } = retrievalAgentRunFrom(QUESTION, answered({ coverage: { rows_total: 100, rows_returned: 10, truncated: true } }));
+    expect(result.coverage).toEqual({ rowsTotal: 100, rowsReturned: 10, truncated: true });
   });
 
-  it("is ok (not an error) with no table and a reason when the loop hit its turn cap", () => {
-    const { result } = retrievalAgentRunFrom(QUESTION, unanswered("turn_cap", { turns: 4 }));
+  it("is ok (not an error) with no facts and the model's own account when the loop escalated", () => {
+    const { result } = retrievalAgentRunFrom(
+      QUESTION,
+      unanswered(TERMINATE_ESCALATED, { turns: 4, retries: 3, error: "the table has no column naming a WAL; the question may be about another repository" }),
+    );
     expect(result.sql).toBeUndefined();
-    expect(result.coverage).toBeUndefined();
     expect(result.hits).toEqual([]);
     expect(result.rows).toEqual([]);
     expect(result.turns).toBe(4);
-    expect(result.error).toMatch(/ran out of turns without settling on a statement/);
-    expect(result.error).toMatch(/use find or search/);
-  });
-
-  it("names the wall cap and carries the endpoint's own words on an error termination", () => {
-    expect(retrievalAgentRunFrom(QUESTION, unanswered("wall_cap")).result.error).toMatch(/ran out of time/);
-    const failed = retrievalAgentRunFrom(QUESTION, unanswered("error", { error: "401 from the model host" })).result;
-    expect(failed.error).toBe(
-      "the retrieval agent's model endpoint failed: 401 from the model host - ask again more narrowly, or use find or search",
+    expect(result.error).toBe(
+      "the retrieval agent found no query that answers this: the table has no column naming a WAL; the question may be about another repository - ask again more narrowly, or use find or search",
     );
   });
 
-  it("reports an answered loop that sent no table instead of inventing one", () => {
-    const { result } = retrievalAgentRunFrom(QUESTION, answered({ table: null }));
-    expect(result.error).toMatch(/reported a statement but sent no table/);
+  it("names the turn and wall caps, and carries the endpoint's words on an error termination", () => {
+    expect(retrievalAgentRunFrom(QUESTION, unanswered("turn_cap")).result.error).toMatch(/ran out of turns without a query/);
+    expect(retrievalAgentRunFrom(QUESTION, unanswered("wall_cap")).result.error).toMatch(/ran out of time/);
+    const failed = retrievalAgentRunFrom(QUESTION, unanswered("error", { error: "401 from the model host" })).result;
+    expect(failed.error).toBe("the retrieval agent's model endpoint failed: 401 from the model host - ask again more narrowly, or use find or search");
   });
 
   it("describes an unknown terminate value verbatim", () => {
@@ -159,34 +154,23 @@ describe("retrievalAgentRunFrom", () => {
     expect(spend.completionTokens).toBe(0);
   });
 
-  it("uses the terminate constant the platform serializes", () => {
+  it("uses the terminate constants the platform serializes", () => {
     expect(TERMINATE_ANSWERED).toBe("answered");
+    expect(TERMINATE_ESCALATED).toBe("escalated");
   });
 });
 
-// --- tableOf ----------------------------------------------------------------------------------
+// --- factRowsOf --------------------------------------------------------------------------------
 
-describe("tableOf", () => {
-  it("reads the statement and turns positional rows into records by column, in order", () => {
-    expect(tableOf(answered())).toEqual({
-      statement: STATEMENT,
-      rows: [
-        { path: "src/f1.ts", n: 7 },
-        { path: "src/f0.ts", n: 2 },
-      ],
-    });
-  });
-
-  it("keeps a null cell and skips a row that is not an array; a duplicate column name keeps the last cell", () => {
-    const table = { statement: "S", columns: ["name", "name", "k"], rows: [["a", "b", null], "garbage", ["c", "d", 1]] };
-    expect(tableOf({ table })).toEqual({ statement: "S", rows: [{ name: "b", k: null }, { name: "d", k: 1 }] });
-  });
-
-  it("is null without a table, or with a malformed one", () => {
-    expect(tableOf(unanswered("turn_cap"))).toBeNull();
-    expect(tableOf({ table: { statement: "S" } })).toBeNull();
-    expect(tableOf({ table: { columns: [], rows: [] } })).toBeNull();
-    expect(tableOf(null)).toBeNull();
+describe("factRowsOf", () => {
+  it("reads each fact's row and skips entries of another shape", () => {
+    expect(factRowsOf(answered())).toEqual([
+      { path: "src/f1.ts", n: 7 },
+      { path: "src/f0.ts", n: 2 },
+    ]);
+    expect(factRowsOf({ facts: [{ row: { a: 1 } }, { row: [1, 2] }, "garbage", null, { table: "t" }] })).toEqual([{ a: 1 }]);
+    expect(factRowsOf({ facts: null })).toEqual([]);
+    expect(factRowsOf(null)).toEqual([]);
   });
 });
 
@@ -222,9 +206,9 @@ describe("factsFrom", () => {
   });
 
   it("ignores rows with nothing scalar", () => {
-    const facts = factsFrom([{ embedding: [1, 2] }, null, "garbage", { _id: 12, text: "fn merge()", score: 1.5 }]);
+    const facts = factsFrom([{ embedding: [1, 2] }, null, "garbage", { _id: "12", text: "fn merge()", score: 1.5 }]);
     expect(facts.hits).toEqual([]);
-    expect(facts.rows).toEqual([{ _id: 12, text: "fn merge()", score: 1.5 }]);
+    expect(facts.rows).toEqual([{ _id: "12", text: "fn merge()", score: 1.5 }]);
   });
 
   it("dedupes hits by path and start_line, keeping the first appearance", () => {
@@ -261,7 +245,7 @@ describe("factsFrom", () => {
 // --- runRetrievalAgent ----------------------------------------------------------------------
 
 describe("runRetrievalAgent", () => {
-  it("asks sub_agent with the question and the budget only - no transcript - and returns the fact table", async () => {
+  it("asks sub_agent for MAX_HITS facts with the budget - no transcript - and returns them", async () => {
     const sent: unknown[] = [];
     const hosted = {
       subAgent: async (req: unknown) => {
@@ -270,7 +254,7 @@ describe("runRetrievalAgent", () => {
       },
     };
     const { result, spend } = await runRetrievalAgent(hosted, { question: "which files?" }, { maxTurns: 4, maxWallSecs: 90 });
-    expect(sent).toEqual([{ question: "which files?", max_turns: 4, max_wall_secs: 90 }]);
+    expect(sent).toEqual([{ question: "which files?", k: MAX_HITS, max_turns: 4, max_wall_secs: 90 }]);
     expect(result.question).toBe("which files?");
     expect(result.sql).toBe(STATEMENT);
     expect(result.rows).toEqual([

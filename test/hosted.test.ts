@@ -143,6 +143,24 @@ describe("request shapes", () => {
     expect(bodyJson(calls[0])).toEqual({ table_name: "chunks", field_name: "content", query: "fox bar", k: 5, mode: "and" });
   });
 
+  it("find posts the literal with its options to /v1/find and returns the body as it came", async () => {
+    const found = { total: 1, truncated: false, lines: [{ columns: { path: "a.rs", start_line: 3 }, line_index: 0, line: "x" }], groups_total: 1, groups: [{ value: "a.rs", lines: 1 }] };
+    const { db, calls } = client([json(found), json(found)]);
+    expect(await db.find("chunks", "content", "std::env::var", { ignoreCase: false, projection: ["path", "start_line"], groupBy: "path", limit: 500 })).toEqual(found);
+    expect(calls[0].url).toBe("https://api.example.test/v1/find/cx");
+    expect(bodyJson(calls[0])).toEqual({
+      table_name: "chunks",
+      field_name: "content",
+      literal: "std::env::var",
+      ignore_case: false,
+      projection: ["path", "start_line"],
+      group_by: "path",
+      limit: 500,
+    });
+    await db.find("chunks", "content", "x");
+    expect(bodyJson(calls[1])).toEqual({ table_name: "chunks", field_name: "content", literal: "x" });
+  });
+
   it("token_match posts {table_name, field_name, query, mode, projection} to /v1/token_match", async () => {
     const { db, calls } = client([json([{ _id: 1, path: "a.ts" }])]);
     const rows = await db.tokenMatch("chunks", "content", "parse config", { mode: "and", projection: ["path"] });
@@ -283,14 +301,16 @@ describe("request shapes", () => {
     expect(calls[0].body).toBeUndefined();
   });
 
-  it("sub_agent posts only the fields given and decodes the fact table", async () => {
+  it("sub_agent posts only the fields given and decodes the facts", async () => {
     const answer = {
-      table: { statement: "SELECT path, COUNT(*) AS n FROM chunks GROUP BY path", columns: ["path", "n"], rows: [["a.rs", 3]] },
+      facts: [{ row: { path: "a.rs", n: 3 } }],
+      statement: "SELECT path, COUNT(*) AS n FROM chunks GROUP BY path",
       coverage: { rows_total: 1, rows_returned: 1, truncated: false },
       terminate: "answered",
-      turns: 2,
-      answer_retries: 0,
-      bare_reply: false,
+      turns: 1,
+      retries: 0,
+      card_tier: "lean",
+      rung: 0,
       prompt_tokens: 10,
       completion_tokens: 2,
       usage: [],
@@ -300,8 +320,8 @@ describe("request shapes", () => {
     expect(await db.subAgent({ question: "how many?" })).toEqual(answer);
     expect(calls[0].url).toBe("https://api.example.test/v1/sub_agent/cx");
     expect(bodyJson(calls[0])).toEqual({ question: "how many?" });
-    await db.subAgent({ question: "q", max_turns: 3, max_wall_secs: 30, include_transcript: true });
-    expect(bodyJson(calls[1])).toEqual({ question: "q", max_turns: 3, max_wall_secs: 30, include_transcript: true });
+    await db.subAgent({ question: "q", k: 10, max_turns: 3, max_wall_secs: 30, include_transcript: true });
+    expect(bodyJson(calls[1])).toEqual({ question: "q", k: 10, max_turns: 3, max_wall_secs: 30, include_transcript: true });
     expect(calls[1].signal).toBeInstanceOf(AbortSignal);
   });
 

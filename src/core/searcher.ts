@@ -25,7 +25,7 @@ import { localDb, EMBEDDING_COLUMN, PLATFORM_EMBEDDER_PROVIDER, type IndexHandle
 import { TABLE, DEFAULT_SEARCH_K, DEFAULT_FIND_LIMIT, MAX_FIND_LIMIT } from "./config.js";
 import type { Embedder } from "./embedder.js";
 import type { Manifest } from "./manifest.js";
-import type { HostedDb } from "./hosted.js";
+import type { HostedDb, RowRecord } from "./hosted.js";
 import { analyzerOf, analyzerTokens, hasIndexableToken } from "./analyzer.js";
 
 // The analyzer mirror is re-exported from the door that uses it: `find`
@@ -271,9 +271,18 @@ const FIND_LINE_CAP = 240;
  * the excerpt shows what leads into the match rather than starting on it. */
 const FIND_EXCERPT_LEAD = 60;
 
-/** Columns a find reads: no `end_line` (each match cites its own line) and no
- * `score` (there is none - matches are unranked). */
+/** Columns a local find reads from its candidate chunks: no `end_line` (each
+ * match cites its own line) and no `score` (there is none - matches are
+ * unranked). */
 const FIND_PROJECTION = ["path", "start_line", "symbol", "content"];
+
+/** Columns a hosted find asks the platform to return beside each line: the
+ * ones that place it. The line itself comes back as the excerpt; `content`
+ * is never shipped. */
+const HOSTED_FIND_PROJECTION = ["path", "start_line", "symbol"];
+
+/** The column a hosted find's per-group counts are grouped by: lines per file. */
+const HOSTED_FIND_GROUP_BY = "path";
 
 /** The characters the engine's FTS query parser reads as grammar rather than
  * text: a `+` or `-` leading a whitespace-delimited run marks a must / must-not
@@ -347,11 +356,24 @@ export async function find(handle: IndexHandle, query: string, opts: FindOptions
   }
   const ignoreCase = opts.ignoreCase ?? false;
   const limit = Math.min(opts.limit ?? DEFAULT_FIND_LIMIT, MAX_FIND_LIMIT);
+  const partial = partialIndex(handle.manifest);
+
+  // Hosted: the platform's find does the whole job in the worker - the
+  // candidate token match, the per-line literal check, the excerpts, the cap
+  // and the per-file counts - so nothing but the matching lines crosses the
+  // wire. Local: the same steps, here, over the candidate chunks.
+  if (handle.hosted) {
+    const found = await handle.hosted.find(TABLE, CONTENT_COLUMN, query, {
+      ignoreCase,
+      projection: HOSTED_FIND_PROJECTION,
+      groupBy: HOSTED_FIND_GROUP_BY,
+      limit,
+    });
+    return { query, ignoreCase, ...hostedFindResult(found), ...(partial ? { partial } : {}) };
+  }
 
   const terms = plainTerms(query);
-  const candidates = handle.hosted
-    ? await handle.hosted.tokenMatch(TABLE, CONTENT_COLUMN, terms, { mode: "and", projection: FIND_PROJECTION })
-    : localDb(handle).openTable(TABLE).tokenMatch(CONTENT_COLUMN, terms, { mode: "and", projection: FIND_PROJECTION });
+  const candidates = localDb(handle).openTable(TABLE).tokenMatch(CONTENT_COLUMN, terms, { mode: "and", projection: FIND_PROJECTION });
 
   // Fixed-window chunks overlap, so one line can arrive in two chunks; key by path:line.
   const seen = new Set<string>();
@@ -380,7 +402,6 @@ export async function find(handle: IndexHandle, query: string, opts: FindOptions
     .map(([path, count]) => ({ path, count }))
     .sort((a, b) => b.count - a.count || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
 
-  const partial = partialIndex(handle.manifest);
   return {
     query,
     ignoreCase,
@@ -391,6 +412,42 @@ export async function find(handle: IndexHandle, query: string, opts: FindOptions
     ...(all.length > limit ? { truncated: true } : {}),
     ...(partial ? { partial } : {}),
   };
+}
+
+/** The platform's find response in the local result's shape. A line arrives
+ * with its projected columns and its index within the chunk's text, so its
+ * repo line is `start_line + line_index`; the per-group counts are complete
+ * (counted before the limit) and already ordered most lines first, and
+ * `groups_total` is the number of files whether or not the groups list was
+ * cut. A line whose placing columns are missing or malformed is dropped
+ * rather than cited wrongly. */
+export function hostedFindResult(found: RowRecord): Pick<FindResult, "matches" | "total" | "files" | "byFile" | "truncated"> {
+  const matches: FindMatch[] = [];
+  for (const raw of Array.isArray(found.lines) ? found.lines : []) {
+    const line = asRecord(raw);
+    const columns = asRecord(line.columns);
+    const path = columns.path;
+    const startLine = Number(columns.start_line);
+    const index = Number(line.line_index);
+    if (typeof path !== "string" || !Number.isFinite(startLine) || !Number.isFinite(index) || typeof line.line !== "string") continue;
+    const symbol = typeof columns.symbol === "string" && columns.symbol !== "" ? columns.symbol : undefined;
+    matches.push({ path, line: startLine + index, text: line.line, ...(symbol ? { symbol } : {}) });
+  }
+  const byFile: FindFileCount[] = [];
+  for (const raw of Array.isArray(found.groups) ? found.groups : []) {
+    const group = asRecord(raw);
+    const count = Number(group.lines);
+    if (typeof group.value !== "string" || !Number.isFinite(count)) continue;
+    byFile.push({ path: group.value, count });
+  }
+  const total = Number.isFinite(Number(found.total)) ? Number(found.total) : matches.length;
+  const files = Number.isFinite(Number(found.groups_total)) ? Number(found.groups_total) : byFile.length;
+  return { matches, total, files, byFile, ...(found.truncated === true ? { truncated: true } : {}) };
+}
+
+/** `value` as a record; anything else is empty. */
+function asRecord(value: unknown): RowRecord {
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as RowRecord) : {};
 }
 
 // --- sql --------------------------------------------------------------------

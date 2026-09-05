@@ -3,15 +3,15 @@
 //
 // The `subagent` tool, hosted mode only: one question or task handed to the
 // platform's retrieval loop (`POST /v1/sub_agent/{database}`), which answers
-// with a FACT TABLE - the statement it settled on and the rows the database
-// returned for it - and never with anything the model wrote. This file turns
-// that response into the tool result and nothing more: the statement, and
-// the table's rows - each that names a place in the code (path, start_line,
-// end_line) as a search-shaped hit with whatever content the statement
-// selected, the rest as aggregate rows (counts, rankings) - with the
-// platform's coverage of the result. The loop's transcript is its own
-// business and is never requested. The loop's spend (turns, tokens) travels
-// beside the result to the usage ledger.
+// with FACTS - the first k rows of the query that validated, and that query
+// verbatim - and never with anything the model wrote. This file turns that
+// response into the tool result and nothing more: the statement, and the
+// fact rows - each that names a place in the code (path, start_line,
+// end_line) as a search-shaped hit with whatever content the query selected,
+// the rest as aggregate rows (counts, rankings) - with the platform's
+// coverage of the result. The loop's transcript is its own business and is
+// never requested. The loop's spend (turns, tokens) travels beside the
+// result to the usage ledger.
 
 import type { HostedDb, RowRecord } from "./hosted.js";
 import { DEFAULT_SEARCH_K } from "./config.js";
@@ -32,9 +32,13 @@ export const MAX_ROWS = 50;
  * subagent hit reads exactly like a search hit. */
 export const HIT_CONTENT_CHARS = 4000;
 
-/** The platform's `terminate` value for a loop that submitted an accepted
- * statement (serialized snake_case). */
+/** The platform's `terminate` value for a loop whose query validated
+ * (serialized snake_case). */
 export const TERMINATE_ANSWERED = "answered";
+
+/** The platform's `terminate` value for a loop that tried its attempts and
+ * validated no query; `error` then carries the model's account of why. */
+export const TERMINATE_ESCALATED = "escalated";
 
 /** The row columns a hit is built from: the chunks table's path and line
  * range, its text, and the two descriptors search hits also carry. */
@@ -45,15 +49,16 @@ const COL_CONTENT = "content";
 const COL_SYMBOL = "symbol";
 const COL_LANG = "lang";
 
-/** Why a loop ended without a statement, in the outer agent's terms: each
- * maps a platform `terminate` value to the reason. */
+/** Why a loop ended without facts, in the outer agent's terms: each maps a
+ * platform `terminate` value to the reason. */
 const NO_ANSWER_REASONS: Record<string, string> = {
-  turn_cap: "the retrieval agent ran out of turns without settling on a statement",
-  wall_cap: "the retrieval agent ran out of time without settling on a statement",
+  [TERMINATE_ESCALATED]: "the retrieval agent found no query that answers this",
+  turn_cap: "the retrieval agent ran out of turns without a query that answers this",
+  wall_cap: "the retrieval agent ran out of time without a query that answers this",
   error: "the retrieval agent's model endpoint failed",
 };
 
-/** What the outer agent is told when there is no table. */
+/** What the outer agent is told when there are no facts. */
 const NO_ANSWER_HINT = "ask again more narrowly, or use find or search";
 
 export interface RetrievalAgentRequest {
@@ -79,32 +84,34 @@ export interface RetrievalAgentHit {
   lang?: string;
 }
 
-/** How much of the statement's result the platform returned: the table is
- * bounded server-side, and a caller wanting the rest runs the statement
- * again with LIMIT/OFFSET. */
+/** How much of the query's result the platform returned: `facts` holds the
+ * first k rows, and a caller wanting the rest runs the statement again with
+ * LIMIT/OFFSET. */
 export interface RetrievalAgentCoverage {
   rowsTotal: number;
   rowsReturned: number;
   truncated: boolean;
 }
 
-/** What the `subagent` tool returns to the outer agent: the fact table. */
+/** What the `subagent` tool returns to the outer agent: the facts. */
 export interface RetrievalAgentResult {
   question: string;
-  /** The statement whose rows answer the question, when the loop settled on one. */
+  /** The query whose rows are the facts, verbatim (SQL, or a `find(...)`), when one validated. */
   sql?: string;
-  /** How much of the statement's result the platform returned; absent with no statement. */
+  /** How much of the query's result the platform returned. */
   coverage?: RetrievalAgentCoverage;
-  /** The table's rows that name a place in the code, one per path:start_line, the first MAX_HITS. */
+  /** The facts that name a place in the code, one per path:start_line, the first MAX_HITS. */
   hits: RetrievalAgentHit[];
-  /** The table's other rows - aggregates such as a count or a rank per path -
-   * with their scalar columns as returned; the first MAX_ROWS. */
+  /** The other facts - aggregates such as a count or a rank per path, or rows
+   * without the place columns - with their scalar columns as returned; the
+   * first MAX_ROWS. */
   rows: RowRecord[];
-  /** Distinct hits and rows in the table before the caps. */
+  /** Distinct hits and rows among the facts before the caps. */
   hitsTotal: number;
   rowsTotal: number;
   turns: number;
-  /** Present when the loop did not settle on a statement: why. */
+  /** Present when the loop found no query that answers: why, in the platform's
+   * words (on `escalated`, the model's own account of the problem). */
   error?: string;
 }
 
@@ -130,9 +137,10 @@ export interface Facts {
 }
 
 /** Hand the platform's retrieval loop one question over the hosted database
- * and return its fact table. Retryable platform states are handled inside
- * the client; a terminal failure (no agent configured, bad key) surfaces as
- * its error. */
+ * and return its facts. `k` asks for as many facts as a search returns by
+ * default; the loop's own searches fetch more than that before validating.
+ * Retryable platform states are handled inside the client; a terminal
+ * failure (no agent configured, bad key) surfaces as its error. */
 export async function runRetrievalAgent(
   hosted: Pick<HostedDb, "subAgent">,
   request: RetrievalAgentRequest,
@@ -140,29 +148,25 @@ export async function runRetrievalAgent(
 ): Promise<RetrievalAgentRun> {
   const response = await hosted.subAgent({
     question: request.question,
+    k: MAX_HITS,
     max_turns: budget.maxTurns,
     max_wall_secs: budget.maxWallSecs,
   });
   return retrievalAgentRunFrom(request.question, response);
 }
 
-/** The fact table of a response, when the loop settled on a statement: the
- * statement and its rows as records (the platform sends columns and
- * positional rows). Null when `table` is null or malformed. */
-export function tableOf(response: unknown): { statement: string; rows: RowRecord[] } | null {
-  const table = asRecord(asRecord(response).table);
-  if (typeof table.statement !== "string" || !Array.isArray(table.columns) || !Array.isArray(table.rows)) return null;
-  const columns = table.columns.map((c) => String(c));
+/** The fact rows of a response: each entry of `facts` carries its row as a
+ * record (and the table it came from, which the hits do not need). An entry
+ * of another shape contributes nothing. */
+export function factRowsOf(response: unknown): RowRecord[] {
+  const facts = asRecord(response).facts;
+  if (!Array.isArray(facts)) return [];
   const rows: RowRecord[] = [];
-  for (const raw of table.rows) {
-    if (!Array.isArray(raw)) continue;
-    const row: RowRecord = {};
-    columns.forEach((name, i) => {
-      row[name] = raw[i];
-    });
-    rows.push(row);
+  for (const raw of facts) {
+    const row = asRecord(raw).row;
+    if (typeof row === "object" && row !== null && !Array.isArray(row)) rows.push(row as RowRecord);
   }
-  return { statement: table.statement, rows };
+  return rows;
 }
 
 /** The response's coverage of the statement's result, when it carries one. */
@@ -172,9 +176,9 @@ function coverageOf(response: unknown): RetrievalAgentCoverage | undefined {
   return { rowsTotal: c.rows_total, rowsReturned: c.rows_returned, truncated: c.truncated === true };
 }
 
-/** The run for one platform response. A loop that ended without a statement
- * is still a result, not a tool error: `error` says why, and the outer agent
- * decides what to do next. A body that is not an agent response at all (no
+/** The run for one platform response. A loop that found no query is still a
+ * result, not a tool error: `error` says why, and the outer agent decides
+ * what to do next. A body that is not an agent response at all (no
  * `terminate`) is the one thing that throws. */
 export function retrievalAgentRunFrom(question: string, response: unknown): RetrievalAgentRun {
   const body = asRecord(response);
@@ -182,16 +186,16 @@ export function retrievalAgentRunFrom(question: string, response: unknown): Retr
     throw new Error("subagent: the platform's response is not an agent result (no `terminate` field)");
   }
   const terminate = body.terminate;
-  const table = tableOf(body);
-  const coverage = table ? coverageOf(body) : undefined;
+  const statement = typeof body.statement === "string" && body.statement.length > 0 ? body.statement : undefined;
+  const coverage = coverageOf(body);
   const result: RetrievalAgentResult = {
     question,
-    ...(table ? { sql: table.statement } : {}),
+    ...(statement ? { sql: statement } : {}),
     ...(coverage ? { coverage } : {}),
-    ...factsFrom(table?.rows ?? []),
+    ...factsFrom(factRowsOf(body)),
     turns: numberField(body.turns),
   };
-  if (terminate !== TERMINATE_ANSWERED || !table) result.error = `${noAnswerMessage(terminate, body.error)} - ${NO_ANSWER_HINT}`;
+  if (terminate !== TERMINATE_ANSWERED) result.error = `${noAnswerMessage(terminate, body.error)} - ${NO_ANSWER_HINT}`;
   const spend: RetrievalAgentSpend = {
     promptTokens: numberField(body.prompt_tokens),
     completionTokens: numberField(body.completion_tokens),
@@ -199,23 +203,20 @@ export function retrievalAgentRunFrom(question: string, response: unknown): Retr
   return { result, spend };
 }
 
-/** Why there is no table: the platform's reason for the way the loop ended
- * and, when the endpoint itself failed, its words. An `answered` loop
- * without a table is reported as such rather than invented. */
+/** Why there are no facts: the platform's reason for the way the loop ended
+ * and its words when it has them - the model's own account on `escalated`,
+ * the endpoint's failure on `error`. */
 function noAnswerMessage(terminate: string, detail: unknown): string {
-  const reason =
-    terminate === TERMINATE_ANSWERED
-      ? "the retrieval agent reported a statement but sent no table"
-      : (NO_ANSWER_REASONS[terminate] ?? `the retrieval agent ended with "${terminate}"`);
+  const reason = NO_ANSWER_REASONS[terminate] ?? `the retrieval agent ended with "${terminate}"`;
   const words = typeof detail === "string" && detail.length > 0 ? `: ${detail}` : "";
   return `${reason}${words}`;
 }
 
-/** The facts in the table's rows, in order: every row that names a place in
- * the code (path + start_line + end_line) becomes a hit with its content,
- * one per path:start_line; every other row with a scalar column becomes an
- * aggregate row, one per distinct set of scalar cells. Both lists are
- * capped, and the totals count what was seen. */
+/** The fact rows split, in order: every row that names a place in the code
+ * (path + start_line + end_line) becomes a hit with its content, one per
+ * path:start_line; every other row with a scalar column becomes an aggregate
+ * row, one per distinct set of scalar cells. Both lists are capped, and the
+ * totals count what was seen. */
 export function factsFrom(rows: unknown[]): Facts {
   const hits: RetrievalAgentHit[] = [];
   const aggregates: RowRecord[] = [];

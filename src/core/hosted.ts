@@ -417,6 +417,29 @@ export class HostedDb {
     return this.rows(await this.postJson("hybrid_search", body, true), "hybrid_search");
   }
 
+  /** `POST /v1/find/{db}`: the lines of an indexed text column that contain
+   * `literal`, at line grain - grep -n over the table, done in the worker.
+   * The platform takes the literal as typed (its own grammar characters read
+   * as punctuation), refuses one with no searchable token or with a newline
+   * (400), and answers `{total, truncated, lines: [{columns, line_index,
+   * line}], groups_total, groups: [{value, lines}]}`: the first `limit` lines
+   * with the projected columns and their index within the row's text, each
+   * cut to an excerpt around the literal, and the complete per-group counts
+   * when `groupBy` names a column. */
+  async find(
+    table: string,
+    column: string,
+    literal: string,
+    opts: { ignoreCase?: boolean; projection?: string[]; groupBy?: string; limit?: number } = {},
+  ): Promise<RowRecord> {
+    const body: RowRecord = { table_name: table, field_name: column, literal };
+    if (opts.ignoreCase !== undefined) body.ignore_case = opts.ignoreCase;
+    if (opts.projection !== undefined) body.projection = opts.projection;
+    if (opts.groupBy !== undefined) body.group_by = opts.groupBy;
+    if (opts.limit !== undefined) body.limit = opts.limit;
+    return this.parseJson(await this.postJson("find", body, true), "find") as RowRecord;
+  }
+
   /** Unranked: every row whose indexed `column` holds the query's tokens. The
    * raw query string goes as-is; the platform tokenizes it with the index's
    * own analyzer, so no client-side pre-tokenizing is needed. */
@@ -439,17 +462,19 @@ export class HostedDb {
   // --- sub_agent ---
 
   /** `POST /v1/sub_agent/{db}`: the platform's retrieval loop. It answers
-   * with a fact table - the statement the loop settled on, its columns, and
-   * the rows the database returned for it, positional - with `coverage`
-   * saying how much of the result that is, and the loop's accounting. A loop
-   * that did not finish still answers 200 with `terminate` saying how and
-   * `table` null. The per-call timeout is the request's own `max_wall_secs`
-   * plus a margin for the answer to travel; with no `max_wall_secs` the
-   * server's cap applies and the client's general timeout is all it can go
-   * on. A retryable 503 is retried like any other op; 501 (no agent
-   * configured) is terminal. */
+   * with facts - `facts`, the first `k` rows of the query that validated,
+   * each `{table?, row}`; `statement`, that query verbatim; `coverage`, how
+   * many rows the query returned against how many are in `facts` - and the
+   * loop's accounting; never anything the model wrote. A loop that found no
+   * query still answers 200 with `terminate` saying how (`escalated` carries
+   * the model's account of the problem in `error`). The per-call timeout is
+   * the request's own `max_wall_secs` plus a margin for the answer to
+   * travel; with no `max_wall_secs` the server's cap applies and the
+   * client's general timeout is all it can go on. A retryable 503 is retried
+   * like any other op; 501 (no agent configured) is terminal. */
   async subAgent(req: {
     question: string;
+    k?: number;
     max_turns?: number;
     max_wall_secs?: number;
     include_transcript?: boolean;
@@ -457,6 +482,7 @@ export class HostedDb {
     // Only the fields given are sent: the request type rejects unknown keys and
     // defaults the rest itself.
     const body: RowRecord = { question: req.question };
+    if (req.k !== undefined) body.k = req.k;
     if (req.max_turns !== undefined) body.max_turns = req.max_turns;
     if (req.max_wall_secs !== undefined) body.max_wall_secs = req.max_wall_secs;
     if (req.include_transcript !== undefined) body.include_transcript = req.include_transcript;

@@ -114,7 +114,9 @@ const SEARCH_HITS = [
 ];
 
 const PROJECTION = ["path", "start_line", "end_line", "lang", "symbol", "content", "score"];
-const FIND_PROJECTION = ["path", "start_line", "symbol", "content"];
+/** What a hosted find asks the platform to return beside each line: the
+ * placing columns only; the line itself comes back as the excerpt. */
+const FIND_PROJECTION = ["path", "start_line", "symbol"];
 
 // --- search --------------------------------------------------------------------------
 
@@ -204,28 +206,40 @@ describe("search (hosted)", () => {
 
 // --- find ----------------------------------------------------------------------------
 
-const FIND_ROWS = [
-  { _id: 1, path: "src/a.ts", start_line: 1, symbol: "parseConfig", content: "export function parseConfig(p) {\n  return parse_config(p);\n}" },
-  // An overlapping window that repeats the line - reported once.
-  { _id: 2, path: "src/a.ts", start_line: 2, symbol: "", content: "  return parse_config(p);\n}\nconst other = 1;" },
-  { _id: 3, path: "lib/b.ts", start_line: 40, symbol: "", content: "parse config\nparse_config()" },
-];
+/** The platform's find response: lines with their placing columns and index
+ * within the chunk, complete per-file counts, totals. lib/b.ts's line sits
+ * at index 1 of a chunk starting at 40; src/a.ts's at index 1 of one
+ * starting at 1. */
+const FIND_RESPONSE = {
+  total: 2,
+  truncated: false,
+  lines: [
+    { columns: { path: "lib/b.ts", start_line: 40, symbol: "" }, line_index: 1, line: "parse_config()" },
+    { columns: { path: "src/a.ts", start_line: 1, symbol: "parseConfig" }, line_index: 1, line: "  return parse_config(p);" },
+  ],
+  groups_total: 2,
+  groups: [
+    { value: "lib/b.ts", lines: 1 },
+    { value: "src/a.ts", lines: 1 },
+  ],
+};
 
 describe("find (hosted)", () => {
-  it("sends the query text to token_match under mode and, and verifies the literal client-side", async () => {
-    const { handle, calls } = hostedHandle(PLATFORM_MANIFEST, [{ body: FIND_ROWS }]);
+  it("asks the platform's find for the placing columns and per-file counts, and maps its lines to matches", async () => {
+    const { handle, calls } = hostedHandle(PLATFORM_MANIFEST, [{ body: FIND_RESPONSE }]);
     const result = await find(handle, "parse_config");
     expect(calls).toHaveLength(1);
-    expect(calls[0].op).toBe("token_match");
+    expect(calls[0].op).toBe("find");
     expect(calls[0].body).toEqual({
       table_name: "chunks",
       field_name: "content",
-      query: "parse_config",
-      mode: "and",
+      literal: "parse_config",
+      ignore_case: false,
       projection: FIND_PROJECTION,
+      group_by: "path",
+      limit: 500,
     });
-    // The literal check runs on the returned chunks: "parse config" on lib/b.ts:40
-    // has the tokens but not the literal; src/a.ts:2 arrives in two chunks.
+    // The repo line is start_line + line_index; an empty symbol is dropped.
     expect(result).toEqual({
       query: "parse_config",
       ignoreCase: false,
@@ -242,14 +256,35 @@ describe("find (hosted)", () => {
     });
   });
 
-  it("blanks the engine's query grammar but otherwise sends the text as typed", async () => {
-    const { handle, calls } = hostedHandle(PLATFORM_MANIFEST, [{ body: [] }, { body: [] }]);
+  it("sends the literal as typed - the platform reads its own grammar characters as punctuation", async () => {
+    const empty = { total: 0, truncated: false, lines: [], groups_total: 0, groups: [] };
+    const { handle, calls } = hostedHandle(PLATFORM_MANIFEST, [{ body: empty }, { body: empty }]);
     await find(handle, "git -C repo");
-    expect(calls[0].body).toMatchObject({ query: "git  C repo" });
+    expect(calls[0].body).toMatchObject({ literal: "git -C repo" });
     await find(handle, "Süd ok");
-    // Under the table's standard analyzer a non-ASCII word is indexable; the
-    // raw text goes to the platform, which tokenizes it with the index.
-    expect(calls[1].body).toMatchObject({ query: "Süd ok" });
+    // Under the table's standard analyzer a non-ASCII word is indexable.
+    expect(calls[1].body).toMatchObject({ literal: "Süd ok" });
+  });
+
+  it("keeps the platform's totals when its lists were cut, and drops a line it cannot place", async () => {
+    const cut = {
+      total: 900,
+      truncated: true,
+      lines: [
+        { columns: { path: "a.rs", start_line: 10, symbol: "" }, line_index: 3, line: "x" },
+        { columns: { start_line: 10 }, line_index: 0, line: "no path" },
+        { columns: { path: "b.rs", start_line: "not a number" }, line_index: 0, line: "bad start" },
+      ],
+      groups_total: 700,
+      groups: [{ value: "a.rs", lines: 12 }, { value: 7, lines: 1 }],
+    };
+    const { handle } = hostedHandle(PLATFORM_MANIFEST, [{ body: cut }]);
+    const result = await find(handle, "x", { limit: 1 });
+    expect(result.matches).toEqual([{ path: "a.rs", line: 13, text: "x" }]);
+    expect(result.total).toBe(900);
+    expect(result.files).toBe(700);
+    expect(result.byFile).toEqual([{ path: "a.rs", count: 12 }]);
+    expect(result.truncated).toBe(true);
   });
 
   it("rejects what the table's analyzer cannot look up before any request", async () => {
@@ -264,13 +299,21 @@ describe("find (hosted)", () => {
     expect(ascii.calls).toHaveLength(0);
   });
 
-  it("caps matches at the limit and keeps the whole total, like the local path", async () => {
-    const { handle } = hostedHandle(PLATFORM_MANIFEST, [{ body: FIND_ROWS }]);
+  it("passes the limit and ignoreCase to the platform and reports them back", async () => {
+    const { handle, calls } = hostedHandle(PLATFORM_MANIFEST, [{ body: { ...FIND_RESPONSE, truncated: true, lines: FIND_RESPONSE.lines.slice(0, 1) } }]);
     const result = await find(handle, "parse_config", { limit: 1, ignoreCase: true });
+    expect(calls[0].body).toMatchObject({ limit: 1, ignore_case: true });
     expect(result.matches).toHaveLength(1);
     expect(result.total).toBe(2);
     expect(result.truncated).toBe(true);
     expect(result.ignoreCase).toBe(true);
+  });
+
+  it("carries the partial-index marker like the local path", async () => {
+    const partial: Manifest = { ...PLATFORM_MANIFEST, truncatedFiles: 3, maxFiles: 10 };
+    const { handle } = hostedHandle(partial, [{ body: FIND_RESPONSE }]);
+    const result = await find(handle, "parse_config");
+    expect(result.partial).toMatchObject({ filesSkipped: 3, fileCap: 10 });
   });
 });
 
