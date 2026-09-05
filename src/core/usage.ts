@@ -64,6 +64,10 @@ export interface UsageEntry {
   agentModelTokens?: number;
   /** subagent only: whether the platform ranked the facts against the question. */
   agentRanked?: boolean;
+  /** explore only: whether the exploration came back with a written answer
+   * (false when it ended on a cap or escalated and returned only what it had
+   * read), so a run's empty explorations can be counted from the ledger. */
+  agentAnswered?: boolean;
   /** subagent and explore: what the platform call behind this entry cost on
    * the wire - the round trip of the answering request and the read/write
    * tokens the platform metered (from its response headers, when present).
@@ -156,6 +160,7 @@ export function exploreEntry(result: ExploreResult, spend: RetrievalAgentSpend):
   const entry = subagentEntry(result, spend);
   entry.tool = "explore";
   entry.returnedTokens = estTokens(jsonify({ answer: result.answer, chain: result.chain, sql: result.sql, hits: result.hits, rows: result.rows }));
+  entry.agentAnswered = result.answer !== undefined;
   return entry;
 }
 

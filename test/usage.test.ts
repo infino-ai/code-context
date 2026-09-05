@@ -230,6 +230,13 @@ describe("explore receipt", () => {
     const line = formatReceipt(exploreEntry(explored, spend));
     expect(line).toMatch(/^returned ~\d+ tokens \| 1 hit \/ 0 rows \| 6 turns \| 40\.9k model tokens$/);
   });
+
+  it("records whether the exploration came back with an answer, so empty ones can be counted", () => {
+    expect(exploreEntry(explored, spend).agentAnswered).toBe(true);
+    const { answer: _none, ...unanswered } = explored;
+    expect(exploreEntry({ ...unanswered, error: "the retrieval agent ran out of turns" }, spend).agentAnswered).toBe(false);
+    expect(subagentEntry(explored, spend)).not.toHaveProperty("agentAnswered");
+  });
 });
 
 describe("withPlatform (hosted telemetry on the ledger entry)", () => {
