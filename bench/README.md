@@ -179,16 +179,29 @@ once per lane to put one lane's run next to another's.
 node compare-builds.mjs "" V0,V3          # per set: tokens, cost, calls, cx ms, first tool; CX_MD=1 for markdown, CX_DETAIL=1 per question
 node compare-builds.mjs "" V3 hosted      # the same table for the hosted lane's rows
 node cite-check.mjs /path/to/repo "" V0,V3  # every cited path:line exists, is in bounds, and names an identifier found nearby
-node judge.mjs /path/to/repo V0 V3          # blind pairwise judge (claude-opus-5, Read/Grep/Glob on the repo) -> .work/results/judge.jsonl
+node judge.mjs /path/to/repo V0 V3          # blind pairwise judge (claude-opus-5; Read/Grep/Glob on the repo, find/sql on its index) -> .work/results/judge.jsonl
 node judge.mjs /path/to/repo V3 V3 "" "" hosted   # judge the hosted lane's rows (verdicts record `lane`)
-node judge-report.mjs                       # wins, ties, unsupported claims and confidence per set for each judged pair
+node judge-report.mjs                       # wins, ties, unsupported claims and confidence per set for each judged pair and rule
 ```
 
 The `cx ms` column is the sum over questions of the median `cxTookMs`; rows
 from before it was recorded count as 0. The judge sees both answers in random
 order and returns a winner, a confidence, and how many claims each answer
-makes that the code does not support; `JUDGE_LIMIT=n` caps the pairs for a
-smoke run. Judging costs about a quarter of a dollar per pair.
+makes that the repository does not support; `JUDGE_LIMIT=n` caps the pairs
+for a smoke run. Judging costs about a quarter of a dollar per pair.
+
+The judge verifies each claim at the grain the answer states, with the tool
+that measures that grain: Read, Grep and Glob on the checkout for code, lines
+and occurrences, and code-context's `find` and `sql` on the repository's own
+index (the same local index the lanes ran on - `CX_INDEX_DIR`, else
+`<repo>/.infino`; the server starts without `--db`, so no verification spends
+a platform call) for the hit and chunk counts an answer built on the index
+reports. A count that reproduces at its stated grain is supported whichever
+tool that takes; one that reproduces at no grain is not. Each verdict records
+the rule it was judged under (`rule`, currently `grain`) and the tools the
+judge called (`tools`); `judge-report.mjs` keeps verdicts from before the rule
+existed (the checkout's tools alone) as their own comparison, since the rule
+is part of the instrument.
 
 ## Caveats to state in any report that includes the platform tools
 

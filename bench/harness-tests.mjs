@@ -14,6 +14,8 @@ import {
   LANES,
   laneDef,
   laneOptions,
+  cxServer,
+  mcpEnvBase,
   checkLaneEnv,
   dbHost,
   hostedFlags,
@@ -69,6 +71,20 @@ test("the lane table names exactly the eleven lanes and an unknown lane throws",
   ]);
   assert.throws(() => laneDef("cobmo"), /unknown lane "cobmo"/);
   assert.throws(() => laneOptions("cobmo", "/r", "/r/.infino"), /unknown lane/);
+});
+
+test("cxServer is the one server block: the judge's local server is the combo lane's, with no --db", () => {
+  const judge = cxServer(mcpEnvBase("/r", "/r/.infino-hosted"));
+  const server = judge["code-context"];
+  assert.deepEqual(server.args.slice(1), ["mcp"]);
+  assert.equal(server.args.includes("--db"), false);
+  assert.equal(server.alwaysLoad, true);
+  assert.equal(server.env.CX_ROOT, "/r");
+  assert.equal(server.env.CX_INDEX_DIR, "/r/.infino-hosted");
+  assert.equal(server.env.CX_AUTO_SYNC, "0");
+  assert.deepEqual(laneOptions("combo", "/r", "/r/.infino-hosted").mcpServers, judge);
+  const flagged = cxServer(mcpEnvBase("/r", "/r/.infino"), ["--db", FAKE_URL])["code-context"];
+  assert.deepEqual(flagged.args.slice(1), ["mcp", "--db", FAKE_URL]);
 });
 
 test("files has the stock tools and no server; cx has Read only", () => {

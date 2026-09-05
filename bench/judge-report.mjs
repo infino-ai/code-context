@@ -1,17 +1,22 @@
 // Summarize the judge's verdicts (bench/.work/results/judge.jsonl) per
-// baseline/candidate pair and category: pairs, wins each way, ties, the
-// unsupported-claim totals, and the median confidence. A pair judged more than
-// once (a smoke run before the full one) counts its latest verdict only.
+// baseline/candidate pair, verification rule and category: pairs, wins each
+// way, ties, the unsupported-claim totals, and the median confidence. A pair
+// judged more than once under one rule (a smoke run before the full one)
+// counts its latest verdict only; the same pair judged under two rules is two
+// comparisons, since the rule is part of the instrument.
 // Usage: node judge-report.mjs [judge.jsonl]
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { RESULTS } from "./lanes.mjs";
 
 const file = process.argv[2] ? resolve(process.argv[2]) : join(RESULTS, "judge.jsonl");
+/** The rule verdicts recorded none under: the checkout's tools alone. */
+const RULE_BEFORE_RULES = "checkout";
+const ruleOf = (v) => v.rule ?? RULE_BEFORE_RULES;
 const latest = new Map();
 for (const line of readFileSync(file, "utf8").split("\n").filter(Boolean)) {
   const v = JSON.parse(line);
-  latest.set(`${v.baseline} ${v.candidate} ${v.cat} ${v.q} ${v.rep}`, v);
+  latest.set(`${v.baseline} ${v.candidate} ${ruleOf(v)} ${v.cat} ${v.q} ${v.rep}`, v);
 }
 const verdicts = [...latest.values()];
 
@@ -22,12 +27,12 @@ const median = (xs) => {
 };
 const label = (spec) => (spec.includes("..") ? "V0" : spec);
 
-const comparisons = [...new Set(verdicts.map((v) => `${v.baseline}\t${v.candidate}`))];
+const comparisons = [...new Set(verdicts.map((v) => `${v.baseline}\t${v.candidate}\t${ruleOf(v)}`))];
 for (const cmp of comparisons) {
-  const [baseline, candidate] = cmp.split("\t");
-  const vs = verdicts.filter((v) => v.baseline === baseline && v.candidate === candidate);
+  const [baseline, candidate, rule] = cmp.split("\t");
+  const vs = verdicts.filter((v) => v.baseline === baseline && v.candidate === candidate && ruleOf(v) === rule);
   const failed = vs.filter((v) => !v.winner).length;
-  console.log(`${label(baseline)} vs ${label(candidate)}  judge=${vs[0]?.judge}  pairs=${vs.length}${failed ? `  no verdict: ${failed}` : ""}  cost $${vs.reduce((a, v) => a + (v.costUsd ?? 0), 0).toFixed(2)}`);
+  console.log(`${label(baseline)} vs ${label(candidate)}  judge=${vs[0]?.judge}  rule=${rule}  pairs=${vs.length}${failed ? `  no verdict: ${failed}` : ""}  cost $${vs.reduce((a, v) => a + (v.costUsd ?? 0), 0).toFixed(2)}`);
   console.log(`category        pairs  ${label(baseline).padStart(8)}  ${label(candidate).padStart(9)}  ties  unsupported ${label(baseline)} / ${label(candidate)}  conf(med)`);
   const cats = [...new Set(vs.map((v) => v.cat))];
   for (const cat of [...cats, "all"]) {

@@ -1,8 +1,18 @@
 // Blind pairwise judge over two builds' answers in a results file: for every
-// question and repeat, a stronger model with Read/Grep/Glob on the repo sees
-// both answers in random order, checks their claims against the code, and
-// returns a winner, a confidence, and how many claims each answer makes that
-// the code does not support. Verdicts append to bench/.work/results/judge.jsonl.
+// question and repeat, a stronger model sees both answers in random order,
+// checks their claims against the repository, and returns a winner, a
+// confidence, and how many claims each answer makes that the repository does
+// not support. Verdicts append to bench/.work/results/judge.jsonl.
+//
+// The judge verifies each claim at the grain the answer states, with the tool
+// that measures that grain: Read/Grep/Glob on the checkout for code, lines and
+// occurrences; code-context's find and sql on the repository's own index (the
+// same local index the lanes ran on, CX_INDEX_DIR or <repo>/.infino) for the
+// hit and chunk counts an answer built on the index reports. A count that
+// reproduces at its stated grain is supported whichever tool that takes; one
+// that reproduces at no grain is not. Every verdict records the rule it was
+// judged under (`rule`), so verdicts from before the index tools were given
+// to the judge (no `rule`) never tally with these.
 //
 // Usage: node judge.mjs <repoDir> <baseline> <candidate> [results=questions.jsonl] [cats] [lane=combo]
 //   baseline / candidate  build labels as recorded on the rows (`build`), or a
@@ -18,7 +28,7 @@
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { query } from "@anthropic-ai/claude-agent-sdk";
-import { RESULTS, record, laneDef } from "./lanes.mjs";
+import { RESULTS, record, laneDef, cxServer, mcpEnvBase, foldToolMessage, newToolAccounting } from "./lanes.mjs";
 
 const [repoArg, baselineArg, candidateArg, resultsArg, catsArg, laneArg] = process.argv.slice(2);
 if (!repoArg || !baselineArg || !candidateArg) {
@@ -26,6 +36,14 @@ if (!repoArg || !baselineArg || !candidateArg) {
   process.exit(1);
 }
 const repoDir = resolve(repoArg);
+// The index the judge measures index-grain claims against: the one the lanes
+// ran on, by the same rule run-questions.mjs uses to find it.
+const indexDir = process.env.CX_INDEX_DIR ?? join(repoDir, ".infino");
+/** The verification rule these verdicts are judged under, recorded on each:
+ * "grain" - every claim checked at the grain the answer states, with the
+ * checkout's tools or the index's. Verdicts without a rule predate it (the
+ * judge then had the checkout's tools alone). */
+const JUDGE_RULE = "grain";
 const resultsFile = resultsArg ? resolve(resultsArg) : join(RESULTS, "questions.jsonl");
 const cats = catsArg ? new Set(catsArg.split(",")) : null;
 // One lane for both builds, or `baselineLane,candidateLane`.
@@ -88,15 +106,22 @@ for (const [key, b] of base) {
 }
 // JUDGE_LIMIT caps the pairs, for a smoke run before spending on the whole set.
 if (process.env.JUDGE_LIMIT) pairs.length = Math.min(pairs.length, Number(process.env.JUDGE_LIMIT));
-console.log(`judge=${JUDGE_MODEL}  lane=${laneWanted}  baseline=${baselineArg}  candidate=${candidateArg}  pairs=${pairs.length}`);
+console.log(`judge=${JUDGE_MODEL}  rule=${JUDGE_RULE}  lane=${laneWanted}  baseline=${baselineArg}  candidate=${candidateArg}  pairs=${pairs.length}  index=${indexDir}`);
 
 const system =
   `You are judging two answers to a question about the repository checked out at ${repoDir}. ` +
-  `Use Read, Grep and Glob on that checkout to verify what each answer claims (file paths, line numbers, ` +
-  `identifiers, counts, behaviour). Judge correctness and how well each claim is supported by the code; ` +
-  `do not reward length or formatting. Finish with a single JSON object and nothing after it: ` +
-  `{"winner":"A"|"B"|"tie","confidence":<0..1>,"unsupported_a":<int>,"unsupported_b":<int>,"reason":"<one sentence>"} ` +
-  `where unsupported_* counts the claims in that answer the code does not support.`;
+  `Verify what each answer claims (file paths, line numbers, identifiers, counts, rankings, behaviour) ` +
+  `with the tool that measures the claim at the grain the answer states. Read, Grep and Glob on the ` +
+  `checkout measure code, lines and occurrences. The code-context tools measure the repository's own ` +
+  `index, which some answers report from: find gives every line containing a literal with its per-file ` +
+  `line counts (byFile); sql gives chunk counts and rankings, e.g. SELECT path, COUNT(*) AS chunks FROM ` +
+  `bm25_search('chunks','content','<terms>', k) GROUP BY path ORDER BY chunks DESC. A count is supported ` +
+  `when it reproduces at its stated grain (lines, occurrences, hits, chunks), whichever tool that takes; ` +
+  `a count that reproduces at no grain, a ranking its own measure does not give, an attribution the code ` +
+  `contradicts, or a name the code does not have is unsupported. Judge correctness and how well each ` +
+  `claim is supported; do not reward length or formatting. Finish with a single JSON object and nothing ` +
+  `after it: {"winner":"A"|"B"|"tie","confidence":<0..1>,"unsupported_a":<int>,"unsupported_b":<int>,"reason":"<one sentence>"} ` +
+  `where unsupported_* counts the claims in that answer the repository does not support.`;
 
 function parseVerdict(text) {
   const start = text.lastIndexOf("{");
@@ -117,6 +142,7 @@ async function judge(pair) {
     `Question:\n${pair.question}\n\n=== Answer A ===\n${A.answer}\n\n=== Answer B ===\n${B.answer}\n\n` +
     `Verify the claims against the repository, then give the JSON verdict.`;
   const t0 = performance.now();
+  const acc = newToolAccounting();
   let text = "";
   let costUsd = null;
   let usage = null;
@@ -134,8 +160,12 @@ async function judge(pair) {
         settingSources: [],
         strictMcpConfig: true,
         tools: ["Read", "Grep", "Glob"],
+        // The index's own measure, beside the checkout's: the local server
+        // alone (no --db), so a verification never spends a platform call.
+        mcpServers: cxServer(mcpEnvBase(repoDir, indexDir)),
       },
     })) {
+      foldToolMessage(acc, m);
       if (m.type === "result") {
         usage = m.usage ?? null;
         costUsd = m.total_cost_usd ?? null;
@@ -156,6 +186,10 @@ async function judge(pair) {
     baseline: baselineArg,
     candidate: candidateArg,
     judge: JUDGE_MODEL,
+    rule: JUDGE_RULE,
+    // The tools the judge called to verify, in order (cx:find, cx:sql, Grep,
+    // Read, ...): whether a verdict on an index-grain count was measured.
+    tools: acc.toolCalls,
     winner: v ? toSide(v.winner) : null,
     confidence: v?.confidence ?? null,
     unsupportedBaseline: v ? (swap ? v.unsupported_b : v.unsupported_a) : null,

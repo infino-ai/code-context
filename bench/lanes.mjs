@@ -108,7 +108,25 @@ const HOSTED_REQUIRES = [BENCH_DB_URL, BENCH_KEY_FILE];
  * lane: the index is built before the run (load-hosted.mjs, which with --db
  * writes the local index and the platform table in one build) and a re-sync
  * mid-question would put a stat walk on the clock. */
-const mcpEnvBase = (repoDir, indexDir) => ({ CX_ROOT: repoDir, CX_INDEX_DIR: indexDir, CX_AUTO_SYNC: "0" });
+export const mcpEnvBase = (repoDir, indexDir) => ({ CX_ROOT: repoDir, CX_INDEX_DIR: indexDir, CX_AUTO_SYNC: "0" });
+
+/** The code-context server as the SDK starts it, for the lanes and for the
+ * judge: this checkout's build, `cx mcp` plus the given flags, the given
+ * server env over the process's. Without flags the server has the local index
+ * alone (find, search, sql), which is what the judge verifies index-grain
+ * counts against. */
+export function cxServer(serverEnv, args = []) {
+  return {
+    "code-context": {
+      command: "node",
+      args: [CX, "mcp", ...args],
+      // present in the turn-1 prompt (not deferred behind tool search),
+      // and startup blocks until connected - no race on the first call
+      alwaysLoad: true,
+      env: { ...process.env, ...serverEnv },
+    },
+  };
+}
 
 /** The server flags that name the platform database: the same for the MCP
  * server of a platform lane and for the `cx index` of load-hosted.mjs, so the
@@ -293,16 +311,7 @@ export function laneOptions(lane, repoDir, indexDir) {
     // permission denial the model would see), which is what makes a forced
     // lane a fair measurement: the hidden tools cost no prompt text either.
     ...(def.disallowedTools ? { disallowedTools: def.disallowedTools } : {}),
-    mcpServers: {
-      "code-context": {
-        command: "node",
-        args: [CX, "mcp", ...(def.args?.(process.env) ?? [])],
-        // present in the turn-1 prompt (not deferred behind tool search),
-        // and startup blocks until connected - no race on the first call
-        alwaysLoad: true,
-        env: { ...process.env, ...def.env(repoDir, indexDir) },
-      },
-    },
+    mcpServers: cxServer(def.env(repoDir, indexDir), def.args?.(process.env) ?? []),
   };
 }
 
