@@ -6,7 +6,7 @@
 
 </div>
 
-# Infino Subgent for Claude Code. Save 75% on your Anthropic bill. 
+# Infino Subagent for Claude Code. Save 75% on your Anthropic bill. 
 
 **Same accuracy as Sonnet at 4x the performance.**
 
