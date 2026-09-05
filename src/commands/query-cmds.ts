@@ -300,7 +300,7 @@ export async function usageCmd(opts: UsageCmdOptions): Promise<void> {
       );
       const locs = hits.slice(0, 5).map((h) => `${h.path}:${h.startLine}`);
       if (locs.length) console.log(green(`            ${locs.join("  ")}${hits.length > 5 ? dim(`  (+${hits.length - 5} more)`) : ""}`));
-    } else if (e.tool === "subagent") {
+    } else if (e.tool === "subagent" || e.tool === "explore") {
       // What the platform's agent retrieved, and what it spent getting there.
       const hits = e.hits ?? [];
       console.log(

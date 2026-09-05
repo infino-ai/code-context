@@ -57,8 +57,8 @@ const FACT_PROJECTION = [COL_PATH, COL_START_LINE, COL_END_LINE];
  * platform `terminate` value to the reason. */
 const NO_ANSWER_REASONS: Record<string, string> = {
   [TERMINATE_ESCALATED]: "the retrieval agent found no query that answers this",
-  turn_cap: "the retrieval agent ran out of turns without a query that answers this",
-  wall_cap: "the retrieval agent ran out of time without a query that answers this",
+  turn_cap: "the retrieval agent ran out of turns without an answer - the facts and chain are what it read before stopping",
+  wall_cap: "the retrieval agent ran out of time without an answer - the facts and chain are what it read before stopping",
   error: "the retrieval agent's model endpoint failed",
 };
 
@@ -70,12 +70,24 @@ export interface RetrievalAgentRequest {
 }
 
 export interface RetrievalAgentBudget {
-  /** Model turns the inner loop may take (the platform lowers a value above its own cap). */
-  maxTurns: number;
+  /** Model turns the inner loop may take (the platform lowers a value above
+   * its own cap); absent leaves the platform's budget in force. */
+  maxTurns?: number;
   /** Wall clock for the inner loop, in seconds (likewise capped server-side). */
   maxWallSecs: number;
   /** Facts asked for, and the most hits kept in the result; MAX_HITS when absent. */
   k?: number;
+}
+
+/** What the `explore` tool returns: the retrieval result of the LAST query
+ * that returned rows, plus the model's written answer and the chain of
+ * queries that got there - explore is the one mode whose words reach the
+ * caller. */
+export interface ExploreResult extends RetrievalAgentResult {
+  /** The written answer, when the exploration finished with one. */
+  answer?: string;
+  /** Every query that returned rows, in order, as the platform records it. */
+  chain: string[];
 }
 
 /** One row of the table that names a place in the code: a search hit's
@@ -160,10 +172,41 @@ export async function runRetrievalAgent(
     question: request.question,
     k,
     projection: FACT_PROJECTION,
-    max_turns: budget.maxTurns,
+    ...(budget.maxTurns !== undefined ? { max_turns: budget.maxTurns } : {}),
     max_wall_secs: budget.maxWallSecs,
   });
   return retrievalAgentRunFrom(request.question, response, k);
+}
+
+/** Hand the platform's loop one question in `explore` mode: it reads what it
+ * finds and queries again, and returns a written answer beside the facts of
+ * its last query and the chain of queries. A `maxTurns` in the budget lowers
+ * the platform's explore budget; absent leaves it in force. */
+export async function runExploreAgent(
+  hosted: Pick<HostedDb, "subAgent">,
+  request: RetrievalAgentRequest,
+  budget: RetrievalAgentBudget,
+): Promise<{ result: ExploreResult; spend: RetrievalAgentSpend }> {
+  const k = budget.k ?? MAX_HITS;
+  const response = await hosted.subAgent({
+    question: request.question,
+    mode: "explore",
+    k,
+    projection: FACT_PROJECTION,
+    ...(budget.maxTurns !== undefined ? { max_turns: budget.maxTurns } : {}),
+    max_wall_secs: budget.maxWallSecs,
+  });
+  return exploreRunFrom(request.question, response, k);
+}
+
+/** The explore run for one platform response: the retrieval run of the last
+ * query's facts, plus `answer` and `chain`. */
+export function exploreRunFrom(question: string, response: unknown, maxHits: number = MAX_HITS): { result: ExploreResult; spend: RetrievalAgentSpend } {
+  const base = retrievalAgentRunFrom(question, response, maxHits);
+  const body = asRecord(response);
+  const answer = typeof body.answer === "string" && body.answer.length > 0 ? body.answer : undefined;
+  const chain = Array.isArray(body.chain) ? body.chain.filter((s): s is string => typeof s === "string") : [];
+  return { result: { ...base.result, ...(answer ? { answer } : {}), chain }, spend: base.spend };
 }
 
 /** The fact rows of a response: each entry of `facts` carries its row as a

@@ -129,6 +129,14 @@ use `find` (`byFile` is the `grep -c` answer); for a file you already know,
 Read it. Answer from the rows and cite `path:line`. Like the other tools,
 its result carries a one-line `usage` receipt.
 
+Beside it, `explore` takes a question about a mechanism that spans files -
+how X works end to end, what calls what - and returns `answer` (a written
+answer), `chain` (the queries it ran, in order), and the last query's facts
+in the same `hits` / `rows` / `sql` shape. It reads and follows what it
+finds, so it is slower and dearer than `subagent`: use `subagent` for one
+retrieval, `explore` when one retrieval will not do. Check the answer
+against the facts and cite `path:line` from them.
+
 ## Reading results honestly
 
 - A result carrying a `partial` marker means the repo exceeded the index's

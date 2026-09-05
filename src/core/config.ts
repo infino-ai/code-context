@@ -70,7 +70,22 @@ export interface SubagentSettings {
   maxWallSecs: number;
   /** Facts asked for and kept per call (the platform caps a value above its own). */
   k: number;
+  /** The `explore` tool's budget, registered beside `subagent`. */
+  explore: ExploreSettings;
 }
+
+export interface ExploreSettings {
+  /** Turn cap for one exploration; absent leaves the platform's own explore
+   * budget in force (a request value can only lower it). */
+  maxTurns?: number;
+  /** Wall clock for one exploration, in seconds. */
+  maxWallSecs: number;
+}
+
+/** Default wall clock for `explore`, in seconds: an exploration is many
+ * retrieval turns plus the reading between them, so it gets several times a
+ * retrieval's wall; the flag raises or lowers it. */
+export const DEFAULT_EXPLORE_MAX_WALL_SECS = 300;
 
 /** Everything hosted mode is configured with, resolved and validated once. */
 export interface HostedSettings {
@@ -89,9 +104,9 @@ export interface HostedSettings {
 /** The hosted flags as commander parses them: camelCase of `--db`,
  * `--api-key-file`, `--embed-provider`, `--db-timeout-ms`, `--cold-start-secs`,
  * `--analyzer`, `--subagent`, `--subagent-max-turns`, `--subagent-max-wall-secs`,
- * `--subagent-k`. Every value is the raw string (or the bare boolean);
- * validation is here, in one place, so a bad value is an error at startup and
- * not on the first call. */
+ * `--subagent-k`, `--explore-max-turns`, `--explore-max-wall-secs`. Every value
+ * is the raw string (or the bare boolean); validation is here, in one place,
+ * so a bad value is an error at startup and not on the first call. */
 export interface HostedFlags {
   db?: string;
   apiKeyFile?: string;
@@ -103,6 +118,8 @@ export interface HostedFlags {
   subagentMaxTurns?: string;
   subagentMaxWallSecs?: string;
   subagentK?: string;
+  exploreMaxTurns?: string;
+  exploreMaxWallSecs?: string;
 }
 
 /** The flags that mean nothing without --db, by their command-line spelling. */
@@ -116,6 +133,8 @@ const HOSTED_ONLY_FLAGS: Array<[keyof HostedFlags, string]> = [
   ["subagentMaxTurns", "--subagent-max-turns"],
   ["subagentMaxWallSecs", "--subagent-max-wall-secs"],
   ["subagentK", "--subagent-k"],
+  ["exploreMaxTurns", "--explore-max-turns"],
+  ["exploreMaxWallSecs", "--explore-max-wall-secs"],
 ];
 
 /** A positive-integer flag value, or its default when the flag was not given.
@@ -126,6 +145,12 @@ function positiveIntFlag(flag: string, raw: string | undefined, fallback: number
   const n = Number(raw);
   if (!Number.isInteger(n) || n <= 0) throw new Error(`${flag} must be a positive integer, got "${raw}"`);
   return n;
+}
+
+/** A positive-integer flag that has no default: absent when not given. */
+function optionalPositiveIntFlag(flag: string, raw: string | undefined): number | undefined {
+  if (raw === undefined || raw === "") return undefined;
+  return positiveIntFlag(flag, raw, 0);
 }
 
 /** Resolve the hosted settings from the command line, or null when --db was
@@ -161,6 +186,12 @@ export function hostedSettingsFromFlags(flags: HostedFlags, env: NodeJS.ProcessE
       maxTurns: positiveIntFlag("--subagent-max-turns", flags.subagentMaxTurns, DEFAULT_SUBAGENT_MAX_TURNS),
       maxWallSecs: positiveIntFlag("--subagent-max-wall-secs", flags.subagentMaxWallSecs, DEFAULT_SUBAGENT_MAX_WALL_SECS),
       k: positiveIntFlag("--subagent-k", flags.subagentK, DEFAULT_SUBAGENT_K),
+      explore: {
+        ...(optionalPositiveIntFlag("--explore-max-turns", flags.exploreMaxTurns) !== undefined
+          ? { maxTurns: optionalPositiveIntFlag("--explore-max-turns", flags.exploreMaxTurns) }
+          : {}),
+        maxWallSecs: positiveIntFlag("--explore-max-wall-secs", flags.exploreMaxWallSecs, DEFAULT_EXPLORE_MAX_WALL_SECS),
+      },
     },
   };
 }
@@ -230,6 +261,16 @@ export function subagentMaxWallSecs(): number {
 /** Facts one subagent call asks for and keeps (--subagent-k). */
 export function subagentK(): number {
   return hosted?.subagent.k ?? DEFAULT_SUBAGENT_K;
+}
+
+/** Turn cap for one exploration (--explore-max-turns), or undefined to
+ * leave the platform's own explore budget in force. */
+export function exploreMaxTurns(): number | undefined {
+  return hosted?.subagent.explore.maxTurns;
+}
+
+export function exploreMaxWallSecs(): number {
+  return hosted?.subagent.explore.maxWallSecs ?? DEFAULT_EXPLORE_MAX_WALL_SECS;
 }
 
 /** Whether a first query on an unindexed repo builds the index (CX_AUTO_INDEX,

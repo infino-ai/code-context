@@ -323,8 +323,8 @@ describe("request shapes", () => {
     expect(await db.subAgent({ question: "how many?" })).toEqual(answer);
     expect(calls[0].url).toBe("https://api.example.test/v1/sub_agent/cx");
     expect(bodyJson(calls[0])).toEqual({ question: "how many?" });
-    await db.subAgent({ question: "q", k: 10, projection: ["path", "start_line", "end_line"], max_turns: 3, max_wall_secs: 30, include_transcript: true });
-    expect(bodyJson(calls[1])).toEqual({ question: "q", k: 10, projection: ["path", "start_line", "end_line"], max_turns: 3, max_wall_secs: 30, include_transcript: true });
+    await db.subAgent({ question: "q", mode: "explore", k: 10, projection: ["path", "start_line", "end_line"], max_turns: 3, max_wall_secs: 30, include_transcript: true });
+    expect(bodyJson(calls[1])).toEqual({ question: "q", mode: "explore", k: 10, projection: ["path", "start_line", "end_line"], max_turns: 3, max_wall_secs: 30, include_transcript: true });
     expect(calls[1].signal).toBeInstanceOf(AbortSignal);
   });
 

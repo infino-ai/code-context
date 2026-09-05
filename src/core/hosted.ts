@@ -128,6 +128,11 @@ export interface HostedOptions {
 
 export type RowRecord = Record<string, unknown>;
 
+/** How the platform's loop answers a `sub_agent` request: `retrieve` returns
+ * the first validating query's rows; `explore` reads and follows what it
+ * finds and adds a written answer and the chain of queries. */
+export type SubAgentMode = "retrieve" | "explore";
+
 /** One column of a `create_table` schema, in code-context's shape. A scalar is
  * the platform's type spelling (`"large_utf8"`, `"i32"`, ...); a vector column
  * names its width; an embedding column names the text columns the platform
@@ -475,9 +480,15 @@ export class HostedDb {
    * the request's own `max_wall_secs` plus a margin for the answer to
    * travel; with no `max_wall_secs` the server's cap applies and the
    * client's general timeout is all it can go on. A retryable 503 is retried
-   * like any other op; 501 (no agent configured) is terminal. */
+   * like any other op; 501 (no agent configured) is terminal. In `explore`
+   * mode the response adds `answer` (the model's written answer) and `chain`
+   * (every query that returned rows, in order). */
   async subAgent(req: {
     question: string;
+    /** `retrieve` (the default when absent): the first validating query's rows.
+     * `explore`: the loop reads what it finds and queries again, and answers
+     * in writing beside the facts and the chain of queries. */
+    mode?: SubAgentMode;
     k?: number;
     /** Columns a search or find fact carries beside its text and score, in
      * place of the table's keys - for a code table, the ones that place it. */
@@ -489,6 +500,7 @@ export class HostedDb {
     // Only the fields given are sent: the request type rejects unknown keys and
     // defaults the rest itself.
     const body: RowRecord = { question: req.question };
+    if (req.mode !== undefined) body.mode = req.mode;
     if (req.k !== undefined) body.k = req.k;
     if (req.projection !== undefined) body.projection = req.projection;
     if (req.max_turns !== undefined) body.max_turns = req.max_turns;

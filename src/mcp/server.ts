@@ -42,12 +42,14 @@ import {
   hostedLabel,
   autoIndexEnabled as autoIndexSetting,
   autoSyncEnabled as autoSyncSetting,
+  exploreMaxTurns,
+  exploreMaxWallSecs,
   subagentEnabled,
   subagentK,
   subagentMaxTurns,
   subagentMaxWallSecs,
 } from "../core/config.js";
-import { runRetrievalAgent } from "../core/retrieval-agent.js";
+import { runExploreAgent, runRetrievalAgent } from "../core/retrieval-agent.js";
 import { readManifest, type Manifest } from "../core/manifest.js";
 import { localDb, openHostedHandle, newHostedMemo, type IndexHandle } from "../core/context.js";
 import { find, search, runSql, jsonify, partialIndex } from "../core/searcher.js";
@@ -57,6 +59,7 @@ import {
   findEntry,
   searchEntry,
   sqlEntry,
+  exploreEntry,
   subagentEntry,
   withPlatform,
   formatReceipt,
@@ -244,7 +247,8 @@ export async function serveMcp(rootPath?: string): Promise<void> {
         "- search - how does X work, where is Y handled, code by meaning.\n" +
         "- sql - counts, rankings, and aggregates across the repo.\n" +
         (subagent
-          ? "- subagent - a question or task in plain language; returns the rows it retrieved (facts with path:line and the code), not an answer: compose from them. Spawn several in parallel for independent questions. How often a string occurs, per file, is find's byFile.\n"
+          ? "- subagent - a question or task in plain language; returns the rows it retrieved (facts with path:line and the code), not an answer: compose from them. Spawn several in parallel for independent questions. How often a string occurs, per file, is find's byFile.\n" +
+            "- explore - a question about a mechanism that spans files (how X works end to end, what calls what); it reads and follows what it finds and returns a written answer with the facts it rests on and the chain of queries. Slower than subagent: use it when one retrieval will not do.\n"
           : "") +
         "Hits carry the code: when a hit answers the question, answer from it and cite path:line " +
         "without re-reading the file or re-checking with grep; Read a file only for a hit marked " +
@@ -532,6 +536,70 @@ export async function serveMcp(rootPath?: string): Promise<void> {
           });
         } catch (err) {
           return fail(`subagent failed: ${(err as Error).message}`);
+        }
+      },
+    );
+
+    server.registerTool(
+      "explore",
+      {
+        title: "Exploration subagent over the hosted index",
+        description:
+          "A read-only exploration subagent over the repository index. Give it a question about a " +
+          "mechanism that spans files - how X works end to end, what calls what, where a value flows; " +
+          "it searches, reads what it finds, follows definitions to their uses, and returns a written " +
+          "answer together with the facts it rests on (the last query's rows with exact path, " +
+          "start_line, end_line and the code) and the chain of queries it ran. Slower and dearer than " +
+          "subagent: use subagent for one retrieval, explore when one retrieval will not do. For every " +
+          "occurrence of an exact string use find; for a file you already know, Read it. Check the " +
+          "answer against the facts and cite path:line from them. The result includes a 'usage' " +
+          "field, a one-line receipt of what the call cost.",
+        inputSchema: {
+          question: z.string().min(1).describe("The question, in plain language, about the indexed code."),
+          path: z
+            .string()
+            .optional()
+            .describe(
+              "Absolute path to the repository root to ask about. Defaults to the server's configured root; " +
+                "set it to target a specific repo when a session spans more than one.",
+            ),
+        },
+      },
+      async ({ question, path }) => {
+        let ctx: RepoCtx;
+        try {
+          ctx = repoFor(path);
+        } catch (err) {
+          return fail((err as Error).message);
+        }
+        if (!ctx.hosted) return fail("explore needs a hosted index: serve with --db");
+        let ensured: EnsureResult;
+        try {
+          ensured = await ensureIndexed(ctx, { autoIndexEnabled, getHandle, build: buildIndex });
+        } catch (err) {
+          return fail(`indexing failed: ${(err as Error).message}`);
+        }
+        if ("needsIndex" in ensured) return noIndex(ctx);
+        try {
+          const t0 = performance.now();
+          const { result, spend } = await runExploreAgent(
+            ctx.hosted,
+            { question },
+            { maxTurns: exploreMaxTurns(), maxWallSecs: exploreMaxWallSecs(), k: subagentK() },
+          );
+          let usage: string | undefined;
+          if (receiptOn) {
+            const entry = withPlatform(exploreEntry(result, spend), ctx);
+            recordUsage(ctx.dir, entry);
+            usage = formatReceipt(entry, session);
+          }
+          return ok({
+            ...result,
+            took_ms: Math.round((performance.now() - t0) * 1000) / 1000,
+            ...(usage ? { usage } : {}),
+          });
+        } catch (err) {
+          return fail(`explore failed: ${(err as Error).message}`);
         }
       },
     );

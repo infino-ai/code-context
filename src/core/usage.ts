@@ -10,7 +10,7 @@
 import { appendFileSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { jsonify, hostedTelemetry, type FindResult, type SearchResult } from "./searcher.js";
-import type { RetrievalAgentResult, RetrievalAgentSpend } from "./retrieval-agent.js";
+import type { ExploreResult, RetrievalAgentResult, RetrievalAgentSpend } from "./retrieval-agent.js";
 import type { HostedDb } from "./hosted.js";
 
 /** Rough tokens-per-char - the standard heuristic for English + code. Kept
@@ -40,7 +40,7 @@ export const receiptEnabled = (): boolean =>
  * it doesn't duplicate the repo. */
 export interface UsageEntry {
   ts: string;
-  tool: "find" | "search" | "sql" | "subagent";
+  tool: "find" | "search" | "sql" | "subagent" | "explore";
   query: string;
   returnedTokens: number;
   /** search only: whole-file size of the distinct files the hits came from. */
@@ -149,6 +149,16 @@ export function subagentEntry(result: RetrievalAgentResult, spend: RetrievalAgen
   };
 }
 
+/** An explore call returns the written answer, the chain and the last
+ * query's facts: what it cost the outer agent is all of those serialized;
+ * the places and the loop's spend are recorded as for a subagent call. */
+export function exploreEntry(result: ExploreResult, spend: RetrievalAgentSpend): UsageEntry {
+  const entry = subagentEntry(result, spend);
+  entry.tool = "explore";
+  entry.returnedTokens = estTokens(jsonify({ answer: result.answer, chain: result.chain, sql: result.sql, hits: result.hits, rows: result.rows }));
+  return entry;
+}
+
 /** Attach the platform telemetry of the hosted call that answered this entry's
  * query (its round trip and the tokens the platform metered) - read right
  * after the query, while the client's last call is that query's. A no-op for a
@@ -188,7 +198,7 @@ export function formatReceipt(entry: UsageEntry, session?: SessionUsage): string
     // The repo-wide count, not just the lines returned: a cut result still
     // tells the reader how many matches exist.
     parts.push(`returned ~${fmtTokens(entry.returnedTokens)} tokens | ${plural(entry.matches ?? hits.length, "match", "matches")} / ${plural(files, "file", "files")}`);
-  } else if (entry.tool === "subagent") {
+  } else if (entry.tool === "subagent" || entry.tool === "explore") {
     // What came back, then the inner agent's spend beside it: the platform
     // bills the turns and tokens, so the caller sees what one question cost there.
     const hits = entry.hits ?? [];

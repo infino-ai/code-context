@@ -9,6 +9,8 @@
 import { describe, expect, it } from "vitest";
 import {
   runRetrievalAgent,
+  runExploreAgent,
+  exploreRunFrom,
   retrievalAgentRunFrom,
   factRowsOf,
   factsFrom,
@@ -130,8 +132,8 @@ describe("retrievalAgentRunFrom", () => {
   });
 
   it("names the turn and wall caps, and carries the endpoint's words on an error termination", () => {
-    expect(retrievalAgentRunFrom(QUESTION, unanswered("turn_cap")).result.error).toMatch(/ran out of turns without a query/);
-    expect(retrievalAgentRunFrom(QUESTION, unanswered("wall_cap")).result.error).toMatch(/ran out of time/);
+    expect(retrievalAgentRunFrom(QUESTION, unanswered("turn_cap")).result.error).toMatch(/ran out of turns without an answer/);
+    expect(retrievalAgentRunFrom(QUESTION, unanswered("wall_cap")).result.error).toMatch(/ran out of time without an answer/);
     const failed = retrievalAgentRunFrom(QUESTION, unanswered("error", { error: "401 from the model host" })).result;
     expect(failed.error).toBe("the retrieval agent's model endpoint failed: 401 from the model host - ask again more narrowly, or use find or search");
   });
@@ -242,6 +244,60 @@ describe("factsFrom", () => {
   });
 });
 
+// --- explore mode -----------------------------------------------------------------------------
+
+describe("explore mode", () => {
+  const CHAIN = ["SELECT ... FROM bm25_search('chunks','content','tombstone', 100)", "find(\"struct Tombstone\")"];
+  const explored = (overrides: Record<string, unknown> = {}) =>
+    answered({ facts: PLACE_FACTS, statement: CHAIN[1], answer: "Tombstones are written in ... and read in ...", chain: CHAIN, turns: 6, ...overrides });
+
+  it("asks sub_agent in explore mode with the budget and returns the answer, the chain and the last query's facts", async () => {
+    const sent: unknown[] = [];
+    const hosted = {
+      subAgent: async (req: unknown) => {
+        sent.push(req);
+        return explored();
+      },
+    };
+    const { result, spend } = await runExploreAgent(hosted, { question: "how do tombstones work?" }, { maxWallSecs: 300 });
+    expect(sent).toEqual([{ question: "how do tombstones work?", mode: "explore", k: MAX_HITS, projection: ["path", "start_line", "end_line"], max_wall_secs: 300 }]);
+    expect(result.answer).toBe("Tombstones are written in ... and read in ...");
+    expect(result.chain).toEqual(CHAIN);
+    expect(result.sql).toBe(CHAIN[1]);
+    expect(result.hits).toHaveLength(2);
+    expect(result.turns).toBe(6);
+    expect(result.error).toBeUndefined();
+    expect(spend).toEqual({ promptTokens: 1200, completionTokens: 80 });
+  });
+
+  it("lowers the platform's explore budget only when the budget names a turn cap", async () => {
+    const sent: unknown[] = [];
+    const hosted = {
+      subAgent: async (req: unknown) => {
+        sent.push(req);
+        return explored();
+      },
+    };
+    await runExploreAgent(hosted, { question: "q" }, { maxTurns: 12, maxWallSecs: 300, k: 25 });
+    expect(sent[0]).toMatchObject({ mode: "explore", max_turns: 12, k: 25 });
+  });
+
+  it("reports a turn-capped exploration with the chain and facts it read, and no answer", () => {
+    const { result } = exploreRunFrom("q", explored({ answer: undefined, terminate: "turn_cap" }));
+    expect(result.answer).toBeUndefined();
+    expect(result.chain).toEqual(CHAIN);
+    expect(result.hits).toHaveLength(2);
+    expect(result.error).toMatch(/ran out of turns without an answer - the facts and chain are what it read/);
+  });
+
+  it("keeps retrieve mode facts-only: a stray answer or chain in a retrieve response never reaches the result", () => {
+    const { result } = retrievalAgentRunFrom(QUESTION, answered({ answer: "prose that should not pass", chain: ["x"] }));
+    expect(result).not.toHaveProperty("answer");
+    expect(result).not.toHaveProperty("chain");
+    expect(JSON.stringify(result)).not.toContain("prose that should not pass");
+  });
+});
+
 // --- runRetrievalAgent ----------------------------------------------------------------------
 
 describe("runRetrievalAgent", () => {
@@ -285,6 +341,19 @@ describe("runRetrievalAgent", () => {
     const unranked = retrievalAgentRunFrom(QUESTION, answered()).result;
     expect(unranked.coverage).toEqual({ rowsTotal: 2, rowsReturned: 2, truncated: false });
     expect(JSON.stringify(ranked)).not.toContain("some-ranker");
+  });
+
+  it("sends no max_turns when the budget leaves it to the platform", async () => {
+    const sent: unknown[] = [];
+    const hosted = {
+      subAgent: async (req: unknown) => {
+        sent.push(req);
+        return answered();
+      },
+    };
+    await runRetrievalAgent(hosted, { question: "q" }, { maxWallSecs: 90 });
+    expect(sent[0]).not.toHaveProperty("max_turns");
+    expect(sent[0]).not.toHaveProperty("mode");
   });
 
   it("propagates the client's error for a terminal platform failure", async () => {

@@ -17,6 +17,7 @@ import {
   API_KEY_ENV,
   DEFAULT_DB_TIMEOUT_MS,
   DEFAULT_DB_COLD_START_SECS,
+  DEFAULT_EXPLORE_MAX_WALL_SECS,
   DEFAULT_HOSTED_EMBED_PROVIDER,
   DEFAULT_SEARCH_K,
   DEFAULT_SUBAGENT_K,
@@ -26,6 +27,8 @@ import {
   configureHosted,
   hostedSettingsFromFlags,
   hostedAnalyzer,
+  exploreMaxTurns,
+  exploreMaxWallSecs,
   subagentK,
   subagentMaxTurns,
   subagentMaxWallSecs,
@@ -240,6 +243,18 @@ describe("hosted settings", () => {
     expect(() => settingsFor({ subagentMaxTurns: "-1" })).toThrow(/--subagent-max-turns must be a positive integer/);
     expect(() => settingsFor({ subagentK: "0" })).toThrow(/--subagent-k must be a positive integer/);
     expect(() => settingsFor({ db: undefined, subagentK: "5" })).toThrow(/--subagent-k needs --db/);
+  });
+
+  it("leaves explore's turn cap to the platform unless a flag names one, and gives it its own wall", () => {
+    hostedMode({ subagent: true });
+    expect(exploreMaxTurns()).toBeUndefined();
+    expect(exploreMaxWallSecs()).toBe(DEFAULT_EXPLORE_MAX_WALL_SECS);
+    expect(DEFAULT_EXPLORE_MAX_WALL_SECS).toBe(300);
+    hostedMode({ subagent: true, exploreMaxTurns: "12", exploreMaxWallSecs: "600" });
+    expect(exploreMaxTurns()).toBe(12);
+    expect(exploreMaxWallSecs()).toBe(600);
+    expect(() => settingsFor({ exploreMaxTurns: "x" })).toThrow(/--explore-max-turns must be a positive integer/);
+    expect(() => settingsFor({ db: undefined, exploreMaxWallSecs: "5" })).toThrow(/--explore-max-wall-secs needs --db/);
   });
 
   it("forces auto-index and auto-sync off for a hosted target whatever the env says", () => {

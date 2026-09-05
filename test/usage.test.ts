@@ -9,6 +9,7 @@ import {
   searchEntry,
   sqlEntry,
   subagentEntry,
+  exploreEntry,
   withPlatform,
   formatReceipt,
   recordUsage,
@@ -21,7 +22,7 @@ import {
   promptStatsPath,
 } from "../src/core/usage.js";
 import type { SearchResult, SearchHit } from "../src/core/searcher.js";
-import type { RetrievalAgentResult, RetrievalAgentSpend } from "../src/core/retrieval-agent.js";
+import type { ExploreResult, RetrievalAgentResult, RetrievalAgentSpend } from "../src/core/retrieval-agent.js";
 import type { HostedDb, HostedCallInfo } from "../src/core/hosted.js";
 
 const hit = (path: string, content: string): SearchHit => ({
@@ -186,6 +187,44 @@ describe("subagent receipt", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it("records that the platform ranked the facts, and only then", () => {
+    expect(subagentEntry(answered, spend)).not.toHaveProperty("agentRanked");
+    const ranked = subagentEntry({ ...answered, coverage: { rowsTotal: 20, rowsReturned: 1, truncated: true, ranked: true } }, spend);
+    expect(ranked.agentRanked).toBe(true);
+  });
+});
+
+describe("explore receipt", () => {
+  const explored: ExploreResult = {
+    question: "how do tombstones work?",
+    sql: "find(\"struct Tombstone\")",
+    hits: [{ path: "src/a.ts", startLine: 10, endLine: 30, content: "export function a() {\n}" }],
+    rows: [],
+    hitsTotal: 1,
+    rowsTotal: 0,
+    turns: 6,
+    answer: "Tombstones are written at ... and read at ...",
+    chain: ["SELECT ... FROM bm25_search('chunks','content','tombstone', 100)", "find(\"struct Tombstone\")"],
+  };
+  const spend: RetrievalAgentSpend = { promptTokens: 40_000, completionTokens: 900 };
+
+  it("counts the answer, the chain and the facts as what was returned, under its own tool name", () => {
+    const entry = exploreEntry(explored, spend);
+    expect(entry.tool).toBe("explore");
+    expect(entry.returnedTokens).toBe(
+      estTokens(JSON.stringify({ answer: explored.answer, chain: explored.chain, sql: explored.sql, hits: explored.hits, rows: explored.rows })),
+    );
+    expect(entry.hits).toEqual([{ path: "src/a.ts", startLine: 10, endLine: 30 }]);
+    expect(entry.agentTurns).toBe(6);
+    expect(entry.agentPromptTokens).toBe(40_000);
+    expect(JSON.stringify(entry)).not.toContain("Tombstones are written");
+  });
+
+  it("prints the same receipt shape as a subagent call", () => {
+    const line = formatReceipt(exploreEntry(explored, spend));
+    expect(line).toMatch(/^returned ~\d+ tokens \| 1 hit \/ 0 rows \| 6 turns \| 40\.0k prompt \/ 900 completion tokens$/);
   });
 });
 
