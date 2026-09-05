@@ -63,6 +63,10 @@ export interface UsageEntry {
   agentCompletionTokens?: number;
   /** subagent only: whether the platform ranked the facts against the question. */
   agentRanked?: boolean;
+  /** subagent and explore: the loop's model calls one by one - tokens, wall
+   * time, and the rung of the platform's model ladder that answered - so the
+   * platform's metered spend can be reproduced from the ledger. */
+  agentCalls?: Array<{ promptTokens: number; completionTokens: number; ms?: number; rung?: number }>;
   /** Hosted mode only: what the platform call behind this query cost - the
    * round trip of the answering request and the tokens the platform metered
    * (from its response headers, when present). Lives in the ledger, never in
@@ -146,6 +150,7 @@ export function subagentEntry(result: RetrievalAgentResult, spend: RetrievalAgen
     agentPromptTokens: spend.promptTokens,
     agentCompletionTokens: spend.completionTokens,
     ...(result.coverage?.ranked ? { agentRanked: true } : {}),
+    ...(spend.calls && spend.calls.length > 0 ? { agentCalls: spend.calls } : {}),
   };
 }
 

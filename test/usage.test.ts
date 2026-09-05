@@ -194,6 +194,17 @@ describe("subagent receipt", () => {
     const ranked = subagentEntry({ ...answered, coverage: { rowsTotal: 20, rowsReturned: 1, truncated: true, ranked: true } }, spend);
     expect(ranked.agentRanked).toBe(true);
   });
+
+  it("records the loop's model calls one by one when the platform reports them", () => {
+    expect(subagentEntry(answered, spend)).not.toHaveProperty("agentCalls");
+    const calls = [
+      { promptTokens: 2700, completionTokens: 120, ms: 412, rung: 0 },
+      { promptTokens: 9100, completionTokens: 90, ms: 800, rung: 1 },
+    ];
+    const entry = subagentEntry(answered, { ...spend, calls });
+    expect(entry.agentCalls).toEqual(calls);
+    expect(exploreEntry({ ...answered, chain: [] }, { ...spend, calls }).agentCalls).toEqual(calls);
+  });
 });
 
 describe("explore receipt", () => {

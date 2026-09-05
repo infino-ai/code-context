@@ -104,7 +104,7 @@ describe("retrievalAgentRunFrom", () => {
 
   it("keeps the loop's spend beside the result, not in it, and drops the platform's own fields", () => {
     const { result, spend } = retrievalAgentRunFrom(QUESTION, answered({ transcript: [{ role: "system", content: "the whole system prompt" }] }));
-    expect(spend).toEqual({ promptTokens: 1200, completionTokens: 80 });
+    expect(spend).toEqual({ promptTokens: 1200, completionTokens: 80, calls: [{ promptTokens: 400, completionTokens: 30 }] });
     const asRecord = result as RetrievalAgentResult & Record<string, unknown>;
     for (const dropped of ["facts", "statement", "model", "prompt_tokens", "completion_tokens", "terminate", "transcript", "usage", "retries", "card_tier", "rung"]) {
       expect(asRecord[dropped]).toBeUndefined();
@@ -267,7 +267,7 @@ describe("explore mode", () => {
     expect(result.hits).toHaveLength(2);
     expect(result.turns).toBe(6);
     expect(result.error).toBeUndefined();
-    expect(spend).toEqual({ promptTokens: 1200, completionTokens: 80 });
+    expect(spend).toEqual({ promptTokens: 1200, completionTokens: 80, calls: [{ promptTokens: 400, completionTokens: 30 }] });
   });
 
   it("lowers the platform's explore budget only when the budget names a turn cap", async () => {
@@ -317,7 +317,7 @@ describe("runRetrievalAgent", () => {
       { path: "src/f1.ts", n: 7 },
       { path: "src/f0.ts", n: 2 },
     ]);
-    expect(spend).toEqual({ promptTokens: 1200, completionTokens: 80 });
+    expect(spend).toEqual({ promptTokens: 1200, completionTokens: 80, calls: [{ promptTokens: 400, completionTokens: 30 }] });
   });
 
   it("asks for the budget's k when one is given and keeps that many hits", async () => {
@@ -354,6 +354,27 @@ describe("runRetrievalAgent", () => {
     await runRetrievalAgent(hosted, { question: "q" }, { maxWallSecs: 90 });
     expect(sent[0]).not.toHaveProperty("max_turns");
     expect(sent[0]).not.toHaveProperty("mode");
+  });
+
+  it("keeps the loop's model calls one by one - tokens, wall time and rung - for the ledger, and skips entries of another shape", () => {
+    const usage = [
+      { prompt_tokens: 2700, completion_tokens: 120, ms: 412, rung: 0, model: "some-model" },
+      { prompt_tokens: 9100, completion_tokens: 340, ms: 60027, rung: 1, model: "another-model" },
+      "garbage",
+      { rung: 0 },
+    ];
+    const { spend } = retrievalAgentRunFrom(QUESTION, answered({ usage, prompt_tokens: 11800, completion_tokens: 460 }));
+    expect(spend).toEqual({
+      promptTokens: 11800,
+      completionTokens: 460,
+      calls: [
+        { promptTokens: 2700, completionTokens: 120, ms: 412, rung: 0 },
+        { promptTokens: 9100, completionTokens: 340, ms: 60027, rung: 1 },
+      ],
+    });
+    expect(JSON.stringify(spend)).not.toContain("some-model");
+    expect(retrievalAgentRunFrom(QUESTION, answered({ usage: [] })).spend).not.toHaveProperty("calls");
+    expect(retrievalAgentRunFrom(QUESTION, answered({ usage: "none" })).spend).not.toHaveProperty("calls");
   });
 
   it("propagates the client's error for a terminal platform failure", async () => {
