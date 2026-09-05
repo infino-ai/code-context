@@ -419,6 +419,13 @@ export async function chunkFile(path: string, content: string): Promise<Chunk[]>
   if (!content.trim()) return [];
   const lang = langFor(path);
   const lines = content.split("\n");
+  // A trailing newline terminates the last line rather than starting a new
+  // one, but split() leaves an empty element behind it. Both span builders end
+  // the final span at lines.length, so keeping that element would put the last
+  // chunk's endLine (and the indexed end_line) one past the file's last line.
+  // Drop exactly one: further blank lines before it are real lines. A CRLF
+  // file leaves the same empty element, so this covers it too.
+  if (lines[lines.length - 1] === "") lines.pop();
 
   let defs: DefSite[] | undefined;
   let spans: Array<[number, number]>;
