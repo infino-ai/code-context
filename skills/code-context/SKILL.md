@@ -130,12 +130,16 @@ Read it. Answer from the rows and cite `path:line`. Like the other tools,
 its result carries a one-line `usage` receipt.
 
 Beside it, `explore` takes a question about a mechanism that spans files -
-how X works end to end, what calls what - and returns `answer` (a written
-answer), `chain` (the queries it ran, in order), and the last query's facts
-in the same `hits` / `rows` / `sql` shape. It reads and follows what it
-finds, so it is slower and dearer than `subagent`: use `subagent` for one
-retrieval, `explore` when one retrieval will not do. Check the answer
-against the facts and cite `path:line` from them.
+how X works end to end, what calls what - and returns the last query's
+facts in the same `hits` / `rows` / `sql` shape, `chain` (the queries it
+ran, in order), and `answer`, its own written summary of what it read. It
+reads and follows what it finds, so it is slower and dearer than
+`subagent`: use `subagent` for one retrieval, `explore` when one retrieval
+will not do. The hits are the facts; the answer is a summary and can name
+things the hits do not contain. Answer from the hits and cite `path:line`
+from them; repeat a claim from the answer only when a hit supports it, and
+check any function, type or file the answer names but no hit contains with
+`find` before relying on it.
 
 ## Reading results honestly
 

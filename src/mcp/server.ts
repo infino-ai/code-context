@@ -248,7 +248,7 @@ export async function serveMcp(rootPath?: string): Promise<void> {
         "- sql - counts, rankings, and aggregates across the repo.\n" +
         (subagent
           ? "- subagent - a question or task in plain language; returns the rows it retrieved (facts with path:line and the code), not an answer: compose from them. Spawn several in parallel for independent questions. How often a string occurs, per file, is find's byFile.\n" +
-            "- explore - a question about a mechanism that spans files (how X works end to end, what calls what); it reads and follows what it finds and returns a written answer with the facts it rests on and the chain of queries. Slower than subagent: use it when one retrieval will not do.\n"
+            "- explore - a question about a mechanism that spans files (how X works end to end, what calls what); it reads and follows what it finds and returns the facts it ended on, the chain of queries, and a written summary. The hits are the facts; the summary can outrun them: cite from the hits, and verify with find anything the summary names that no hit contains. Slower than subagent: use it when one retrieval will not do.\n"
           : "") +
         "Hits carry the code: when a hit answers the question, answer from it and cite path:line " +
         "without re-reading the file or re-checking with grep; Read a file only for a hit marked " +
@@ -547,13 +547,16 @@ export async function serveMcp(rootPath?: string): Promise<void> {
         description:
           "A read-only exploration subagent over the repository index. Give it a question about a " +
           "mechanism that spans files - how X works end to end, what calls what, where a value flows; " +
-          "it searches, reads what it finds, follows definitions to their uses, and returns a written " +
-          "answer together with the facts it rests on (the last query's rows with exact path, " +
-          "start_line, end_line and the code) and the chain of queries it ran. Slower and dearer than " +
-          "subagent: use subagent for one retrieval, explore when one retrieval will not do. For every " +
-          "occurrence of an exact string use find; for a file you already know, Read it. Check the " +
-          "answer against the facts and cite path:line from them. The result includes a 'usage' " +
-          "field, a one-line receipt of what the call cost.",
+          "it searches, reads what it finds, follows definitions to their uses, and returns the facts " +
+          "it ended on (hits: the last query's rows with exact path, start_line, end_line and the code), " +
+          "the chain of queries it ran, and answer, its own written summary of what it read. The hits " +
+          "are the facts; the answer is a summary and can name things the hits do not contain. Answer " +
+          "from the hits and cite path:line from them; repeat a claim from the answer only when a hit " +
+          "supports it, and check any function, type or file the answer names but no hit contains with " +
+          "find before you rely on it. Slower and dearer than subagent: use subagent for one retrieval, " +
+          "explore when one retrieval will not do. For every occurrence of an exact string use find; " +
+          "for a file you already know, Read it. The result includes a 'usage' field, a one-line " +
+          "receipt of what the call cost.",
         inputSchema: {
           question: z.string().min(1).describe("The question, in plain language, about the indexed code."),
           path: z
