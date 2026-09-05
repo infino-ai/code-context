@@ -58,6 +58,12 @@ const MS_PER_SEC = 1000;
 const HTTP_SERVICE_UNAVAILABLE = 503;
 /** The platform is declining for now; retryable when it says when. */
 const HTTP_OVERWHELMED = 529;
+/** The platform is at capacity - its model pool or the provider's quota has
+ * no room for this call right now - and says so at once rather than holding
+ * the call until it burns its own wall cap. Retryable, with backoff, for as
+ * long as the call's own budget allows (the owner's decision after the
+ * fifty-wide fan-out: surface the 429, let the client back off and retry). */
+const HTTP_TOO_MANY_REQUESTS = 429;
 /** A write lost a race (retryable when it carries `Retry-After`) or a name
  * already exists (terminal, no `Retry-After`). */
 const HTTP_CONFLICT = 409;
@@ -169,6 +175,13 @@ export interface HostedIndexes {
  * message carries the op, the status, and the server's own words - never the
  * request headers, so a credential cannot leak through an error. */
 export class HostedError extends Error {
+  /** Whether the platform was at capacity (429) for the whole of the call's
+   * budget: the answer may well come on a later try, and a caller that has a
+   * user to tell should say so. */
+  get atCapacity(): boolean {
+    return this.status === HTTP_TOO_MANY_REQUESTS;
+  }
+
   readonly status: number;
   readonly op: string;
   /** The server's `Retry-After`, in seconds, when the failure carried one. */
@@ -496,14 +509,21 @@ export class HostedDb {
   /** One logical call: issue the request, re-issue it while the platform says
    * "not yet" (503 / 529, and a 409 that carries `Retry-After` - a write that
    * lost the single-writer race; a 409 without one is a name collision and
-   * terminal) until the cold-start budget is spent, then record the telemetry
-   * and either return the exchange or throw the server's error. */
+   * terminal) until the cold-start budget is spent, or while it says "at
+   * capacity" (429) until the call's own budget is spent, then record the
+   * telemetry and either return the exchange or throw the server's error.
+   * Two budgets because they are two different waits: a database coming up
+   * is bounded by --cold-start-secs whatever the call; a pool with no room is
+   * worth waiting on for exactly as long as the caller would wait for the
+   * answer itself. */
   private async call(spec: CallSpec): Promise<Exchange> {
     const headers: Record<string, string> = { authorization: `Bearer ${this.target.apiKey}` };
     if (spec.acceptJson) headers.accept = JSON_CONTENT_TYPE;
     if (spec.contentType) headers["content-type"] = spec.contentType;
     const url = this.url(spec.op, spec.query);
-    const deadline = Date.now() + this.coldStartMs;
+    const started = Date.now();
+    const coldStartDeadline = started + this.coldStartMs;
+    const capacityDeadline = started + spec.timeoutMs;
     let retries = 0;
 
     for (;;) {
@@ -543,14 +563,16 @@ export class HostedDb {
       }
 
       const retryAfter = response.headers.get("retry-after");
-      const retryable =
+      const atCapacity = response.status === HTTP_TOO_MANY_REQUESTS;
+      const notReady =
         response.status === HTTP_SERVICE_UNAVAILABLE ||
         response.status === HTTP_OVERWHELMED ||
         (response.status === HTTP_CONFLICT && retryAfter !== null);
-      if (retryable) {
+      if (atCapacity || notReady) {
         const waitMs = retryAfterMs(retryAfter);
+        const deadline = atCapacity ? capacityDeadline : coldStartDeadline;
         // A wait that would outlive the budget is not taken: the caller learns
-        // now that the database is not coming up in time.
+        // now that the answer is not coming in time.
         if (Date.now() + waitMs <= deadline) {
           retries++;
           await sleep(waitMs);
@@ -560,7 +582,10 @@ export class HostedDb {
 
       this.record(info);
       const message = serverMessage(response.status, text);
-      const gaveUp = retryable ? ` (gave up after ${retries} retr${retries === 1 ? "y" : "ies"} within the ${this.coldStartMs / MS_PER_SEC} s cold-start budget)` : "";
+      const budget = atCapacity
+        ? `the call's ${spec.timeoutMs / MS_PER_SEC} s budget`
+        : `the ${this.coldStartMs / MS_PER_SEC} s cold-start budget`;
+      const gaveUp = atCapacity || notReady ? ` (gave up after ${retries} retr${retries === 1 ? "y" : "ies"} within ${budget})` : "";
       throw new HostedError(spec.op, response.status, `${message}${gaveUp}`, {
         ...(retryAfter !== null ? { retryAfterSecs: retryAfterMs(retryAfter) / MS_PER_SEC } : {}),
       });

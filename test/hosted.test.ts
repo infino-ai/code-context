@@ -318,6 +318,43 @@ describe("cold-start retries", () => {
     expect(seen[0].retries).toBeGreaterThan(0);
   });
 
+  it("backs off and retries a 429 (the platform at capacity) within the call's own budget, not the cold-start one", async () => {
+    // A tiny cold-start budget, a sub_agent budget of max_wall_secs + 60 s:
+    // the capacity retries ride the latter.
+    const answer = { facts: [], statement: null, coverage: { rows_total: 0, rows_returned: 0, truncated: false }, terminate: "answered", turns: 1, retries: 0, model_tokens: 5 };
+    const seen: HostedCallInfo[] = [];
+    const { db, calls } = client(
+      [
+        { status: 429, body: JSON.stringify({ code: "pool_saturated", message: "no room" }), headers: { "retry-after": "0", "content-type": "application/json" } },
+        { status: 429, body: "no room", headers: { "retry-after": "0" } },
+        json(answer),
+      ],
+      { coldStartSecs: 0.001, onCall: (i) => seen.push(i) },
+    );
+    expect(await db.subAgent({ question: "q", max_wall_secs: 30 })).toEqual(answer);
+    expect(calls).toHaveLength(3);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({ op: "sub_agent", status: 200, retries: 2 });
+  });
+
+  it("gives up on a 429 whose Retry-After outlives the call's budget, naming that budget and the capacity", async () => {
+    const { db, calls } = client([{ status: 429, body: "no room", headers: { "retry-after": "600" } }], { timeoutMs: 1000 });
+    const err = await db.querySql("SELECT 1").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(HostedError);
+    expect(err).toMatchObject({ status: 429, op: "query_sql", retryAfterSecs: 600 });
+    expect((err as HostedError).atCapacity).toBe(true);
+    expect((err as Error).message).toMatch(/gave up after 0 retries within the call's 1 s budget/);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("a 503 still rides the cold-start budget, and is not 'at capacity'", async () => {
+    const { db } = client([{ status: 503, body: "spawning", headers: { "retry-after": "600" } }], { coldStartSecs: 1, timeoutMs: 900_000 });
+    const err = await db.querySql("SELECT 1").catch((e: unknown) => e);
+    expect(err).toMatchObject({ status: 503 });
+    expect((err as HostedError).atCapacity).toBe(false);
+    expect((err as Error).message).toMatch(/within the 1 s cold-start budget/);
+  });
+
   it("retries an append 409 that carries Retry-After (a lost write race)", async () => {
     const { db, calls } = client([
       { status: 409, body: "another write to the same table was in flight", headers: { "retry-after": "0" } },

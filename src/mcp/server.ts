@@ -59,6 +59,7 @@ import {
 import { runExploreAgent, runRetrievalAgent } from "../core/retrieval-agent.js";
 import { readManifest, type Manifest } from "../core/manifest.js";
 import { localDb, newHostedMemo, platformLabel, platformTableReady, type IndexHandle } from "../core/context.js";
+import { HostedError } from "../core/hosted.js";
 import { find, search, runSql, jsonify, partialIndex } from "../core/searcher.js";
 import {
   newSession,
@@ -237,6 +238,11 @@ export async function serveMcp(rootPath?: string): Promise<void> {
     content: [{ type: "text" as const, text: message }],
     isError: true,
   });
+  /** What to tell the model when the platform refused a call for capacity
+   * (429) for the whole of its budget: the client already backed off and
+   * retried inside that budget; the answer may come on a later call. */
+  const busyHint = (err: unknown): string =>
+    err instanceof HostedError && err.atCapacity ? " - the platform is at capacity right now; ask again in a moment" : "";
   const noIndex = (ctx: RepoCtx) =>
     fail(`no index for ${ctx.root} yet - run \`cx index\` there once (keyword search is live in seconds).`);
 
@@ -583,7 +589,7 @@ export async function serveMcp(rootPath?: string): Promise<void> {
             ...(usage ? { usage } : {}),
           });
         } catch (err) {
-          return fail(`subagent failed: ${(err as Error).message}`);
+          return fail(`subagent failed: ${(err as Error).message}${busyHint(err)}`);
         }
       },
     );
@@ -651,7 +657,7 @@ export async function serveMcp(rootPath?: string): Promise<void> {
             ...(usage ? { usage } : {}),
           });
         } catch (err) {
-          return fail(`explore failed: ${(err as Error).message}`);
+          return fail(`explore failed: ${(err as Error).message}${busyHint(err)}`);
         }
       },
     );
