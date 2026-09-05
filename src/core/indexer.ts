@@ -28,13 +28,19 @@
 // and every build and sync writes both: the two are one index in two places.
 // A build loads the platform table after the local stages, in one pass -
 // drop, create with both indexes, append in APPEND_BATCH waves - from the same
-// spill the local build replayed, so the two tables hold the same rows. A sync
-// applies the same diff to both, the platform's deletes and appends started
-// first and the local ones run while they are in flight; the file state that
-// says "this diff is applied" is written only when both sides have it, so a
-// failure on either side is re-applied next time (a sync is idempotent).
-// Same-process atomicity does not apply to the platform table: other
-// processes read it, and the platform makes each append one commit.
+// spill the local build replayed, so the two tables hold the same rows. While
+// it loads, the platform manifest is provisional (`vectors: "building"`, the
+// same word the local manifest uses for its vector stage) and a sync that
+// reads it stops, so no diff or second build races the load; a failed load
+// removes the manifest, so the next sync asks for a build. A sync applies the
+// same diff to both, the platform's deletes and appends started first and the
+// local ones run while they are in flight; the file state that says "this
+// diff is applied" is written only when both sides have it and the recount is
+// in, and a failure on either side marks the touched paths unapplied, so the
+// next sync re-applies them whatever the tree has done since (a sync is
+// idempotent: it deletes before it appends). Same-process atomicity does not
+// apply to the platform table: other processes read it, and the platform
+// makes each append one commit.
 
 import {
   appendFileSync,
@@ -67,6 +73,7 @@ import {
   writeManifest,
   readPlatformManifest,
   writePlatformManifest,
+  removePlatformManifest,
   INDEX_FORMAT_VERSION,
   type Manifest,
   type VectorState,
@@ -86,6 +93,7 @@ import {
   hashContent,
   readFileState,
   writeFileState,
+  type FileEntry,
   type FileState,
 } from "./filestate.js";
 import type { Embedder } from "./embedder.js";
@@ -120,10 +128,22 @@ const DELETE_PATHS_PER_PREDICATE = 100;
 /** The FTS-indexed column of the chunks table. */
 const CONTENT_COLUMN = "content";
 
-/** Distance metric of the vector index, the same in both modes: the local
- * model L2-normalizes, and cosine is what the platform indexes an embedding
- * column with. */
+/** Distance metric of the vector index, in both places: the local model
+ * L2-normalizes, and cosine is what the platform indexes an embedding column
+ * with. */
 const VECTOR_METRIC = "cosine";
+
+/** A `FileEntry` no file can match (no size is negative), written for every
+ * path a failed sync touched so the next sync re-applies them whatever the
+ * tree has done since - a path restored to its old content would otherwise
+ * read as unchanged while one table holds its rows and the other does not. */
+const UNAPPLIED_ENTRY: FileEntry = { size: -1, mtimeMs: -1, hash: "" };
+
+/** The `rebuild-required` reasons that mean "a build is in flight, wait"
+ * rather than "rebuild": a caller that rebuilds on the other reasons must not
+ * on these (see syncInProgress). */
+export const SYNC_REASON_VECTORS_BUILDING = "vector backfill in progress";
+export const SYNC_REASON_PLATFORM_LOADING = "platform load in progress";
 
 export interface IndexOptions {
   root: string;
@@ -148,9 +168,11 @@ export interface IndexOptions {
   embedProvider?: EmbedProvider;
   caps?: IndexCaps;
   /** Platform table only: the FTS analyzer its `content` index is created
-   * with (HOSTED_DEFAULT_ANALYZER when none is given - see hostedAnalyzer),
-   * sent to the platform explicitly and recorded in the platform manifest. The
-   * local index is built with the engine default through the binding's bare
+   * with, when the caller asks for one (--analyzer). Absent, a build keeps
+   * the analyzer the table already has, per the platform manifest, and a
+   * first load takes HOSTED_DEFAULT_ANALYZER; the value settled on is sent to
+   * the platform explicitly and recorded in the platform manifest. The local
+   * index is built with the engine default through the binding's bare
    * `IndexSpec.fts(column)`. A sync whose value differs from the recorded one
    * reports rebuild-required: a table's analyzer is fixed at create time. */
   analyzer?: Analyzer;
@@ -234,6 +256,12 @@ export async function indexRepoStaged(opts: IndexOptions): Promise<StagedIndexRu
   // Keep the index out of the user's commits before we write a byte of it.
   ensureIndexIgnored(root, indexDirPath);
 
+  // The platform table's analyzer is fixed when the table is created: a
+  // rebuild keeps what the table has unless the caller asks for another, and
+  // a first load takes the default. Read before the provisional manifest
+  // below replaces the record.
+  const platformAnalyzer = opts.hosted ? platformAnalyzerFor(opts, indexDirPath) : undefined;
+
   const scanned = await scanToSpill(opts, caps);
   const db = opts.db;
   const { spill, files, chunkCount, languages, fileState, truncatedFiles } = scanned;
@@ -262,6 +290,14 @@ export async function indexRepoStaged(opts: IndexOptions): Promise<StagedIndexRu
       indexMs,
     };
     writeManifest(indexDirPath, toManifest(stats, ENGINE_DEFAULT_ANALYZER));
+    // From here the file state describes this tree. With a platform database
+    // the table does not yet: the provisional manifest says a load is under
+    // way, so a sync in the meantime waits instead of diffing against a table
+    // that is about to be replaced, and a record of an earlier load cannot
+    // outlive a load that fails (the failure removes this file).
+    if (opts.hosted && platformAnalyzer) {
+      writePlatformManifest(indexDirPath, toManifest({ ...stats, vectors: "building" }, platformAnalyzer, undefined, "hosted"));
+    }
     writeFileState(indexDirPath, fileState);
     if (!embedder && !opts.hosted) {
       spill.release();
@@ -313,11 +349,19 @@ export async function indexRepoStaged(opts: IndexOptions): Promise<StagedIndexRu
             }
           }
         }
-        if (opts.hosted) {
+        if (opts.hosted && platformAnalyzer) {
           try {
-            stats.hosted = await loadPlatform(opts, opts.hosted, scanned, caps, embedder && dim !== undefined ? { embedder, dim } : undefined, stats);
+            stats.hosted = await loadPlatform(opts, opts.hosted, platformAnalyzer, scanned, embedder && dim !== undefined ? { embedder, dim } : undefined, stats);
           } catch (err) {
             stats.hostedError = (err as Error).message;
+            // No record of the table survives a failed load: the next sync
+            // reports it missing and a build reloads it, instead of trusting
+            // a manifest from before this attempt.
+            try {
+              removePlatformManifest(indexDirPath);
+            } catch {
+              /* the disk is the problem then; nothing to record on */
+            }
           }
         }
       } finally {
@@ -345,7 +389,7 @@ interface Scanned {
 }
 
 /** Walk the tree and spool every chunk to the spill. The whole tree spools
- * before any table is touched, in either mode, so the previous index serves
+ * before any table is touched, in both places, so the previous index serves
  * queries all through the walk, and a failure here (full disk, racing
  * deletes) costs nothing - the spill is released and the error surfaces. */
 async function scanToSpill(opts: IndexOptions, caps: IndexCaps): Promise<Scanned> {
@@ -408,28 +452,36 @@ async function scanToSpill(opts: IndexOptions, caps: IndexCaps): Promise<Scanned
 
 // --- the platform load -------------------------------------------------------------------
 
+/** The analyzer a build creates the platform table with: the one asked for,
+ * else the one the table already has (its manifest, provisional or final),
+ * else the default for a first load. */
+function platformAnalyzerFor(opts: IndexOptions, indexDirPath: string): Analyzer {
+  if (opts.analyzer !== undefined) return opts.analyzer;
+  const recorded = readPlatformManifest(indexDirPath);
+  return recorded ? analyzerOf(recorded) : HOSTED_DEFAULT_ANALYZER;
+}
+
 /** Load the spilled chunks into the platform's chunks table in one pass after
  * the local stages: drop → create → append waves, from the spill the local
  * build replayed, so both tables hold the same rows. The table gets the FTS
- * index with the requested analyzer and, when there are vectors, either a
- * client-vector column carrying the local embedder's vectors (`embedProvider:
- * "local"`, the vector spill already written by the local stage) with a
- * cosine index, or a platform-filled embedding column (which the platform
- * indexes by itself - a vector entry naming it is a 400). Records the
- * platform manifest so a later sync can apply its diff to this table too.
- * Throws on a platform failure; the caller records it and the local index
- * stands. */
+ * index with `analyzer` and, when there are vectors, either a client-vector
+ * column carrying the local embedder's vectors (`embedProvider: "local"`, the
+ * vector spill already written by the local stage) with a cosine index, or a
+ * platform-filled embedding column (which the platform indexes by itself - a
+ * vector entry naming it is a 400). Replaces the provisional platform
+ * manifest with the final one so a later sync can apply its diff to this
+ * table too. Throws on a platform failure; the caller records it, removes the
+ * manifest, and the local index stands. */
 async function loadPlatform(
   opts: IndexOptions,
   hosted: HostedDb,
+  analyzer: Analyzer,
   scanned: Scanned,
-  caps: IndexCaps,
   vectors: { embedder: Embedder; dim: number } | undefined,
   stats: IndexStats,
 ): Promise<HostedLoadStats> {
   const { indexDirPath, onPhase, onProgress } = opts;
   const provider: EmbedProvider = opts.embedProvider ?? DEFAULT_HOSTED_EMBED_PROVIDER;
-  const analyzer = opts.analyzer ?? HOSTED_DEFAULT_ANALYZER;
   const { spill, chunkCount } = scanned;
 
   const platform = provider === "platform";
@@ -839,6 +891,13 @@ export type SyncOutcome = SyncResult | { action: "rebuild-required"; reason: str
 
 const rebuildRequired = (reason: string): SyncOutcome => ({ action: "rebuild-required", reason });
 
+/** Whether a `rebuild-required` outcome means a build is already in flight
+ * (the local vector stage, or the platform load) rather than that the index
+ * needs one: a caller that rebuilds on rebuild-required must wait on these. */
+export function syncInProgress(outcome: SyncOutcome): boolean {
+  return outcome.action === "rebuild-required" && (outcome.reason === SYNC_REASON_VECTORS_BUILDING || outcome.reason === SYNC_REASON_PLATFORM_LOADING);
+}
+
 /** Bring the index up to date with the working tree by re-chunking (and
  * re-embedding) only the files that changed since the last index or sync.
  * Reports `rebuild-required` instead of guessing when incremental can't be
@@ -852,8 +911,12 @@ const rebuildRequired = (reason: string): SyncOutcome => ({ action: "rebuild-req
  * apply so both are in flight together. The platform table needs the record
  * this machine's build wrote (the platform manifest and the file state); a
  * table loaded elsewhere has no diff base here, and the outcome says so
- * rather than guessing. The file state is written only once both sides have
- * the diff, so a failure on either is re-applied by the next sync. */
+ * rather than guessing; a table whose load is still running (provisional
+ * manifest) or that was left behind by a build without the database (the
+ * local manifest newer than the platform's) is reported for a build too. The
+ * file state is written only once both sides have the diff and the recount is
+ * in; a failure anywhere after the first table write marks the touched paths
+ * unapplied so the next sync re-applies them to both. */
 export async function syncRepo(opts: IndexOptions): Promise<SyncOutcome> {
   const { root, indexDirPath, embedder, onPhase, db } = opts;
   const hosted = opts.hosted;
@@ -864,7 +927,7 @@ export async function syncRepo(opts: IndexOptions): Promise<SyncOutcome> {
   const manifest = readManifest(indexDirPath);
   const prev = readFileState(indexDirPath);
   if (!manifest || !prev || !db.listTables().includes(TABLE)) return rebuildRequired("no prior index state");
-  if (manifest.vectors === "building") return rebuildRequired("vector backfill in progress");
+  if (manifest.vectors === "building") return rebuildRequired(SYNC_REASON_VECTORS_BUILDING);
 
   // The local index's vectors: a model switch is a rebuild.
   const hasVectors = manifest.vectors === "ready";
@@ -887,7 +950,18 @@ export async function syncRepo(opts: IndexOptions): Promise<SyncOutcome> {
     platformManifest = readPlatformManifest(indexDirPath);
     if (!platformManifest) {
       return rebuildRequired(
-        `no record of the platform table in ${indexDirPath} (it was loaded from another machine, or never loaded) - a build loads it`,
+        `no record of the platform table in ${indexDirPath} (it was loaded from another machine, never loaded, or its last load failed) - a build loads it`,
+      );
+    }
+    if (platformManifest.vectors === "building") return rebuildRequired(SYNC_REASON_PLATFORM_LOADING);
+    // Every writer of both places leaves the platform manifest at least as
+    // new as the local one (a build writes it last, a sync stamps both with
+    // one time). A local manifest that is newer was written by a build or
+    // sync without the database: that diff never reached the table and is
+    // gone from the file state, so only a build can bring the table back.
+    if (platformManifest.indexedAt < manifest.indexedAt) {
+      return rebuildRequired(
+        `the local index was written without --db after the platform table was loaded (local ${manifest.indexedAt}, platform ${platformManifest.indexedAt}) - a build reloads it`,
       );
     }
     if (!(await hosted.listTables()).includes(TABLE)) return rebuildRequired(`no ${TABLE} table on the platform database`);
@@ -1006,7 +1080,8 @@ export async function syncRepo(opts: IndexOptions): Promise<SyncOutcome> {
     // runs; the local block is one synchronous stretch, so same-process
     // readers never see the deletes without the appends.
     onPhase?.("commit-text");
-    const predicates = stalePredicates([...diff.added, ...diff.changed, ...diff.deleted]);
+    const touched = [...diff.added, ...diff.changed, ...diff.deleted];
+    const predicates = stalePredicates(touched);
     const platformApply = hosted
       ? applyPlatformDiff(
           hosted,
@@ -1018,21 +1093,41 @@ export async function syncRepo(opts: IndexOptions): Promise<SyncOutcome> {
         )
       : undefined;
     let chunksRemoved = 0;
+    let hostedStats: HostedLoadStats | undefined;
+    let platformCounts: [RowRecord[], RowRecord[]] | undefined;
     try {
-      const table = db.openTable(TABLE);
-      for (const predicate of predicates) chunksRemoved += table.delete(predicate).nTombstoned;
-      if (chunksAdded > 0) appendSpillSync(table, spill, chunksAdded, hasVectors ? dim : undefined);
-      // Compact after deletes/appends to keep tombstones clean. The platform
-      // table's compaction is the platform's job.
-      compact(table);
+      try {
+        const table = db.openTable(TABLE);
+        for (const predicate of predicates) chunksRemoved += table.delete(predicate).nTombstoned;
+        if (chunksAdded > 0) appendSpillSync(table, spill, chunksAdded, hasVectors ? dim : undefined);
+        // Compact after deletes/appends to keep tombstones clean. The platform
+        // table's compaction is the platform's job.
+        compact(table);
+      } catch (err) {
+        // The platform apply is in flight; let it settle before the local
+        // failure is reported, so no rejection goes unobserved.
+        await platformApply?.catch(() => undefined);
+        throw err;
+      }
+      hostedStats = platformApply ? await platformApply : undefined;
+      // The platform's recount belongs before the commit below: a recount that
+      // fails leaves the sync unrecorded and re-applied, never a table that is
+      // current with a manifest that is not.
+      if (hosted && platformManifest) {
+        platformCounts = await Promise.all([hosted.querySql(TABLE_COUNTS_SQL), hosted.querySql(TABLE_LANGUAGES_SQL)]);
+      }
     } catch (err) {
-      // The platform apply is in flight; let it settle before the local
-      // failure is reported, so no rejection goes unobserved. The file state
-      // is not written, so the next sync re-applies the diff to both.
-      await platformApply?.catch(() => undefined);
+      // One or both tables may hold part of this diff. Mark every touched
+      // path unapplied so the next sync re-applies it to both, however the
+      // tree has moved meanwhile (a revert would otherwise read as
+      // unchanged). The deletes make the re-apply idempotent.
+      try {
+        writeFileState(indexDirPath, markUnapplied(prev, touched));
+      } catch {
+        /* the disk is the problem then; the error below says what failed */
+      }
       throw err;
     }
-    const hostedStats = platformApply ? await platformApply : undefined;
 
     // --- persist state + recount ----------------------------------------------------
     // Only now is the diff applied everywhere it must be.
@@ -1043,11 +1138,12 @@ export async function syncRepo(opts: IndexOptions): Promise<SyncOutcome> {
       caps,
     );
     writeManifest(indexDirPath, nextManifest);
-    if (hosted && platformManifest) {
-      const [counts, langs] = await Promise.all([hosted.querySql(TABLE_COUNTS_SQL), hosted.querySql(TABLE_LANGUAGES_SQL)]);
+    if (platformManifest && platformCounts) {
+      // Stamped with the local manifest's time: the two manifests move
+      // together, which is what the freshness check above relies on.
       writePlatformManifest(
         indexDirPath,
-        withTruncation({ ...platformManifest, ...tableCounts(counts, langs), indexedAt: nextManifest.indexedAt }, truncatedFiles, caps),
+        withTruncation({ ...platformManifest, ...tableCounts(platformCounts[0], platformCounts[1]), indexedAt: nextManifest.indexedAt }, truncatedFiles, caps),
       );
     }
 
@@ -1100,12 +1196,22 @@ async function applyPlatformDiff(
 const TABLE_COUNTS_SQL = `SELECT COUNT(*) AS n, COUNT(DISTINCT path) AS f FROM ${TABLE}`;
 const TABLE_LANGUAGES_SQL = `SELECT lang, COUNT(*) AS n FROM ${TABLE} GROUP BY lang`;
 
-/** The manifest fields a recount refreshes, from the two queries' rows. */
+/** The manifest fields a recount refreshes, from the two queries' rows. An
+ * empty counts result (a table with no rows can answer with none) is zero. */
 function tableCounts(counts: RowRecord[], langs: RowRecord[]): Pick<Manifest, "files" | "chunks" | "languages"> {
-  const [{ n: chunkCount, f: fileCount }] = counts as [{ n: unknown; f: unknown }];
+  const first = (counts[0] ?? { n: 0, f: 0 }) as { n: unknown; f: unknown };
   const languages: Record<string, number> = {};
   for (const r of langs as Array<{ lang: string; n: unknown }>) languages[r.lang || "other"] = Number(r.n);
-  return { files: Number(fileCount), chunks: Number(chunkCount), languages };
+  return { files: Number(first.f ?? 0), chunks: Number(first.n ?? 0), languages };
+}
+
+/** `prev` with every path in `touched` marked as never applied, so the next
+ * sync's diff lists each one as changed (present) or deleted (absent) and
+ * re-applies it to both tables. */
+function markUnapplied(prev: FileState, touched: string[]): FileState {
+  const files = { ...prev.files };
+  for (const path of touched) files[path] = UNAPPLIED_ENTRY;
+  return { version: prev.version, files };
 }
 
 /** `manifest` with its truncation fields tracking the tree as it grows or

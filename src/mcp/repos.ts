@@ -41,8 +41,14 @@ export interface RepoCtx {
   hostedMemo?: HostedMemo;
   /** performance.now() of the last auto-sync staleness check. */
   lastSyncCheck: number;
-  /** In-flight index mutation, or null; enforces one mutation at a time. */
+  /** In-flight index mutation, or null; enforces one mutation at a time. A
+   * build holds it only to keyword-live, so a first query is answered then. */
   mutation: Promise<unknown> | null;
+  /** The rest of an in-flight build - the vector stage and, with a platform
+   * database, the platform load - or null. While it is set no sync starts (a
+   * diff or a second build would race the load) and the platform tools say
+   * the table is being loaded rather than missing. */
+  completion: Promise<unknown> | null;
 }
 
 /** Just the piece of `fs.Stats` the registry needs, so tests can fake it. */
@@ -129,6 +135,7 @@ export class RepoRegistry {
         : {}),
       lastSyncCheck: 0,
       mutation: null,
+      completion: null,
     };
     this.repos.set(root, ctx);
     if (this.repos.size > this.maxOpen) {

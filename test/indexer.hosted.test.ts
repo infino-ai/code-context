@@ -19,10 +19,22 @@ import { connect, type Connection } from "@infino-ai/infino";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { APPEND_BATCH, TABLE } from "../src/core/config.js";
 import { HostedDb } from "../src/core/hosted.js";
-import { indexRepo, indexRepoStaged, syncRepo, type IndexOptions, type SyncResult } from "../src/core/indexer.js";
-import { readManifest, readPlatformManifest, type Manifest } from "../src/core/manifest.js";
+import {
+  SYNC_REASON_PLATFORM_LOADING,
+  indexRepo,
+  indexRepoStaged,
+  syncInProgress,
+  syncRepo,
+  type IndexOptions,
+  type SyncResult,
+} from "../src/core/indexer.js";
+import { readManifest, readPlatformManifest, writePlatformManifest, type Manifest } from "../src/core/manifest.js";
 import { readFileState } from "../src/core/filestate.js";
 import type { Embedder } from "../src/core/embedder.js";
+
+/** What a failed sync writes for every path it touched: an entry no file can
+ * match, so the next sync re-applies the path whatever the tree did since. */
+const UNAPPLIED = { size: -1, mtimeMs: -1, hash: "" };
 
 // --- fixtures -------------------------------------------------------------------------
 
@@ -348,16 +360,47 @@ describe("a build with a platform database (client vectors)", () => {
     expect(platform.ops()).toEqual(["list_tables", "create_table"]);
   });
 
-  it("reports keyword-live before the platform load, and the finished stats after it", async () => {
+  it("reports keyword-live before the platform load, with a provisional platform manifest until the load lands", async () => {
     writeSmallFixture(root);
     const platform = fakePlatform();
     const run = await indexRepoStaged({ root, db, hosted: platform.db(), indexDirPath: dir, embedder: fakeEmbedder, embedProvider: "local" });
     expect(run.text.vectors).toBe("building");
     expect(run.text.hosted).toBeUndefined();
     expect(platform.calls).toHaveLength(0); // nothing on the wire yet
+    // The record says a load is under way: a sync in this window waits (on
+    // the local vector stage first, then on the platform load - both read as
+    // "in progress", never as "rebuild").
+    const provisional = readPlatformManifest(dir)!;
+    expect(provisional.vectors).toBe("building");
+    expect(provisional.analyzer).toBe("ascii_lower");
+    const waiting = await syncRepo({ root, db, hosted: platform.db(), indexDirPath: dir, embedder: fakeEmbedder, embedProvider: "local" });
+    expect(waiting.action).toBe("rebuild-required");
+    expect(syncInProgress(waiting)).toBe(true);
+    expect(platform.calls).toHaveLength(0); // the sync made no platform call either
     const final = await run.completion;
     expect(final.vectors).toBe("ready");
     expect(final.hosted!.appendCalls).toBe(1);
+    expect(readPlatformManifest(dir)!.vectors).toBe("ready");
+  });
+
+  it("keeps the analyzer the table has when a rebuild or sync names none", async () => {
+    writeSmallFixture(root);
+    const first = fakePlatform();
+    await indexRepo({ root, db, hosted: first.db(), indexDirPath: dir, embedder: fakeEmbedder, embedProvider: "local", analyzer: "standard" });
+    expect(readPlatformManifest(dir)!.analyzer).toBe("standard");
+    // A sync with no analyzer asks for nothing: no rebuild, the record stands.
+    const synced = await syncRepo({ root, db, hosted: first.db(), indexDirPath: dir, embedder: fakeEmbedder, embedProvider: "local" });
+    expect(synced.action).toBe("noop");
+    expect(readPlatformManifest(dir)!.analyzer).toBe("standard");
+    // A rebuild with no analyzer recreates the table with the one it had.
+    const second = fakePlatform([TABLE]);
+    await indexRepo({ root, db, hosted: second.db(), indexDirPath: dir, embedder: fakeEmbedder, embedProvider: "local" });
+    const created = createBody(second.calls.find((c) => c.op === "create_table")!);
+    expect(created.indexes).toMatchObject({ fts: [{ column: "content", analyzer: "standard" }] });
+    expect(readPlatformManifest(dir)!.analyzer).toBe("standard");
+    // Only an explicit, differing request changes it.
+    const changed = await syncRepo({ root, db, hosted: second.db(), indexDirPath: dir, embedder: fakeEmbedder, embedProvider: "local", analyzer: "ascii_lower" });
+    expect((changed as { reason: string }).reason).toMatch(/analyzer changed \(platform table: standard, current: ascii_lower\)/);
   });
 });
 
@@ -463,6 +506,26 @@ describe("failures during a build", () => {
     expect(readManifest(dir)!.vectors).toBe("ready");
     expect(readPlatformManifest(dir)).toBeUndefined();
     expect(indexDirFiles(dir).filter((f) => f.startsWith("spill."))).toEqual([]);
+  });
+
+  it("a rebuild whose platform load fails forgets the earlier load, so the next sync asks for a build instead of trusting a stale record", async () => {
+    writeSmallFixture(root);
+    const platform = fakePlatform();
+    await indexRepo({ root, db, hosted: platform.db(), indexDirPath: dir, embedder: fakeEmbedder });
+    expect(readPlatformManifest(dir)!.vectors).toBe("ready");
+    writeFileSync(join(root, "src", "small0.txt"), textFile(0, SMALL_LINES, "changedmarker"));
+
+    // The rebuild's append fails: the table on the platform is empty (created,
+    // never filled) while the file state describes the new tree.
+    const failing = fakePlatform([TABLE], "append");
+    const stats = await indexRepo({ root, db, hosted: failing.db(), indexDirPath: dir, embedder: fakeEmbedder });
+    expect(stats.hostedError).toMatch(/append: server returned 500/);
+    expect(readPlatformManifest(dir)).toBeUndefined();
+
+    // Not "up to date": the table has no record here, a build reloads it.
+    const outcome = await syncRepo({ root, db, hosted: failing.db(), indexDirPath: dir, embedder: fakeEmbedder });
+    expect(outcome.action).toBe("rebuild-required");
+    expect((outcome as { reason: string }).reason).toMatch(/no record of the platform table/);
   });
 });
 
@@ -612,9 +675,10 @@ describe("a sync with a platform database", () => {
     expect((outcome as { reason: string }).reason).toMatch(/analyzer changed \(platform table: ascii_lower, current: standard\)/);
   });
 
-  it("a platform failure mid-apply throws, leaves the file state unwritten, and the next sync re-applies the diff to both", async () => {
+  it("a platform failure mid-apply throws, marks the touched paths unapplied, and the next sync re-applies the diff to both", async () => {
     const platform = fakePlatform();
     await build(platform);
+    const before = readFileState(dir)!.files["src/small0.txt"];
     writeFileSync(join(root, "src", "small0.txt"), textFile(0, SMALL_LINES, "changedmarker"));
 
     // The same database, answering 500 to the append this time.
@@ -622,12 +686,13 @@ describe("a sync with a platform database", () => {
     await expect(
       syncRepo({ root, db, hosted: failing.db(), indexDirPath: dir, embedder: fakeEmbedder, embedProvider: "local" }),
     ).rejects.toThrow(/append: server returned 500/);
-    // The local side did apply (the two run together), but the record of the
-    // diff was not written, so it is applied again next time - the deletes
-    // make that idempotent.
+    // The local side did apply (the two run together); the record says the
+    // touched path is not applied, neither the old fingerprint nor the new.
     expect(localRowCount(db)).toBe(3);
     const state = readFileState(dir)!;
-    expect(state.files["src/small0.txt"]).toEqual((await (async () => readFileState(dir)!)()).files["src/small0.txt"]);
+    expect(state.files["src/small0.txt"]).toEqual(UNAPPLIED);
+    expect(state.files["src/small0.txt"]).not.toEqual(before);
+    expect(state.files["src/small1.txt"]).toEqual(readFileState(dir)!.files["src/small1.txt"]); // untouched paths keep their entries
 
     const beforeCalls = platform.calls.length;
     const retry = (await syncRepo({ root, db, hosted: platform.db(), indexDirPath: dir, embedder: fakeEmbedder, embedProvider: "local" })) as SyncResult;
@@ -636,6 +701,93 @@ describe("a sync with a platform database", () => {
     expect(platform.calls.slice(beforeCalls).map((c) => c.op)).toEqual(["list_tables", "delete", "append", "query_sql", "query_sql"]);
     expect(localRowCount(db)).toBe(3);
     expect(localPaths(db)).toEqual(["src/small0.txt", "src/small1.txt", "src/small2.txt"]);
+    expect(readFileState(dir)!.files["src/small0.txt"]).not.toEqual(UNAPPLIED);
+  });
+
+  it("re-applies a touched path even when the tree moved back before the retry", async () => {
+    const platform = fakePlatform();
+    await build(platform);
+    const original = textFile(0, SMALL_LINES, "smallmarker0");
+    writeFileSync(join(root, "src", "small0.txt"), textFile(0, SMALL_LINES, "changedmarker"));
+    const failing = fakePlatform([TABLE], "append");
+    await expect(syncRepo({ root, db, hosted: failing.db(), indexDirPath: dir, embedder: fakeEmbedder, embedProvider: "local" })).rejects.toThrow(/500/);
+    // The local table now holds the changed rows; the platform holds none
+    // for the path. Reverting the file to its original bytes would read as
+    // "unchanged" against the old fingerprint - the unapplied mark prevents
+    // that, and both tables end up with the original rows.
+    writeFileSync(join(root, "src", "small0.txt"), original);
+    const retry = (await syncRepo({ root, db, hosted: platform.db(), indexDirPath: dir, embedder: fakeEmbedder, embedProvider: "local" })) as SyncResult;
+    expect(retry.action).toBe("synced");
+    expect(retry.filesChanged).toBe(1);
+    const rows = db.querySql(`SELECT content FROM ${TABLE} WHERE path = 'src/small0.txt'`) as Array<{ content: string }>;
+    expect(rows).toHaveLength(1);
+    expect(rows[0].content).toContain("smallmarker0");
+    expect(rows[0].content).not.toContain("changedmarker");
+  });
+
+  it("a local failure while the platform apply is in flight lets it settle, throws, and marks the paths unapplied", async () => {
+    const platform = fakePlatform();
+    await build(platform);
+    writeFileSync(join(root, "src", "small0.txt"), textFile(0, SMALL_LINES, "changedmarker"));
+    // An engine that answers the prerequisites but fails to open the table.
+    const broken = {
+      listTables: () => db.listTables(),
+      openTable: () => {
+        throw new Error("engine down");
+      },
+      querySql: (sql: string) => db.querySql(sql),
+    } as unknown as Connection;
+    const beforeCalls = platform.calls.length;
+    await expect(syncRepo({ root, db: broken, hosted: platform.db(), indexDirPath: dir, embedder: fakeEmbedder, embedProvider: "local" })).rejects.toThrow(/engine down/);
+    // The platform apply ran to the end (no rejection left dangling) and the
+    // path is marked for the next sync, which re-applies it to both.
+    expect(platform.calls.slice(beforeCalls).map((c) => c.op)).toEqual(["list_tables", "delete", "append"]);
+    expect(readFileState(dir)!.files["src/small0.txt"]).toEqual(UNAPPLIED);
+    const retry = (await syncRepo({ root, db, hosted: platform.db(), indexDirPath: dir, embedder: fakeEmbedder, embedProvider: "local" })) as SyncResult;
+    expect(retry.action).toBe("synced");
+    expect(retry.filesChanged).toBe(1);
+    expect(localPaths(db)).toEqual(["src/small0.txt", "src/small1.txt", "src/small2.txt"]);
+  });
+
+  it("a recount failure after both applies leaves the sync unrecorded, and the next sync re-applies and recounts", async () => {
+    const platform = fakePlatform();
+    await build(platform);
+    writeFileSync(join(root, "src", "small0.txt"), textFile(0, SMALL_LINES, "changedmarker"));
+    const failing = fakePlatform([TABLE], "query_sql");
+    await expect(syncRepo({ root, db, hosted: failing.db(), indexDirPath: dir, embedder: fakeEmbedder, embedProvider: "local" })).rejects.toThrow(/query_sql: server returned 500/);
+    expect(failing.ops()).toEqual(["list_tables", "delete", "append", "query_sql", "query_sql"]);
+    expect(readFileState(dir)!.files["src/small0.txt"]).toEqual(UNAPPLIED);
+    const retry = (await syncRepo({ root, db, hosted: platform.db(), indexDirPath: dir, embedder: fakeEmbedder, embedProvider: "local" })) as SyncResult;
+    expect(retry.action).toBe("synced");
+    expect(readPlatformManifest(dir)!.indexedAt).toBe(readManifest(dir)!.indexedAt);
+  });
+
+  it("asks for a build when the local index was written without the database since the table was loaded", async () => {
+    const platform = fakePlatform();
+    await build(platform);
+    writeFileSync(join(root, "src", "small0.txt"), textFile(0, SMALL_LINES, "changedmarker"));
+    // A sync without --db: the local index moves, the platform table does not.
+    const localOnly = await syncRepo({ root, db, indexDirPath: dir, embedder: fakeEmbedder });
+    expect(localOnly.action).toBe("synced");
+    const outcome = await syncRepo({ root, db, hosted: platform.db(), indexDirPath: dir, embedder: fakeEmbedder, embedProvider: "local" });
+    expect(outcome.action).toBe("rebuild-required");
+    expect((outcome as { reason: string }).reason).toMatch(/written without --db/);
+    // The build brings the table back to the local index's rows.
+    await indexRepo({ root, db, hosted: platform.db(), indexDirPath: dir, embedder: fakeEmbedder, embedProvider: "local" });
+    expect(platform.rows().map((r) => r.path).sort()).toEqual(localPaths(db));
+    const again = await syncRepo({ root, db, hosted: platform.db(), indexDirPath: dir, embedder: fakeEmbedder, embedProvider: "local" });
+    expect(again.action).toBe("noop");
+  });
+
+  it("waits, without a platform call, while another build's load is under way", async () => {
+    const platform = fakePlatform();
+    await build(platform);
+    writePlatformManifest(dir, { ...readPlatformManifest(dir)!, vectors: "building" });
+    const beforeCalls = platform.calls.length;
+    const outcome = await syncRepo({ root, db, hosted: platform.db(), indexDirPath: dir, embedder: fakeEmbedder, embedProvider: "local" });
+    expect(outcome).toEqual({ action: "rebuild-required", reason: SYNC_REASON_PLATFORM_LOADING });
+    expect(syncInProgress(outcome)).toBe(true);
+    expect(platform.calls).toHaveLength(beforeCalls);
   });
 });
 

@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: Copyright The Infino Authors
 //
-// The `subagent` tool, hosted mode only: one question or task handed to the
-// platform's retrieval loop (`POST /v1/sub_agent/{database}`), which answers
+// The `subagent` tool, registered when a platform database is configured: one
+// question or task handed to the platform's retrieval loop over the index's
+// platform copy (`POST /v1/sub_agent/{database}`), which answers
 // with FACTS - the first k rows of the query that validated, and that query
 // verbatim - and never with anything the model wrote. This file turns that
 // response into the tool result and nothing more: the statement, and the

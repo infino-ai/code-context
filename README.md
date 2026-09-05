@@ -216,7 +216,7 @@ command-line flag on the two commands that touch it, `cx index` and `cx mcp`:
 | `--db <url>` | (local index only) | the platform database, `https://host/<database>` (plain `http://` only for localhost) |
 | `--api-key-file <path>` | `INFINO_API_KEY` | file holding the bearer key. The key is never an argument, since a process's arguments are visible to every other process on the machine; the environment variable is the one alternative |
 | `--embed-provider <platform\|local>` | `platform` | who fills the platform table's vectors: the platform's own model, or this machine's (vectors shipped with the rows) |
-| `--analyzer <ascii_lower\|standard>` | `ascii_lower` | `cx index` only: the full-text analyzer the platform table is created with. `ascii_lower` splits code identifiers on `.`, `_`, and `::` |
+| `--analyzer <ascii_lower\|standard>` | the table's own; `ascii_lower` for a first load | `cx index` only: the full-text analyzer the platform table is created with. `ascii_lower` splits code identifiers on `.`, `_`, and `::`. Without the flag a rebuild keeps the analyzer the table has; naming a different one rebuilds it |
 | `--db-timeout-ms <n>` | 60000 | per-request timeout |
 | `--cold-start-secs <n>` | 120 | how long to keep retrying while the database is not yet ready, before giving up |
 | `--subagent-max-turns`, `--subagent-max-wall-secs`, `--subagent-k` | 4, 120, 10 | `cx mcp` only: turn and wall-clock caps for one `subagent` call, and how many facts a call returns (search's `k`) |
@@ -341,7 +341,7 @@ no restart, no per-repo config.
 | `CX_AUTO_INDEX` | on | `0` makes a query on an unindexed repo error instead of building the index inline on the first `find`/`search`/`sql` |
 | `CX_AUTO_SYNC` | on | `0` disables the MCP server's background staleness sync |
 | `CX_SYNC_INTERVAL_SECS` | 30 | auto-sync debounce between staleness checks |
-| `CX_NO_EMBED` | off | keyword-only mode for the MCP server (skip the vector stage) |
+| `CX_NO_EMBED` | off | keyword-only mode for the MCP server (skip the vector stage; with `--db`, the platform copy is keyword-only too) |
 | `CX_NO_RECEIPT` | off | `1` turns off usage accounting - the per-call receipt on results and the `cx usage` ledger |
 
 The platform database is configured by command-line flags, not variables (see

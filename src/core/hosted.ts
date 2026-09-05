@@ -119,7 +119,7 @@ export interface HostedCallInfo {
 export interface HostedOptions {
   /** Injected for tests; defaults to the global fetch. */
   fetch?: typeof fetch;
-  /** Per-call timeout (default 60 s). An `ask` uses its own budget instead. */
+  /** Per-call timeout (default 60 s). A `sub_agent` call uses its own budget instead. */
   timeoutMs?: number;
   /** How long retryable failures are re-issued before giving up (default 120 s). */
   coldStartSecs?: number;

@@ -7,7 +7,7 @@
 // readiness": keyword search is available the moment the first batch lands;
 // vectors backfill afterwards).
 
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { MANIFEST_NAME, PLATFORM_MANIFEST_NAME, TABLE } from "./config.js";
 import type { Analyzer } from "./analyzer.js";
@@ -107,7 +107,9 @@ export function writeManifest(indexDirPath: string, manifest: Manifest): void {
 }
 
 /** The platform table's manifest, or undefined when this machine never loaded
- * it (a table loaded elsewhere has no record here). */
+ * it (a table loaded elsewhere has no record here). A manifest whose `vectors`
+ * is `building` is provisional: a build from this machine is loading the table
+ * and has not finished. */
 export function readPlatformManifest(indexDirPath: string): Manifest | undefined {
   const manifest = readManifestFile(platformManifestPath(indexDirPath));
   return manifest?.origin === "hosted" ? manifest : undefined;
@@ -115,6 +117,13 @@ export function readPlatformManifest(indexDirPath: string): Manifest | undefined
 
 export function writePlatformManifest(indexDirPath: string, manifest: Manifest): void {
   writeManifestFile(indexDirPath, platformManifestPath(indexDirPath), { ...manifest, origin: "hosted" });
+}
+
+/** Forget the platform table: written by a build whose load failed, so the
+ * next sync reports that the table has no record here and a build reloads
+ * it, rather than trusting a manifest from before the failed load. */
+export function removePlatformManifest(indexDirPath: string): void {
+  rmSync(platformManifestPath(indexDirPath), { force: true });
 }
 
 export function emptyManifest(): Manifest {

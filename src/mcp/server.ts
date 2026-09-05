@@ -1,21 +1,27 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: Copyright The Infino Authors
 //
-// The dedicated MCP server: three tools over one code index.
+// The dedicated MCP server: three tools over the local code index, and two
+// more over the same index's platform copy when a database is configured.
 //
-//   find    - the grep door: every line containing an exact string, cited
-//             path:line - complete and unranked
-//   search  - find code: exact terms AND meaning in one ranked pass
-//   sql     - the power door: relevance-ranked aggregation over the search
-//             table functions (bm25_search / hybrid_search + GROUP BY)
+//   find     - the grep door: every line containing an exact string, cited
+//              path:line - complete and unranked
+//   search   - find code: exact terms AND meaning in one ranked pass
+//   sql      - the power door: relevance-ranked aggregation over the search
+//              table functions (bm25_search / hybrid_search + GROUP BY)
+//   subagent - with --db: a question handed to the platform's retrieval
+//              loop, answered with the rows it retrieved
+//   explore  - with --db: a question about a mechanism, answered in writing
+//              by the platform's loop with the facts and chain behind it
 //
-// Three tools, each a different question: where does this exact text occur,
-// what is most relevant to this, how much of what is where. Freshness is not
-// a tool: the first query on an unindexed repo builds the index, and every
-// query re-syncs it against the working tree (auto-sync, below). A reindex
-// tool used to be the fourth; measured, no Sonnet run ever called it and
-// Haiku called it where it hurt, and every tool in the list is prompt text
-// on every turn. `cx index --full` is the forced rebuild.
+// Each tool is a different question: where does this exact text occur, what
+// is most relevant to this, how much of what is where, what do the rows say,
+// how does it work. Freshness is not a tool: the first query on an unindexed
+// repo builds the index (both places, with --db), and every query re-syncs
+// it against the working tree (auto-sync, below). A reindex tool used to be
+// one more; measured, no Sonnet run ever called it and Haiku called it where
+// it hurt, and every tool in the list is prompt text on every turn.
+// `cx index --full` is the forced rebuild.
 // No near-duplicate retrieval tools - those worsen the agent's tool
 // selection - so find is unranked and complete where search is ranked and
 // top-k, and hybrid search's keyword half already ranks exact identifiers.
@@ -69,6 +75,7 @@ import {
 import {
   indexRepoStaged,
   syncRepo,
+  syncInProgress,
   type IndexOptions,
   type SyncOutcome,
   type IndexStats,
@@ -115,13 +122,20 @@ export async function serveMcp(rootPath?: string): Promise<void> {
   /** The indexer options a build or sync of `ctx` shares: the local index
    * always, and the platform table when the context carries the client - the
    * two are written together, so no path here ever writes one without the
-   * other. */
+   * other. CX_NO_EMBED means keyword-only in both places, as --no-embed does
+   * on the CLI: with no local embedder, the `local` provider gives the
+   * platform table no embedding column either. The analyzer is passed only
+   * when a flag named one; otherwise a build keeps the table's own. */
+  const noEmbed = Boolean(process.env.CX_NO_EMBED);
+  const analyzer = hostedAnalyzer();
   const indexTargets = (ctx: RepoCtx): Pick<IndexOptions, "root" | "db" | "hosted" | "indexDirPath" | "embedProvider" | "analyzer" | "caps"> => ({
     root: ctx.root,
     db: localDb(ctx),
     indexDirPath: ctx.dir,
     caps: DEFAULT_CAPS,
-    ...(ctx.hosted ? { hosted: ctx.hosted, embedProvider: embedProvider(), analyzer: hostedAnalyzer() } : {}),
+    ...(ctx.hosted
+      ? { hosted: ctx.hosted, embedProvider: noEmbed ? "local" : embedProvider(), ...(analyzer !== undefined ? { analyzer } : {}) }
+      : {}),
   });
 
   // --- freshness: one index mutation at a time per repo, auto-sync on queries -
@@ -156,42 +170,58 @@ export async function serveMcp(rootPath?: string): Promise<void> {
   /** Fresh build-scoped embedder: full builds embed in a child process so the
    * bulk pipeline's memory leaves with it (issue #9). Query and sync
    * embedding keep the warm in-process singleton via getEmbedder(). */
-  const buildEmbedder = (): Embedder | null => (process.env.CX_NO_EMBED ? null : createIndexingEmbedder());
+  const buildEmbedder = (): Embedder | null => (noEmbed ? null : createIndexingEmbedder());
 
-  /** Let vectors backfill in-process (the manifest flips to "ready"), then
-   * release the build's embedder. `completion` never rejects by contract, but
+  /** Let the build finish in-process - vectors backfill (the manifest flips
+   * to "ready"), then the platform table loads when one is configured - and
+   * release the build's embedder. The rest of the build is held on
+   * `ctx.completion` so no sync starts under it and the platform tools can say
+   * the table is being loaded. `completion` never rejects by contract, but
    * nothing on this chain may take that on faith - an unhandled rejection
-   * here would kill the whole server. */
-  const backfill = (run: StagedIndexRun, emb: Embedder | null) => {
-    void run.completion
+   * here would kill the whole server. A failed platform load is logged: the
+   * next sync asks for a build, which retries it. */
+  const backfill = (ctx: RepoCtx, run: StagedIndexRun, emb: Embedder | null) => {
+    const held = run.completion
+      .then((stats) => {
+        if (stats.hostedError) console.error(`platform load failed for ${ctx.root}: ${stats.hostedError} (the next sync reloads it)`);
+      })
       .catch(() => undefined)
-      .finally(() => void emb?.dispose?.()?.catch(() => undefined));
+      .finally(() => {
+        if (ctx.completion === held) ctx.completion = null;
+        void emb?.dispose?.()?.catch(() => undefined);
+      });
+    ctx.completion = held;
   };
 
   /** Acquire the repo's mutation lock and run a staged build; resolves at
    * keyword-live with stage-1 stats, or null if a build is already in flight.
    * The build's completion (vectors, then the platform table when one is
-   * configured) runs on in the background. */
+   * configured) runs on in the background, held on `ctx.completion`. */
   const buildIndex = (ctx: RepoCtx): Promise<IndexStats> | null =>
     exclusive(ctx, async () => {
       const emb = buildEmbedder();
       const run = await indexRepoStaged({ ...indexTargets(ctx), embedder: emb });
-      backfill(run, emb);
+      backfill(ctx, run, emb);
       return run.text;
     });
 
   const doSync = async (ctx: RepoCtx): Promise<SyncOutcome> => {
     const outcome = await syncRepo({ ...indexTargets(ctx), embedder: getEmbedder() });
-    if (outcome.action === "rebuild-required" && outcome.reason !== "vector backfill in progress") {
+    // A rebuild for every reason but "a build is already in flight" (the
+    // vector stage, or the platform load - a second build would race it).
+    if (outcome.action === "rebuild-required" && !syncInProgress(outcome)) {
       const emb = buildEmbedder();
       const run = await indexRepoStaged({ ...indexTargets(ctx), embedder: emb });
-      backfill(run, emb);
+      backfill(ctx, run, emb);
     }
     return outcome;
   };
 
   const maybeAutoSync = (ctx: RepoCtx) => {
-    if (!autoSyncEnabled || performance.now() - ctx.lastSyncCheck < syncIntervalMs) return;
+    // Never under a build's completion: a diff or a second build would race
+    // the vector stage or the platform load. The clock is not advanced, so
+    // the first query after the build lands syncs.
+    if (!autoSyncEnabled || ctx.completion || performance.now() - ctx.lastSyncCheck < syncIntervalMs) return;
     ctx.lastSyncCheck = performance.now();
     // Deferred so the triggering query's engine call runs first; the sync's
     // stat walk still shares the process, so on very large repos a
@@ -219,18 +249,26 @@ export async function serveMcp(rootPath?: string): Promise<void> {
       (stats.vectors === "building" ? " and vectors are backfilling in the background" : ""),
   });
 
-  /** The platform tools' precondition: the context carries the platform
-   * client and its chunks table exists. A repo other than the default root has
-   * no platform table; a table not there yet is either being loaded by the
-   * build in flight or was never loaded. Null when ready. */
+  /** The platform tools' first precondition, checked before any build: the
+   * context carries the platform client. A repo other than the default root
+   * never does - the database holds one chunks table - and building its local
+   * index for a tool that will not serve it would be waste. Null when it does. */
+  const noPlatform = (tool: string, ctx: RepoCtx): ReturnType<typeof fail> | null =>
+    ctx.hosted
+      ? null
+      : fail(`${tool} works on the repository the server was started for, whose index is also on the platform database; ${ctx.root} is served by find, search and sql only`);
+
+  /** The platform tools' second precondition, after the index exists: the
+   * platform's chunks table does too. A table not there yet is either being
+   * loaded by the build in flight (its completion, or a sync's rebuild) or was
+   * never loaded. Null when ready. */
   const platformNotReady = async (tool: string, ctx: RepoCtx): Promise<ReturnType<typeof fail> | null> => {
-    if (!ctx.hosted) {
-      return fail(`${tool} works on the repository the server was started for, whose index is also on the platform database; ${ctx.root} has a local index only`);
-    }
-    if (await platformTableReady(ctx.hosted, (ctx.hostedMemo ??= newHostedMemo()))) return null;
-    const label = platformLabel(ctx.hosted);
+    const missing = noPlatform(tool, ctx);
+    if (missing) return missing;
+    if (await platformTableReady(ctx.hosted!, (ctx.hostedMemo ??= newHostedMemo()))) return null;
+    const label = platformLabel(ctx.hosted!);
     return fail(
-      ctx.mutation
+      ctx.mutation || ctx.completion
         ? `the ${TABLE} table at ${label} is being loaded by the index build in progress - retry when it finishes`
         : `no ${TABLE} table at ${label} yet - run \`cx index --db ${label}\` to load it`,
     );
@@ -506,11 +544,14 @@ export async function serveMcp(rootPath?: string): Promise<void> {
         } catch (err) {
           return fail((err as Error).message);
         }
-        // The same first-query build the other tools make (it writes the
-        // platform table too), then the platform table's own readiness:
-        // without a chunks table the platform would spend the whole
+        // A repo without the platform client is refused before any build.
+        // Then the same first-query build and auto-sync the other tools make
+        // (both write the platform table too), then the platform table's own
+        // readiness: without a chunks table the platform would spend the whole
         // cold-start budget on "no table described yet" before saying
         // anything useful.
+        const missing = noPlatform("subagent", ctx);
+        if (missing) return missing;
         let ensured: EnsureResult;
         try {
           ensured = await ensureIndexed(ctx, { autoIndexEnabled, getHandle, build: buildIndex });
@@ -518,6 +559,7 @@ export async function serveMcp(rootPath?: string): Promise<void> {
           return fail(`indexing failed: ${(err as Error).message}`);
         }
         if ("needsIndex" in ensured) return noIndex(ctx);
+        if (!ensured.autoIndexed) maybeAutoSync(ctx); // a fresh build is already current
         const notReady = await platformNotReady("subagent", ctx);
         if (notReady) return notReady;
         try {
@@ -578,6 +620,8 @@ export async function serveMcp(rootPath?: string): Promise<void> {
         } catch (err) {
           return fail((err as Error).message);
         }
+        const missing = noPlatform("explore", ctx);
+        if (missing) return missing;
         let ensured: EnsureResult;
         try {
           ensured = await ensureIndexed(ctx, { autoIndexEnabled, getHandle, build: buildIndex });
@@ -585,6 +629,7 @@ export async function serveMcp(rootPath?: string): Promise<void> {
           return fail(`indexing failed: ${(err as Error).message}`);
         }
         if ("needsIndex" in ensured) return noIndex(ctx);
+        if (!ensured.autoIndexed) maybeAutoSync(ctx); // a fresh build is already current
         const notReady = await platformNotReady("explore", ctx);
         if (notReady) return notReady;
         try {

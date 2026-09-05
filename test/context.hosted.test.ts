@@ -7,7 +7,7 @@
 // index yields with and without a database (the local index always; the
 // platform client beside it for a build), the two manifests in one index dir,
 // the platform table's readiness memo, and the embedder that is local either
-// way. No network and no engine catalog is ever touched here.
+// way. No network is touched; the engine catalogs opened live in temp dirs.
 
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -34,7 +34,6 @@ import {
   subagentK,
   subagentMaxTurns,
   subagentMaxWallSecs,
-  subagentEnabled,
   autoIndexEnabled,
   autoSyncEnabled,
   embedProvider,
@@ -197,19 +196,19 @@ describe("platform settings", () => {
     expect(() => settingsFor({ coldStartSecs: "0" })).toThrow(/--cold-start-secs must be a positive integer/);
   });
 
-  it("creates the platform table with ascii_lower unless --analyzer says otherwise, and refuses a name the engine lacks", () => {
-    expect(hostedAnalyzer()).toBe("ascii_lower");
+  it("asks for an analyzer only when --analyzer names one, and refuses a name the engine lacks", () => {
+    // Absent, a build keeps the table's own analyzer (the default for a first
+    // load lives in the indexer) and a sync asks for nothing.
+    expect(hostedAnalyzer()).toBeUndefined();
     withPlatform();
-    expect(hostedAnalyzer()).toBe("ascii_lower");
+    expect(hostedAnalyzer()).toBeUndefined();
     withPlatform({ analyzer: "standard" });
     expect(hostedAnalyzer()).toBe("standard");
     expect(() => settingsFor({ analyzer: "icu" })).toThrow(/--analyzer must be "ascii_lower" or "standard"/);
   });
 
-  it("registers the platform tools whenever a database is configured, with caps from the flags", () => {
-    expect(subagentEnabled()).toBe(false);
+  it("reads the platform tools' caps from the flags, with the documented defaults", () => {
     withPlatform();
-    expect(subagentEnabled()).toBe(true);
     expect(subagentMaxTurns()).toBe(DEFAULT_SUBAGENT_MAX_TURNS);
     expect(subagentMaxWallSecs()).toBe(DEFAULT_SUBAGENT_MAX_WALL_SECS);
     expect(DEFAULT_SUBAGENT_MAX_TURNS).toBe(4);

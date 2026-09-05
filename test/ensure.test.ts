@@ -19,6 +19,7 @@ const makeCtx = (): RepoCtx => ({
   db: {} as unknown as Connection,
   lastSyncCheck: 0,
   mutation: null,
+  completion: null,
 });
 
 const STATS: IndexStats = {

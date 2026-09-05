@@ -159,12 +159,11 @@ export function exploreEntry(result: ExploreResult, spend: RetrievalAgentSpend):
   return entry;
 }
 
-/** Attach the platform telemetry of the hosted call that answered this entry's
- * query (its round trip and the tokens the platform metered) - read right
- * after the query, while the client's last call is that query's. A no-op for a
- * local handle. Ledger-only: the receipt and the tool result the model sees
- * are the same in both modes. Shared by the MCP server and the CLI so the two
- * ledgers record the same shape. */
+/** Attach the platform telemetry of the call that answered this entry's
+ * question (its round trip and the tokens the platform metered) - read right
+ * after the call, while the client's last call is that one. A no-op without a
+ * platform client. Ledger-only: neither the receipt nor the tool result the
+ * model sees carries it. */
 export function withPlatform(entry: UsageEntry, source: { hosted?: HostedDb }): UsageEntry {
   const platform = hostedTelemetry(source);
   if (platform) entry.platform = platform;
