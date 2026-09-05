@@ -61,6 +61,8 @@ export interface UsageEntry {
   agentTurns?: number;
   agentPromptTokens?: number;
   agentCompletionTokens?: number;
+  /** subagent only: whether the platform ranked the facts against the question. */
+  agentRanked?: boolean;
   /** Hosted mode only: what the platform call behind this query cost - the
    * round trip of the answering request and the tokens the platform metered
    * (from its response headers, when present). Lives in the ledger, never in
@@ -143,6 +145,7 @@ export function subagentEntry(result: RetrievalAgentResult, spend: RetrievalAgen
     agentTurns: result.turns,
     agentPromptTokens: spend.promptTokens,
     agentCompletionTokens: spend.completionTokens,
+    ...(result.coverage?.ranked ? { agentRanked: true } : {}),
   };
 }
 

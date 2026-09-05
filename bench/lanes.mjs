@@ -96,6 +96,9 @@ export const BENCH_EMBED_PROVIDER = "CX_BENCH_EMBED_PROVIDER";
 /** Optional turn cap for subagent in the agent lanes, passed through as
  * the server's --subagent-max-turns; unset leaves the server's default. */
 export const BENCH_AGENT_MAX_TURNS = "CX_BENCH_AGENT_MAX_TURNS";
+/** Optional facts-per-call for subagent in the agent lanes, passed through as
+ * the server's --subagent-k; unset leaves the server's default. */
+export const BENCH_AGENT_K = "CX_BENCH_AGENT_K";
 
 /** The env a hosted lane needs before it can run. */
 const HOSTED_REQUIRES = [BENCH_DB_URL, BENCH_KEY_FILE];
@@ -123,10 +126,11 @@ export function hostedFlags(env = process.env) {
 }
 
 /** The server flags that add subagent to a hosted lane, with the turn
- * cap when the harness names one. */
+ * cap and the facts-per-call when the harness names them. */
 export function agentFlags(env = process.env) {
   const cap = env[BENCH_AGENT_MAX_TURNS];
-  return ["--subagent", ...(cap ? ["--subagent-max-turns", cap] : [])];
+  const k = env[BENCH_AGENT_K];
+  return ["--subagent", ...(cap ? ["--subagent-max-turns", cap] : []), ...(k ? ["--subagent-k", k] : [])];
 }
 
 /** The lane table. Each lane is the identical hermetic base plus:

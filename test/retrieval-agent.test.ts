@@ -264,6 +264,29 @@ describe("runRetrievalAgent", () => {
     expect(spend).toEqual({ promptTokens: 1200, completionTokens: 80 });
   });
 
+  it("asks for the budget's k when one is given and keeps that many hits", async () => {
+    const sent: unknown[] = [];
+    const many = Array.from({ length: 30 }, (_, i) => ({ table: "chunks", row: chunkRow(i) }));
+    const hosted = {
+      subAgent: async (req: unknown) => {
+        sent.push(req);
+        return answered({ facts: many, statement: "SELECT ...", coverage: { rows_total: 30, rows_returned: 30, truncated: false } });
+      },
+    };
+    const { result } = await runRetrievalAgent(hosted, { question: "q" }, { maxTurns: 4, maxWallSecs: 90, k: 25 });
+    expect((sent[0] as { k: number }).k).toBe(25);
+    expect(result.hits).toHaveLength(25);
+    expect(result.hitsTotal).toBe(30);
+  });
+
+  it("marks the coverage ranked when the platform says what ranked the facts, and only then", () => {
+    const ranked = retrievalAgentRunFrom(QUESTION, answered({ coverage: { ...COVERAGE, ranker: "some-ranker" } })).result;
+    expect(ranked.coverage).toEqual({ rowsTotal: 2, rowsReturned: 2, truncated: false, ranked: true });
+    const unranked = retrievalAgentRunFrom(QUESTION, answered()).result;
+    expect(unranked.coverage).toEqual({ rowsTotal: 2, rowsReturned: 2, truncated: false });
+    expect(JSON.stringify(ranked)).not.toContain("some-ranker");
+  });
+
   it("propagates the client's error for a terminal platform failure", async () => {
     const hosted = {
       subAgent: async () => {

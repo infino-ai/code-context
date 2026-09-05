@@ -20,6 +20,7 @@ import {
   API_KEY_ENV,
   DEFAULT_DB_TIMEOUT_MS,
   DEFAULT_DB_COLD_START_SECS,
+  DEFAULT_SUBAGENT_K,
   DEFAULT_SUBAGENT_MAX_TURNS,
   DEFAULT_SUBAGENT_MAX_WALL_SECS,
   configureHosted,
@@ -175,6 +176,7 @@ hostedOptions(
   .option("--subagent", "with --db: also register subagent, a question or task in plain language answered with the rows the platform's agent retrieved")
   .option("--subagent-max-turns <n>", `turn cap for one subagent call (default ${DEFAULT_SUBAGENT_MAX_TURNS})`)
   .option("--subagent-max-wall-secs <n>", `wall-clock cap for one subagent call, in seconds (default ${DEFAULT_SUBAGENT_MAX_WALL_SECS})`)
+  .option("--subagent-k <n>", `facts one subagent call asks for and returns (default ${DEFAULT_SUBAGENT_K}, search's k)`)
   .action(async (opts: { path?: string } & HostedFlags) => {
     applyHosted(opts);
     const { serveMcp } = await import("./mcp/server.js");

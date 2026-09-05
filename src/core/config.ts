@@ -68,6 +68,8 @@ export interface SubagentSettings {
   maxTurns: number;
   /** Wall clock for one loop, in seconds (likewise capped server-side). */
   maxWallSecs: number;
+  /** Facts asked for and kept per call (the platform caps a value above its own). */
+  k: number;
 }
 
 /** Everything hosted mode is configured with, resolved and validated once. */
@@ -86,9 +88,10 @@ export interface HostedSettings {
 
 /** The hosted flags as commander parses them: camelCase of `--db`,
  * `--api-key-file`, `--embed-provider`, `--db-timeout-ms`, `--cold-start-secs`,
- * `--analyzer`, `--subagent`, `--subagent-max-turns`, `--subagent-max-wall-secs`.
- * Every value is the raw string (or the bare boolean); validation is here, in
- * one place, so a bad value is an error at startup and not on the first call. */
+ * `--analyzer`, `--subagent`, `--subagent-max-turns`, `--subagent-max-wall-secs`,
+ * `--subagent-k`. Every value is the raw string (or the bare boolean);
+ * validation is here, in one place, so a bad value is an error at startup and
+ * not on the first call. */
 export interface HostedFlags {
   db?: string;
   apiKeyFile?: string;
@@ -99,6 +102,7 @@ export interface HostedFlags {
   subagent?: boolean;
   subagentMaxTurns?: string;
   subagentMaxWallSecs?: string;
+  subagentK?: string;
 }
 
 /** The flags that mean nothing without --db, by their command-line spelling. */
@@ -111,6 +115,7 @@ const HOSTED_ONLY_FLAGS: Array<[keyof HostedFlags, string]> = [
   ["subagent", "--subagent"],
   ["subagentMaxTurns", "--subagent-max-turns"],
   ["subagentMaxWallSecs", "--subagent-max-wall-secs"],
+  ["subagentK", "--subagent-k"],
 ];
 
 /** A positive-integer flag value, or its default when the flag was not given.
@@ -155,6 +160,7 @@ export function hostedSettingsFromFlags(flags: HostedFlags, env: NodeJS.ProcessE
       enabled: flags.subagent === true,
       maxTurns: positiveIntFlag("--subagent-max-turns", flags.subagentMaxTurns, DEFAULT_SUBAGENT_MAX_TURNS),
       maxWallSecs: positiveIntFlag("--subagent-max-wall-secs", flags.subagentMaxWallSecs, DEFAULT_SUBAGENT_MAX_WALL_SECS),
+      k: positiveIntFlag("--subagent-k", flags.subagentK, DEFAULT_SUBAGENT_K),
     },
   };
 }
@@ -221,6 +227,11 @@ export function subagentMaxWallSecs(): number {
   return hosted?.subagent.maxWallSecs ?? DEFAULT_SUBAGENT_MAX_WALL_SECS;
 }
 
+/** Facts one subagent call asks for and keeps (--subagent-k). */
+export function subagentK(): number {
+  return hosted?.subagent.k ?? DEFAULT_SUBAGENT_K;
+}
+
 /** Whether a first query on an unindexed repo builds the index (CX_AUTO_INDEX,
  * default on). Always off for a hosted target: a first query must never drop
  * and recreate a table other people share. */
@@ -285,6 +296,12 @@ export const EMBED_MAX_CHARS = Number(process.env.CX_EMBED_MAX_CHARS ?? 8000);
 /** Default number of search hits. Configurable per call (the `k` tool param /
  * CLI `-k`) and via CX_SEARCH_K for config/CI-level defaults. */
 export const DEFAULT_SEARCH_K = Number(process.env.CX_SEARCH_K ?? 10);
+
+/** Default number of facts one `subagent` call asks for and returns: as many
+ * as a search returns, so a subagent result costs the outer agent what a
+ * search does. The platform retrieves and ranks more than this before
+ * answering; `hitsTotal` says what was cut. */
+export const DEFAULT_SUBAGENT_K = DEFAULT_SEARCH_K;
 
 /** Hard cap on matching lines in one `find` result. At roughly fifty tokens
  * per returned line (path, line number, text) this is about 25k tokens: a

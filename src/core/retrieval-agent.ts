@@ -74,6 +74,8 @@ export interface RetrievalAgentBudget {
   maxTurns: number;
   /** Wall clock for the inner loop, in seconds (likewise capped server-side). */
   maxWallSecs: number;
+  /** Facts asked for, and the most hits kept in the result; MAX_HITS when absent. */
+  k?: number;
 }
 
 /** One row of the table that names a place in the code: a search hit's
@@ -95,6 +97,9 @@ export interface RetrievalAgentCoverage {
   rowsTotal: number;
   rowsReturned: number;
   truncated: boolean;
+  /** True when the platform ranked the facts against the question before
+   * returning the first k; absent when the query's own order stands. */
+  ranked?: boolean;
 }
 
 /** What the `subagent` tool returns to the outer agent: the facts. */
@@ -150,14 +155,15 @@ export async function runRetrievalAgent(
   request: RetrievalAgentRequest,
   budget: RetrievalAgentBudget,
 ): Promise<RetrievalAgentRun> {
+  const k = budget.k ?? MAX_HITS;
   const response = await hosted.subAgent({
     question: request.question,
-    k: MAX_HITS,
+    k,
     projection: FACT_PROJECTION,
     max_turns: budget.maxTurns,
     max_wall_secs: budget.maxWallSecs,
   });
-  return retrievalAgentRunFrom(request.question, response);
+  return retrievalAgentRunFrom(request.question, response, k);
 }
 
 /** The fact rows of a response: each entry of `facts` carries its row as a
@@ -178,14 +184,18 @@ export function factRowsOf(response: unknown): RowRecord[] {
 function coverageOf(response: unknown): RetrievalAgentCoverage | undefined {
   const c = asRecord(asRecord(response).coverage);
   if (!isFiniteNumber(c.rows_total) || !isFiniteNumber(c.rows_returned)) return undefined;
-  return { rowsTotal: c.rows_total, rowsReturned: c.rows_returned, truncated: c.truncated === true };
+  const coverage: RetrievalAgentCoverage = { rowsTotal: c.rows_total, rowsReturned: c.rows_returned, truncated: c.truncated === true };
+  // The platform names what ranked the facts when it did; the client keeps
+  // only that it happened.
+  if (typeof c.ranker === "string" && c.ranker.length > 0) coverage.ranked = true;
+  return coverage;
 }
 
 /** The run for one platform response. A loop that found no query is still a
  * result, not a tool error: `error` says why, and the outer agent decides
  * what to do next. A body that is not an agent response at all (no
  * `terminate`) is the one thing that throws. */
-export function retrievalAgentRunFrom(question: string, response: unknown): RetrievalAgentRun {
+export function retrievalAgentRunFrom(question: string, response: unknown, maxHits: number = MAX_HITS): RetrievalAgentRun {
   const body = asRecord(response);
   if (typeof body.terminate !== "string") {
     throw new Error("subagent: the platform's response is not an agent result (no `terminate` field)");
@@ -197,7 +207,7 @@ export function retrievalAgentRunFrom(question: string, response: unknown): Retr
     question,
     ...(statement ? { sql: statement } : {}),
     ...(coverage ? { coverage } : {}),
-    ...factsFrom(factRowsOf(body)),
+    ...factsFrom(factRowsOf(body), maxHits),
     turns: numberField(body.turns),
   };
   if (terminate !== TERMINATE_ANSWERED) result.error = `${noAnswerMessage(terminate, body.error)} - ${NO_ANSWER_HINT}`;
@@ -220,9 +230,10 @@ function noAnswerMessage(terminate: string, detail: unknown): string {
 /** The fact rows split, in order: every row that names a place in the code
  * (path + start_line + end_line) becomes a hit with its content, one per
  * path:start_line; every other row with a scalar column becomes an aggregate
- * row, one per distinct set of scalar cells. Both lists are capped, and the
- * totals count what was seen. */
-export function factsFrom(rows: unknown[]): Facts {
+ * row, one per distinct set of scalar cells. Both lists are capped - hits at
+ * `maxHits` (the k the call asked for), rows at MAX_ROWS - and the totals
+ * count what was seen. */
+export function factsFrom(rows: unknown[], maxHits: number = MAX_HITS): Facts {
   const hits: RetrievalAgentHit[] = [];
   const aggregates: RowRecord[] = [];
   const seenHits = new Set<string>();
@@ -233,7 +244,7 @@ export function factsFrom(rows: unknown[]): Facts {
       const key = `${hit.path}:${hit.startLine}`;
       if (seenHits.has(key)) continue;
       seenHits.add(key);
-      if (hits.length < MAX_HITS) hits.push(hit);
+      if (hits.length < maxHits) hits.push(hit);
       continue;
     }
     const row = scalarRow(raw);

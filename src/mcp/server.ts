@@ -43,6 +43,7 @@ import {
   autoIndexEnabled as autoIndexSetting,
   autoSyncEnabled as autoSyncSetting,
   subagentEnabled,
+  subagentK,
   subagentMaxTurns,
   subagentMaxWallSecs,
 } from "../core/config.js";
@@ -516,7 +517,7 @@ export async function serveMcp(rootPath?: string): Promise<void> {
           const { result, spend } = await runRetrievalAgent(
             ctx.hosted,
             { question },
-            { maxTurns: subagentMaxTurns(), maxWallSecs: subagentMaxWallSecs() },
+            { maxTurns: subagentMaxTurns(), maxWallSecs: subagentMaxWallSecs(), k: subagentK() },
           );
           let usage: string | undefined;
           if (receiptOn) {

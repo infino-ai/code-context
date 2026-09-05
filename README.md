@@ -222,7 +222,7 @@ hosted database:
 | `--analyzer <ascii_lower\|standard>` | `ascii_lower` | `cx index` only: the full-text analyzer the table is created with. `ascii_lower` splits code identifiers on `.`, `_`, and `::`, which is what makes `find` complete on code |
 | `--db-timeout-ms <n>` | 60000 | per-request timeout |
 | `--cold-start-secs <n>` | 120 | how long to keep retrying while the database is not yet ready, before giving up |
-| `--subagent` | off | `cx mcp` only: also register `subagent`; `--subagent-max-turns` (4) and `--subagent-max-wall-secs` (120) cap one call |
+| `--subagent` | off | `cx mcp` only: also register `subagent`; `--subagent-max-turns` (4) and `--subagent-max-wall-secs` (120) cap one call, `--subagent-k` (10, search's k) is how many facts it returns |
 
 As an MCP server the flags go in `args`:
 

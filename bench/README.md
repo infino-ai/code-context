@@ -60,7 +60,9 @@ where the server's index lives.
 | `find-subagent`    | hosted | Glob, Grep, Read, LS, Bash        | yes | as `hosted-agent`, with `search` and `sql` removed from the model's context: `find` and `subagent` remain      | `CX_BENCH_DB_URL`, `CX_BENCH_KEY_FILE`  |
 
 The agent lanes pass `CX_BENCH_AGENT_MAX_TURNS`, when set, through as the
-server's `--subagent-max-turns`, to measure the agent under a tighter turn cap.
+server's `--subagent-max-turns`, to measure the agent under a tighter turn cap,
+and `CX_BENCH_AGENT_K` as `--subagent-k`, to measure it returning more or fewer
+facts per call.
 The explore lanes leave the main agent as a real session has it (stock tools
 plus the Agent tool, and in the index lanes the three MCP tools too) and
 change only what the read-only `Explore` subagent runs on; rows record

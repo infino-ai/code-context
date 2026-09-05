@@ -18,12 +18,15 @@ import {
   DEFAULT_DB_TIMEOUT_MS,
   DEFAULT_DB_COLD_START_SECS,
   DEFAULT_HOSTED_EMBED_PROVIDER,
+  DEFAULT_SEARCH_K,
+  DEFAULT_SUBAGENT_K,
   DEFAULT_SUBAGENT_MAX_TURNS,
   DEFAULT_SUBAGENT_MAX_WALL_SECS,
   TABLE,
   configureHosted,
   hostedSettingsFromFlags,
   hostedAnalyzer,
+  subagentK,
   subagentMaxTurns,
   subagentMaxWallSecs,
   subagentEnabled,
@@ -227,11 +230,16 @@ describe("hosted settings", () => {
     expect(subagentMaxWallSecs()).toBe(DEFAULT_SUBAGENT_MAX_WALL_SECS);
     expect(DEFAULT_SUBAGENT_MAX_TURNS).toBe(4);
     expect(DEFAULT_SUBAGENT_MAX_WALL_SECS).toBe(120);
-    hostedMode({ subagent: true, subagentMaxTurns: "3", subagentMaxWallSecs: "30" });
+    expect(subagentK()).toBe(DEFAULT_SUBAGENT_K);
+    expect(DEFAULT_SUBAGENT_K).toBe(DEFAULT_SEARCH_K);
+    hostedMode({ subagent: true, subagentMaxTurns: "3", subagentMaxWallSecs: "30", subagentK: "100" });
     expect(subagentEnabled()).toBe(true);
     expect(subagentMaxTurns()).toBe(3);
     expect(subagentMaxWallSecs()).toBe(30);
+    expect(subagentK()).toBe(100);
     expect(() => settingsFor({ subagentMaxTurns: "-1" })).toThrow(/--subagent-max-turns must be a positive integer/);
+    expect(() => settingsFor({ subagentK: "0" })).toThrow(/--subagent-k must be a positive integer/);
+    expect(() => settingsFor({ db: undefined, subagentK: "5" })).toThrow(/--subagent-k needs --db/);
   });
 
   it("forces auto-index and auto-sync off for a hosted target whatever the env says", () => {
