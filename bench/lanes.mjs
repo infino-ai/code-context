@@ -65,17 +65,19 @@ const exploreOnIndex = {
   model: EXPLORE_MODEL,
 };
 
-/** Explore over the platform's retrieval agent alone, Haiku relaying. The
- * inner loop's turn cap comes from the server flags (CX_BENCH_AGENT_MAX_TURNS),
- * so the outer agent, not the platform's ladder, decides how far to go. */
+/** Explore over the platform's explore mode alone, Haiku relaying: the
+ * platform's loop reads what it finds and follows it, and answers in writing
+ * beside the facts and the chain of queries; the relay hands that answer up
+ * with its citations. The exploration's turn budget is the platform's
+ * (--explore-max-turns lowers it), so the platform decides how far to go. */
 const exploreOnPlatform = {
   description: EXPLORE_DESCRIPTION,
-  tools: [`${CX_TOOL_PREFIX}subagent`, "Read"],
+  tools: [`${CX_TOOL_PREFIX}explore`, "Read"],
   prompt:
-    "You explore this repository by calling subagent with the question, at most twice (rephrase " +
-    "once if the first call returns no answer). Return its answer with the places it found cited " +
-    "path:line; if there is still no answer, return what it found and say so. The caller will not see " +
-    "your tool results.",
+    "You explore this repository by calling explore with the question, once (rephrase and call " +
+    "once more only if it returns no answer). Return its answer, checked against and cited from " +
+    "the facts it returned as path:line; if there is still no answer, return the facts it found and " +
+    "say so. The caller will not see your tool results.",
   model: EXPLORE_MODEL,
 };
 /** The embedding provider a hosted lane's server uses when the caller does
@@ -161,11 +163,16 @@ export function agentFlags(env = process.env) {
  *   index-explore    - stock-explore plus the local MCP server, with Explore
  *                      overridden to run on code-context's tools (Haiku inside)
  *   platform-explore - the same over the hosted server, with Explore
- *                      overridden to run on subagent alone
+ *                      overridden to run on the explore tool alone (the
+ *                      platform's explore mode: reads, follows, answers)
  *   find-subagent    - the owner's surface: stock tools, find, and subagent,
- *                      with search and sql hidden. Exact-text questions have
- *                      find; everything that spans the repo has the platform's
- *                      agent, which returns the rows it retrieved */
+ *                      with search, sql and explore hidden. Exact-text
+ *                      questions have find; everything that spans the repo
+ *                      has the platform's agent, which returns the rows it
+ *                      retrieved
+ *   find-explore     - find-subagent with explore in subagent's place: the
+ *                      main agent asks the platform's explore mode directly
+ *                      and gets a written answer beside the facts */
 export const LANES = {
   files: { kind: "local", tools: STOCK_TOOLS, mcp: false, requires: [] },
   cx: { kind: "local", tools: ["Read"], mcp: true, env: mcpEnvBase, requires: [] },
@@ -185,7 +192,7 @@ export const LANES = {
     mcp: true,
     env: mcpEnvBase,
     args: (env) => [...hostedFlags(env), ...agentFlags(env)],
-    disallowedTools: CX_RETRIEVAL_TOOLS.map((tool) => `${CX_TOOL_PREFIX}${tool}`),
+    disallowedTools: [...CX_RETRIEVAL_TOOLS, "explore"].map((tool) => `${CX_TOOL_PREFIX}${tool}`),
     requires: HOSTED_REQUIRES,
   },
   "stock-explore": { kind: "local", tools: [...STOCK_TOOLS, AGENT_TOOL], mcp: false, requires: [] },
@@ -212,7 +219,16 @@ export const LANES = {
     mcp: true,
     env: mcpEnvBase,
     args: (env) => [...hostedFlags(env), ...agentFlags(env)],
-    disallowedTools: ["search", "sql"].map((tool) => `${CX_TOOL_PREFIX}${tool}`),
+    disallowedTools: ["search", "sql", "explore"].map((tool) => `${CX_TOOL_PREFIX}${tool}`),
+    requires: HOSTED_REQUIRES,
+  },
+  "find-explore": {
+    kind: "hosted",
+    tools: STOCK_TOOLS,
+    mcp: true,
+    env: mcpEnvBase,
+    args: (env) => [...hostedFlags(env), ...agentFlags(env)],
+    disallowedTools: ["search", "sql", "subagent"].map((tool) => `${CX_TOOL_PREFIX}${tool}`),
     requires: HOSTED_REQUIRES,
   },
 };

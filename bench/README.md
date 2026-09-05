@@ -56,8 +56,9 @@ where the server's index lives.
 
 | `stock-explore`    | local  | Glob, Grep, Read, LS, Bash, Agent | no  | - (the built-in Explore subagent)                                                                             | -                                        |
 | `index-explore`    | local  | Glob, Grep, Read, LS, Bash, Agent | yes | `Explore` overridden: `find`, `search`, `sql`, Read, Haiku inside                                             | -                                        |
-| `platform-explore` | hosted | Glob, Grep, Read, LS, Bash, Agent | yes | as `hosted-agent` (with the turn cap), `Explore` overridden: `subagent`, Read, Haiku inside                   | `CX_BENCH_DB_URL`, `CX_BENCH_KEY_FILE`  |
-| `find-subagent`    | hosted | Glob, Grep, Read, LS, Bash        | yes | as `hosted-agent`, with `search` and `sql` removed from the model's context: `find` and `subagent` remain      | `CX_BENCH_DB_URL`, `CX_BENCH_KEY_FILE`  |
+| `platform-explore` | hosted | Glob, Grep, Read, LS, Bash, Agent | yes | as `hosted-agent`, `Explore` overridden: `explore` (the platform's explore mode), Read, Haiku relaying          | `CX_BENCH_DB_URL`, `CX_BENCH_KEY_FILE`  |
+| `find-subagent`    | hosted | Glob, Grep, Read, LS, Bash        | yes | as `hosted-agent`, with `search`, `sql` and `explore` removed from the model's context: `find` and `subagent` remain | `CX_BENCH_DB_URL`, `CX_BENCH_KEY_FILE`  |
+| `find-explore`     | hosted | Glob, Grep, Read, LS, Bash        | yes | `find-subagent` with `explore` in `subagent`'s place: the main agent asks the platform's explore mode directly   | `CX_BENCH_DB_URL`, `CX_BENCH_KEY_FILE`  |
 
 The agent lanes pass `CX_BENCH_AGENT_MAX_TURNS`, when set, through as the
 server's `--subagent-max-turns`, to measure the agent under a tighter turn cap,
