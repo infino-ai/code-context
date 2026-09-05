@@ -243,7 +243,7 @@ export async function serveMcp(rootPath?: string): Promise<void> {
         "- search - how does X work, where is Y handled, code by meaning.\n" +
         "- sql - counts, rankings, and aggregates across the repo.\n" +
         (subagent
-          ? "- subagent - a question or task in plain language; returns the rows it retrieved (facts with path:line and the code), not an answer: compose from them. Spawn several in parallel for independent questions.\n"
+          ? "- subagent - a question or task in plain language; returns the rows it retrieved (facts with path:line and the code), not an answer: compose from them. Spawn several in parallel for independent questions. How often a string occurs, per file, is find's byFile.\n"
           : "") +
         "Hits carry the code: when a hit answers the question, answer from it and cite path:line " +
         "without re-reading the file or re-checking with grep; Read a file only for a hit marked " +
@@ -472,9 +472,10 @@ export async function serveMcp(rootPath?: string): Promise<void> {
           "retrieved - the top rows with exact path, start_line, end_line and the code, in the shape of " +
           "search hits, plus aggregate rows (counts, rankings) and the SQL whose rows answer the " +
           "question - never a summary. Use it " +
-          "for how does X work, where is Y handled, which files or symbols, counts and rankings; spawn " +
+          "for how does X work, where is Y handled, which files or symbols; spawn " +
           "several in parallel for independent questions instead of exploring the code yourself. For " +
-          "every occurrence of an exact string use find; for a file you already know, Read it. Answer " +
+          "every occurrence of an exact string, and for how many times it occurs per file, use find " +
+          "(its byFile is the grep -c answer); for a file you already know, Read it. Answer " +
           "from the rows and cite path:line. The result includes a 'usage' field, a one-line receipt of " +
           "what the call cost.",
         inputSchema: {

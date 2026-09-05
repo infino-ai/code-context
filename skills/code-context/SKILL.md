@@ -122,11 +122,12 @@ retrieval agent and returns the facts it retrieved, never a summary: `hits`
 (`path`, `startLine`-`endLine`, `content` - the shape of a `search` hit),
 `rows` (aggregates: a count or rank per path), and `sql` (the statement whose
 rows answer the question, when there is one). Use it for how does X work,
-where is Y handled, which files or symbols, counts and rankings; spawn
-several in parallel for independent questions instead of exploring the code
-yourself. For every occurrence of an exact string use `find`; for a file you
-already know, Read it. Answer from the rows and cite `path:line`. Like the
-other tools, its result carries a one-line `usage` receipt.
+where is Y handled, which files or symbols; spawn several in parallel for
+independent questions instead of exploring the code yourself. For every
+occurrence of an exact string, and for how many times it occurs per file,
+use `find` (`byFile` is the `grep -c` answer); for a file you already know,
+Read it. Answer from the rows and cite `path:line`. Like the other tools,
+its result carries a one-line `usage` receipt.
 
 ## Reading results honestly
 
