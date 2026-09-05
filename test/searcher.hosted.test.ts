@@ -237,6 +237,7 @@ describe("find (hosted)", () => {
       ignore_case: false,
       projection: FIND_PROJECTION,
       group_by: "path",
+      line_base: "start_line",
       limit: 500,
     });
     // The repo line is start_line + line_index; an empty symbol is dropped.

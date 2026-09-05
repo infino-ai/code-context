@@ -49,6 +49,10 @@ const COL_CONTENT = "content";
 const COL_SYMBOL = "symbol";
 const COL_LANG = "lang";
 
+/** The columns a search or find fact is asked to carry beside its text and
+ * score: the ones that place it in the code, so every fact can be cited. */
+const FACT_PROJECTION = [COL_PATH, COL_START_LINE, COL_END_LINE];
+
 /** Why a loop ended without facts, in the outer agent's terms: each maps a
  * platform `terminate` value to the reason. */
 const NO_ANSWER_REASONS: Record<string, string> = {
@@ -149,6 +153,7 @@ export async function runRetrievalAgent(
   const response = await hosted.subAgent({
     question: request.question,
     k: MAX_HITS,
+    projection: FACT_PROJECTION,
     max_turns: budget.maxTurns,
     max_wall_secs: budget.maxWallSecs,
   });

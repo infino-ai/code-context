@@ -245,7 +245,7 @@ describe("factsFrom", () => {
 // --- runRetrievalAgent ----------------------------------------------------------------------
 
 describe("runRetrievalAgent", () => {
-  it("asks sub_agent for MAX_HITS facts with the budget - no transcript - and returns them", async () => {
+  it("asks sub_agent for MAX_HITS facts carrying the placing columns, with the budget - no transcript - and returns them", async () => {
     const sent: unknown[] = [];
     const hosted = {
       subAgent: async (req: unknown) => {
@@ -254,7 +254,7 @@ describe("runRetrievalAgent", () => {
       },
     };
     const { result, spend } = await runRetrievalAgent(hosted, { question: "which files?" }, { maxTurns: 4, maxWallSecs: 90 });
-    expect(sent).toEqual([{ question: "which files?", k: MAX_HITS, max_turns: 4, max_wall_secs: 90 }]);
+    expect(sent).toEqual([{ question: "which files?", k: MAX_HITS, projection: ["path", "start_line", "end_line"], max_turns: 4, max_wall_secs: 90 }]);
     expect(result.question).toBe("which files?");
     expect(result.sql).toBe(STATEMENT);
     expect(result.rows).toEqual([

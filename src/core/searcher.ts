@@ -284,6 +284,11 @@ const HOSTED_FIND_PROJECTION = ["path", "start_line", "symbol"];
 /** The column a hosted find's per-group counts are grouped by: lines per file. */
 const HOSTED_FIND_GROUP_BY = "path";
 
+/** The column holding each chunk's first line, named so the platform counts a
+ * line held by two overlapping fixed-window chunks once (the local path
+ * dedupes by path and repo line for the same reason). */
+const HOSTED_FIND_LINE_BASE = "start_line";
+
 /** The characters the engine's FTS query parser reads as grammar rather than
  * text: a `+` or `-` leading a whitespace-delimited run marks a must / must-not
  * clause (`-C` would *exclude* chunks containing `c`; `--max-files` parses as
@@ -367,6 +372,7 @@ export async function find(handle: IndexHandle, query: string, opts: FindOptions
       ignoreCase,
       projection: HOSTED_FIND_PROJECTION,
       groupBy: HOSTED_FIND_GROUP_BY,
+      lineBase: HOSTED_FIND_LINE_BASE,
       limit,
     });
     return { query, ignoreCase, ...hostedFindResult(found), ...(partial ? { partial } : {}) };

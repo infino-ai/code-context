@@ -430,12 +430,16 @@ export class HostedDb {
     table: string,
     column: string,
     literal: string,
-    opts: { ignoreCase?: boolean; projection?: string[]; groupBy?: string; limit?: number } = {},
+    opts: { ignoreCase?: boolean; projection?: string[]; groupBy?: string; lineBase?: string; limit?: number } = {},
   ): Promise<RowRecord> {
     const body: RowRecord = { table_name: table, field_name: column, literal };
     if (opts.ignoreCase !== undefined) body.ignore_case = opts.ignoreCase;
     if (opts.projection !== undefined) body.projection = opts.projection;
     if (opts.groupBy !== undefined) body.group_by = opts.groupBy;
+    // The integer column holding each row's first line: with it the platform
+    // counts a line two overlapping rows both hold once, at line_base +
+    // line_index; without it every row's lines count.
+    if (opts.lineBase !== undefined) body.line_base = opts.lineBase;
     if (opts.limit !== undefined) body.limit = opts.limit;
     return this.parseJson(await this.postJson("find", body, true), "find") as RowRecord;
   }
@@ -475,6 +479,9 @@ export class HostedDb {
   async subAgent(req: {
     question: string;
     k?: number;
+    /** Columns a search or find fact carries beside its text and score, in
+     * place of the table's keys - for a code table, the ones that place it. */
+    projection?: string[];
     max_turns?: number;
     max_wall_secs?: number;
     include_transcript?: boolean;
@@ -483,6 +490,7 @@ export class HostedDb {
     // defaults the rest itself.
     const body: RowRecord = { question: req.question };
     if (req.k !== undefined) body.k = req.k;
+    if (req.projection !== undefined) body.projection = req.projection;
     if (req.max_turns !== undefined) body.max_turns = req.max_turns;
     if (req.max_wall_secs !== undefined) body.max_wall_secs = req.max_wall_secs;
     if (req.include_transcript !== undefined) body.include_transcript = req.include_transcript;
