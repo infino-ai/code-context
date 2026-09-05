@@ -140,7 +140,7 @@ describe("subagent receipt", () => {
     rowsTotal: 1,
     turns: 4,
   };
-  const spend: RetrievalAgentSpend = { promptTokens: 12_345, completionTokens: 210 };
+  const spend: RetrievalAgentSpend = { modelTokens: 12_555 };
 
   it("counts the statement, hits and rows as what was returned, records the places, and the loop's spend", () => {
     const entry = subagentEntry(answered, spend);
@@ -150,15 +150,14 @@ describe("subagent receipt", () => {
     expect(entry.hits).toEqual([{ path: "src/a.ts", startLine: 10, endLine: 30 }]);
     expect(entry.rows).toBe(1);
     expect(entry.agentTurns).toBe(4);
-    expect(entry.agentPromptTokens).toBe(12_345);
-    expect(entry.agentCompletionTokens).toBe(210);
+    expect(entry.agentModelTokens).toBe(12_555);
     // The ledger points at places; the code does not leak into it.
     expect(JSON.stringify(entry)).not.toContain("export function a");
   });
 
-  it("prints the returned tokens, the hits and rows, the turns, and the prompt/completion tokens", () => {
+  it("prints the returned tokens, the hits and rows, the turns, and the model tokens the platform metered", () => {
     const line = formatReceipt(subagentEntry(answered, spend));
-    expect(line).toMatch(/^returned ~\d+ tokens \| 1 hit \/ 1 row \| 4 turns \| 12\.3k prompt \/ 210 completion tokens$/);
+    expect(line).toMatch(/^returned ~\d+ tokens \| 1 hit \/ 1 row \| 4 turns \| 12\.6k model tokens$/);
   });
 
   it("singularizes one turn and accumulates into the session", () => {
@@ -182,7 +181,7 @@ describe("subagent receipt", () => {
       const [entry] = readUsage(dir);
       expect(entry.tool).toBe("subagent");
       expect(entry.agentTurns).toBe(4);
-      expect(entry.agentPromptTokens).toBe(12_345);
+      expect(entry.agentModelTokens).toBe(12_555);
       expect(entry.hits).toEqual([{ path: "src/a.ts", startLine: 10, endLine: 30 }]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -195,15 +194,9 @@ describe("subagent receipt", () => {
     expect(ranked.agentRanked).toBe(true);
   });
 
-  it("records the loop's model calls one by one when the platform reports them", () => {
-    expect(subagentEntry(answered, spend)).not.toHaveProperty("agentCalls");
-    const calls = [
-      { promptTokens: 2700, completionTokens: 120, ms: 412, rung: 0 },
-      { promptTokens: 9100, completionTokens: 90, ms: 800, rung: 1 },
-    ];
-    const entry = subagentEntry(answered, { ...spend, calls });
-    expect(entry.agentCalls).toEqual(calls);
-    expect(exploreEntry({ ...answered, chain: [] }, { ...spend, calls }).agentCalls).toEqual(calls);
+  it("records nothing about the platform's costs beyond the one metered number", () => {
+    const entry = subagentEntry(answered, spend) as Record<string, unknown>;
+    for (const gone of ["agentCalls", "agentPromptTokens", "agentCompletionTokens", "agentRung", "agentModel"]) expect(entry).not.toHaveProperty(gone);
   });
 });
 
@@ -219,7 +212,7 @@ describe("explore receipt", () => {
     answer: "Tombstones are written at ... and read at ...",
     chain: ["SELECT ... FROM bm25_search('chunks','content','tombstone', 100)", "find(\"struct Tombstone\")"],
   };
-  const spend: RetrievalAgentSpend = { promptTokens: 40_000, completionTokens: 900 };
+  const spend: RetrievalAgentSpend = { modelTokens: 40_900 };
 
   it("counts the answer, the chain and the facts as what was returned, under its own tool name", () => {
     const entry = exploreEntry(explored, spend);
@@ -229,13 +222,13 @@ describe("explore receipt", () => {
     );
     expect(entry.hits).toEqual([{ path: "src/a.ts", startLine: 10, endLine: 30 }]);
     expect(entry.agentTurns).toBe(6);
-    expect(entry.agentPromptTokens).toBe(40_000);
+    expect(entry.agentModelTokens).toBe(40_900);
     expect(JSON.stringify(entry)).not.toContain("Tombstones are written");
   });
 
   it("prints the same receipt shape as a subagent call", () => {
     const line = formatReceipt(exploreEntry(explored, spend));
-    expect(line).toMatch(/^returned ~\d+ tokens \| 1 hit \/ 0 rows \| 6 turns \| 40\.0k prompt \/ 900 completion tokens$/);
+    expect(line).toMatch(/^returned ~\d+ tokens \| 1 hit \/ 0 rows \| 6 turns \| 40\.9k model tokens$/);
   });
 });
 

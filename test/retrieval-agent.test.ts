@@ -38,7 +38,9 @@ const STATEMENT = "SELECT path, COUNT(*) AS n FROM token_match('chunks','content
 const FACTS = [{ table: "chunks", row: { path: "src/f1.ts", n: 7 } }, { table: "chunks", row: { path: "src/f0.ts", n: 2 } }];
 const COVERAGE = { rows_total: 2, rows_returned: 2, truncated: false };
 
-/** A complete `answered` response, as the platform returns it. */
+/** A complete `answered` response, as the platform returns it: the
+ * SubAgentResponse fields and nothing about the platform's own costs beyond
+ * the one metered number. */
 function answered(overrides: Record<string, unknown> = {}) {
   return {
     facts: FACTS,
@@ -47,12 +49,7 @@ function answered(overrides: Record<string, unknown> = {}) {
     terminate: "answered",
     turns: 1,
     retries: 0,
-    card_tier: "lean",
-    rung: 0,
-    prompt_tokens: 1200,
-    completion_tokens: 80,
-    usage: [{ prompt_tokens: 400, completion_tokens: 30 }],
-    model: "some-model",
+    model_tokens: 1280,
     ...overrides,
   };
 }
@@ -104,12 +101,18 @@ describe("retrievalAgentRunFrom", () => {
 
   it("keeps the loop's spend beside the result, not in it, and drops the platform's own fields", () => {
     const { result, spend } = retrievalAgentRunFrom(QUESTION, answered({ transcript: [{ role: "system", content: "the whole system prompt" }] }));
-    expect(spend).toEqual({ promptTokens: 1200, completionTokens: 80, calls: [{ promptTokens: 400, completionTokens: 30 }] });
+    expect(spend).toEqual({ modelTokens: 1280 });
     const asRecord = result as RetrievalAgentResult & Record<string, unknown>;
-    for (const dropped of ["facts", "statement", "model", "prompt_tokens", "completion_tokens", "terminate", "transcript", "usage", "retries", "card_tier", "rung"]) {
+    for (const dropped of ["facts", "statement", "model_tokens", "terminate", "transcript", "retries"]) {
       expect(asRecord[dropped]).toBeUndefined();
     }
     expect(JSON.stringify(result)).not.toContain("the whole system prompt");
+  });
+
+  it("reads the spend from model_tokens alone: fields of an older response shape count for nothing", () => {
+    const older = answered({ model_tokens: undefined, prompt_tokens: 1200, completion_tokens: 80, usage: [{ prompt_tokens: 400, completion_tokens: 30 }], rung: 1, model: "m" });
+    expect(retrievalAgentRunFrom(QUESTION, older).spend).toEqual({ modelTokens: 0 });
+    expect(JSON.stringify(retrievalAgentRunFrom(QUESTION, older))).not.toContain("\"m\"");
   });
 
   it("reports the platform's coverage when the query's result was cut", () => {
@@ -150,10 +153,9 @@ describe("retrievalAgentRunFrom", () => {
   });
 
   it("defaults a missing or malformed numeric field to 0 instead of NaN", () => {
-    const { result, spend } = retrievalAgentRunFrom(QUESTION, answered({ turns: "3", prompt_tokens: undefined, completion_tokens: Number.NaN }));
+    const { result, spend } = retrievalAgentRunFrom(QUESTION, answered({ turns: "3", model_tokens: Number.NaN }));
     expect(result.turns).toBe(0);
-    expect(spend.promptTokens).toBe(0);
-    expect(spend.completionTokens).toBe(0);
+    expect(spend.modelTokens).toBe(0);
   });
 
   it("uses the terminate constants the platform serializes", () => {
@@ -267,7 +269,7 @@ describe("explore mode", () => {
     expect(result.hits).toHaveLength(2);
     expect(result.turns).toBe(6);
     expect(result.error).toBeUndefined();
-    expect(spend).toEqual({ promptTokens: 1200, completionTokens: 80, calls: [{ promptTokens: 400, completionTokens: 30 }] });
+    expect(spend).toEqual({ modelTokens: 1280 });
   });
 
   it("lowers the platform's explore budget only when the budget names a turn cap", async () => {
@@ -317,7 +319,7 @@ describe("runRetrievalAgent", () => {
       { path: "src/f1.ts", n: 7 },
       { path: "src/f0.ts", n: 2 },
     ]);
-    expect(spend).toEqual({ promptTokens: 1200, completionTokens: 80, calls: [{ promptTokens: 400, completionTokens: 30 }] });
+    expect(spend).toEqual({ modelTokens: 1280 });
   });
 
   it("asks for the budget's k when one is given and keeps that many hits", async () => {
@@ -354,27 +356,6 @@ describe("runRetrievalAgent", () => {
     await runRetrievalAgent(hosted, { question: "q" }, { maxWallSecs: 90 });
     expect(sent[0]).not.toHaveProperty("max_turns");
     expect(sent[0]).not.toHaveProperty("mode");
-  });
-
-  it("keeps the loop's model calls one by one - tokens, wall time and rung - for the ledger, and skips entries of another shape", () => {
-    const usage = [
-      { prompt_tokens: 2700, completion_tokens: 120, ms: 412, rung: 0, model: "some-model" },
-      { prompt_tokens: 9100, completion_tokens: 340, ms: 60027, rung: 1, model: "another-model" },
-      "garbage",
-      { rung: 0 },
-    ];
-    const { spend } = retrievalAgentRunFrom(QUESTION, answered({ usage, prompt_tokens: 11800, completion_tokens: 460 }));
-    expect(spend).toEqual({
-      promptTokens: 11800,
-      completionTokens: 460,
-      calls: [
-        { promptTokens: 2700, completionTokens: 120, ms: 412, rung: 0 },
-        { promptTokens: 9100, completionTokens: 340, ms: 60027, rung: 1 },
-      ],
-    });
-    expect(JSON.stringify(spend)).not.toContain("some-model");
-    expect(retrievalAgentRunFrom(QUESTION, answered({ usage: [] })).spend).not.toHaveProperty("calls");
-    expect(retrievalAgentRunFrom(QUESTION, answered({ usage: "none" })).spend).not.toHaveProperty("calls");
   });
 
   it("propagates the client's error for a terminal platform failure", async () => {

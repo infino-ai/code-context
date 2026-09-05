@@ -245,12 +245,7 @@ describe("request shapes", () => {
       terminate: "answered",
       turns: 1,
       retries: 0,
-      card_tier: "lean",
-      rung: 0,
-      prompt_tokens: 10,
-      completion_tokens: 2,
-      usage: [],
-      model: "m",
+      model_tokens: 12,
     };
     const { db, calls } = client([json(answer), json(answer)]);
     expect(await db.subAgent({ question: "how many?" })).toEqual(answer);

@@ -390,7 +390,9 @@ export class HostedDb {
    * with facts - `facts`, the first `k` rows of the query that validated,
    * each `{table?, row}`; `statement`, that query verbatim; `coverage`, how
    * many rows the query returned against how many are in `facts` - and the
-   * loop's accounting; never anything the model wrote. A loop that found no
+   * loop's accounting (`turns`, `retries`, and `model_tokens`, the one number
+   * the platform meters the call on; its costs are otherwise its own); never
+   * anything the model wrote. A loop that found no
    * query still answers 200 with `terminate` saying how (`escalated` carries
    * the model's account of the problem in `error`). The per-call timeout is
    * the request's own `max_wall_secs` plus a margin for the answer to

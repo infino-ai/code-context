@@ -137,23 +137,13 @@ export interface RetrievalAgentResult {
 }
 
 /** What the loop cost on the platform, for the usage ledger and receipt:
- * never part of the tool result. */
+ * never part of the tool result. The platform reports one number per call,
+ * `model_tokens` - the prompt and completion tokens of every model call the
+ * loop made, together, the count its Model Spend meter billed the call on -
+ * and nothing about which models or how many calls: its costs are its own,
+ * and this is what lets a bill be checked against the responses. */
 export interface RetrievalAgentSpend {
-  promptTokens: number;
-  completionTokens: number;
-  /** One entry per model call the loop made, when the platform reports them:
-   * the tokens of that call, its wall time, and the rung of the platform's
-   * model ladder that answered it (the rung sets the rate the platform
-   * meters the call at, so the ledger can reproduce the platform's spend
-   * figure exactly). Ledger only. */
-  calls?: RetrievalAgentCall[];
-}
-
-export interface RetrievalAgentCall {
-  promptTokens: number;
-  completionTokens: number;
-  ms?: number;
-  rung?: number;
+  modelTokens: number;
 }
 
 /** One run: the tool result and, beside it, the spend. */
@@ -267,30 +257,8 @@ export function retrievalAgentRunFrom(question: string, response: unknown, maxHi
     turns: numberField(body.turns),
   };
   if (terminate !== TERMINATE_ANSWERED) result.error = `${noAnswerMessage(terminate, body.error)} - ${NO_ANSWER_HINT}`;
-  const spend: RetrievalAgentSpend = {
-    promptTokens: numberField(body.prompt_tokens),
-    completionTokens: numberField(body.completion_tokens),
-  };
-  const calls = callsOf(body.usage);
-  if (calls.length > 0) spend.calls = calls;
+  const spend: RetrievalAgentSpend = { modelTokens: numberField(body.model_tokens) };
   return { result, spend };
-}
-
-/** The platform's per-model-call accounting (`usage[]`), one record per call:
- * its tokens, and its wall time and rung when reported. Entries of another
- * shape contribute nothing. */
-function callsOf(usage: unknown): RetrievalAgentCall[] {
-  if (!Array.isArray(usage)) return [];
-  const calls: RetrievalAgentCall[] = [];
-  for (const raw of usage) {
-    const u = asRecord(raw);
-    if (!isFiniteNumber(u.prompt_tokens) && !isFiniteNumber(u.completion_tokens)) continue;
-    const call: RetrievalAgentCall = { promptTokens: numberField(u.prompt_tokens), completionTokens: numberField(u.completion_tokens) };
-    if (isFiniteNumber(u.ms)) call.ms = u.ms;
-    if (isFiniteNumber(u.rung)) call.rung = u.rung;
-    calls.push(call);
-  }
-  return calls;
 }
 
 /** Why there are no facts: the platform's reason for the way the loop ended

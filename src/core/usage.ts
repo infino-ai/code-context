@@ -55,22 +55,19 @@ export interface UsageEntry {
   rows?: number;
   /** sql only: a truncated preview of the returned rows (the answer itself). */
   rowsPreview?: string;
-  /** subagent only: what the platform's agent spent on the question - its
-   * turns and tokens. The platform bills these; the receipt shows them, the
+  /** subagent and explore: what the platform's agent spent on the question -
+   * its turns, and the model tokens the platform metered for the call (prompt
+   * and completion together, every model call of the loop; the platform bills
+   * this number and reports no more of its costs). The receipt shows them, the
    * tool result does not. */
   agentTurns?: number;
-  agentPromptTokens?: number;
-  agentCompletionTokens?: number;
+  agentModelTokens?: number;
   /** subagent only: whether the platform ranked the facts against the question. */
   agentRanked?: boolean;
-  /** subagent and explore: the loop's model calls one by one - tokens, wall
-   * time, and the rung of the platform's model ladder that answered - so the
-   * platform's metered spend can be reproduced from the ledger. */
-  agentCalls?: Array<{ promptTokens: number; completionTokens: number; ms?: number; rung?: number }>;
-  /** Hosted mode only: what the platform call behind this query cost - the
-   * round trip of the answering request and the tokens the platform metered
-   * (from its response headers, when present). Lives in the ledger, never in
-   * the tool result, so the model sees the same shape in both modes. */
+  /** subagent and explore: what the platform call behind this entry cost on
+   * the wire - the round trip of the answering request and the read/write
+   * tokens the platform metered (from its response headers, when present).
+   * Lives in the ledger, never in the tool result. */
   platform?: { rttMs: number; readTokens?: number; writeTokens?: number };
 }
 
@@ -147,10 +144,8 @@ export function subagentEntry(result: RetrievalAgentResult, spend: RetrievalAgen
     hits: result.hits.map((h) => ({ path: h.path, startLine: h.startLine, endLine: h.endLine })),
     rows: result.rows.length,
     agentTurns: result.turns,
-    agentPromptTokens: spend.promptTokens,
-    agentCompletionTokens: spend.completionTokens,
+    agentModelTokens: spend.modelTokens,
     ...(result.coverage?.ranked ? { agentRanked: true } : {}),
-    ...(spend.calls && spend.calls.length > 0 ? { agentCalls: spend.calls } : {}),
   };
 }
 
@@ -205,12 +200,11 @@ export function formatReceipt(entry: UsageEntry, session?: SessionUsage): string
     parts.push(`returned ~${fmtTokens(entry.returnedTokens)} tokens | ${plural(entry.matches ?? hits.length, "match", "matches")} / ${plural(files, "file", "files")}`);
   } else if (entry.tool === "subagent" || entry.tool === "explore") {
     // What came back, then the inner agent's spend beside it: the platform
-    // bills the turns and tokens, so the caller sees what one question cost there.
+    // bills the model tokens, so the caller sees what one question cost there.
     const hits = entry.hits ?? [];
     parts.push(
       `returned ~${fmtTokens(entry.returnedTokens)} tokens | ${plural(hits.length, "hit", "hits")} / ${plural(entry.rows ?? 0, "row", "rows")} | ` +
-        `${plural(entry.agentTurns ?? 0, "turn", "turns")} | ` +
-        `${fmtTokens(entry.agentPromptTokens ?? 0)} prompt / ${fmtTokens(entry.agentCompletionTokens ?? 0)} completion tokens`,
+        `${plural(entry.agentTurns ?? 0, "turn", "turns")} | ${fmtTokens(entry.agentModelTokens ?? 0)} model tokens`,
     );
   } else {
     parts.push(`returned ~${fmtTokens(entry.returnedTokens)} tokens | ${plural(entry.rows ?? 0, "row", "rows")}`);
