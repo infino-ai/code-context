@@ -117,11 +117,11 @@ describe("ensureIndexed", () => {
     expect(res).toEqual({ needsIndex: true });
   });
 
-  it("awaits an async getHandle (a hosted repo's readiness is a server round trip)", async () => {
+  it("awaits an async getHandle", async () => {
     const ctx = makeCtx();
     let builds = 0;
     const deps: EnsureDeps = {
-      autoIndexEnabled: false, // as forced for a hosted target
+      autoIndexEnabled: false,
       getHandle: async (c) => handleFor(c),
       build: () => ((builds++), Promise.resolve(STATS)),
     };
@@ -140,18 +140,22 @@ describe("ensureIndexed", () => {
     expect(await ensureIndexed(ctx, deps)).toEqual({ needsIndex: true });
   });
 
-  it("never builds for a hosted repo, even with auto-index on", async () => {
-    // The hosted table is shared and loaded only by `cx index --db`; the guard
-    // holds on this path regardless of the environment-derived switch.
-    const ctx: RepoCtx = { ...makeCtx(), db: undefined, hosted: {} as unknown as RepoCtx["hosted"] };
+  it("builds for a repo with a platform client like any other - the build writes both places", async () => {
+    const ctx: RepoCtx = { ...makeCtx(), hosted: {} as unknown as RepoCtx["hosted"] };
+    let indexed = false;
     let builds = 0;
     const deps: EnsureDeps = {
       autoIndexEnabled: true,
-      getHandle: async () => null,
-      build: () => ((builds++), Promise.resolve(STATS)),
+      getHandle: (c) => (indexed ? handleFor(c) : null),
+      build: () => {
+        builds++;
+        indexed = true;
+        return Promise.resolve(STATS);
+      },
     };
-    expect(await ensureIndexed(ctx, deps)).toEqual({ needsIndex: true });
-    expect(builds).toBe(0);
+    const res = await ensureIndexed(ctx, deps);
+    expect(builds).toBe(1);
+    expect("handle" in res && res.autoIndexed).toEqual(STATS);
   });
 
   it("propagates a build failure to the caller", async () => {

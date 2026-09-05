@@ -109,15 +109,15 @@ GROUP BY path ORDER BY lines DESC LIMIT 15
 - Each repo's index is keyed to its own root directory: a fresh git worktree
   is a new root and builds its own index on first query (the main checkout's
   index does not carry over).
-- A hosted index (the server was started with `--db`, and `cx status` names
-  an `https://` table) is shared and never built or re-synced by a query:
-  `cx index --db <url> --api-key-file <path>` from a shell is the explicit
-  load, and it is the user's step, not yours.
+- When the server was started with `--db`, the same index is also kept on an
+  infino-platform database; the build and every sync write both, so nothing
+  about the lifecycle changes for you.
 
-## subagent (hosted index only, when present)
+## subagent and explore (when present)
 
-When the server was started with `--subagent` a fourth tool is registered:
-`subagent` hands a question or task in plain language to the platform's
+When the server was started with `--db` two more tools are registered, both
+running on the platform copy of the index. `subagent` hands a question or
+task in plain language to the platform's
 retrieval agent and returns the facts it retrieved, never a summary: `hits`
 (`path`, `startLine`-`endLine`, `content` - the shape of a `search` hit),
 `rows` (aggregates: a count or rank per path), and `sql` (the statement whose
@@ -155,8 +155,9 @@ different repository than the one the server started in.
 
 ## Cost awareness
 
-- `find`/`search`/`sql` calls are cheap: milliseconds against a local index,
-  one HTTPS round trip (tens of milliseconds) against a hosted one.
+- `find`/`search`/`sql` calls are cheap: milliseconds against the local
+  index. `subagent` and `explore` are a platform round trip plus the
+  platform's own retrieval loop, and are metered there.
 - The first index of a repo and the vector backfill are the expensive part
   (CPU for the local embedding model, proportional to repo size). Avoid
   forcing `cx index --full` rebuilds unless the index is actually wrong, and

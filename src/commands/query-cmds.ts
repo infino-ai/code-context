@@ -3,21 +3,20 @@
 //
 // `cx find` / `cx search` / `cx sql` / `cx status` / `cx usage` - the query commands.
 //
-// Every query command opens the index in either mode (openIndexAsync): the
-// local catalog, or the hosted chunks table when --db is given. The printed
-// results are the same; in hosted mode the usage ledger additionally records
-// what the platform call behind each query cost.
+// Every query command reads the local index (openIndex). `cx status` also
+// reports the platform table when this machine has loaded one - its manifest
+// sits beside the local one in the index dir.
 
-import { openIndexAsync, NoIndexError, type IndexHandle } from "../core/context.js";
+import { openIndex, NoIndexError, type IndexHandle } from "../core/context.js";
 import { indexDir, resolveRoot } from "../core/config.js";
 import { createEmbedder, embedderInfo } from "../core/embedder.js";
+import { readPlatformManifest, type Manifest } from "../core/manifest.js";
 import { find, search, runSql, jsonify } from "../core/searcher.js";
 import {
   receiptEnabled,
   findEntry,
   searchEntry,
   sqlEntry,
-  withPlatform,
   formatReceipt,
   recordUsage,
   readUsage,
@@ -47,7 +46,7 @@ export interface FindCmdOptions {
  * the way `grep -n` does, so it drops into the same habits and pipelines. */
 export async function findCmd(text: string, opts: FindCmdOptions): Promise<void> {
   try {
-    const handle = await openIndexAsync(opts.path);
+    const handle = openIndex(opts.path);
     // `find` rejects a non-integer, so `--limit abc` is an error rather than an
     // empty listing; the raw string is converted here and validated there.
     const result = await find(handle, text, {
@@ -55,7 +54,7 @@ export async function findCmd(text: string, opts: FindCmdOptions): Promise<void>
       limit: opts.limit === undefined ? undefined : Number(opts.limit),
     });
     if (receiptEnabled()) {
-      const entry = withPlatform(findEntry(result), handle);
+      const entry = findEntry(result);
       recordUsage(handle.dir, entry);
       console.error(dim(formatReceipt(entry)));
     }
@@ -86,10 +85,10 @@ export interface SearchCmdOptions {
 
 export async function searchCmd(query: string, opts: SearchCmdOptions): Promise<void> {
   try {
-    const handle = await openIndexAsync(opts.path);
+    const handle = openIndex(opts.path);
     const result = await search(handle, createEmbedder(), query, Number(opts.k));
     if (receiptEnabled()) {
-      const entry = withPlatform(searchEntry(result, handle.root), handle);
+      const entry = searchEntry(result, handle.root);
       recordUsage(handle.dir, entry);
       console.error(dim(formatReceipt(entry)));
     }
@@ -119,7 +118,7 @@ export interface SqlCmdOptions {
 
 export async function sqlCmd(statement: string, opts: SqlCmdOptions): Promise<void> {
   try {
-    const handle = await openIndexAsync(opts.path);
+    const handle = openIndex(opts.path);
     const embeds: Record<string, string> = {};
     for (const pair of opts.embed ?? []) {
       const eq = pair.indexOf("=");
@@ -128,7 +127,7 @@ export async function sqlCmd(statement: string, opts: SqlCmdOptions): Promise<vo
     }
     const rows = await runSql(handle, createEmbedder(), statement, embeds);
     if (receiptEnabled()) {
-      const entry = withPlatform(sqlEntry(statement, rows), handle);
+      const entry = sqlEntry(statement, rows);
       recordUsage(handle.dir, entry);
       console.error(dim(formatReceipt(entry)));
     }
@@ -152,12 +151,13 @@ export interface StatusCmdOptions {
 export async function statusCmd(opts: StatusCmdOptions): Promise<void> {
   let handle: IndexHandle;
   try {
-    handle = await openIndexAsync(opts.path);
+    handle = openIndex(opts.path);
   } catch (err) {
     if (opts.hook) return; // a hook in an unindexed repo stays silent
     die(err);
   }
   const m = handle.manifest;
+  const platform = readPlatformManifest(handle.dir);
   if (opts.hook) {
     console.log(
       `code-context index: ${fmtCount(m.chunks)} chunks from ${fmtCount(m.files)} files, ` +
@@ -167,11 +167,10 @@ export async function statusCmd(opts: StatusCmdOptions): Promise<void> {
     return;
   }
   if (opts.json) {
-    console.log(JSON.stringify(m, null, 2));
+    console.log(JSON.stringify(platform ? { ...m, platform } : m, null, 2));
     return;
   }
   console.log(`${bold("code-context")} - ${handle.root}`);
-  if (handle.hosted) console.log(`  table      ${handle.target}`);
   console.log(`  chunks     ${fmtCount(m.chunks)} from ${fmtCount(m.files)} files`);
   if (m.truncatedFiles) {
     console.log(
@@ -180,12 +179,7 @@ export async function statusCmd(opts: StatusCmdOptions): Promise<void> {
       ),
     );
   }
-  // A platform-embedded column has no client-known width, so the `d` suffix
-  // prints only for a recorded one.
-  const embedderNote = m.embedder
-    ? dim(`  (${m.embedder.provider} ${m.embedder.model}${m.embedder.dim !== undefined ? `, ${m.embedder.dim}d` : ""})`)
-    : "";
-  console.log(`  vectors    ${m.vectors}${embedderNote}`);
+  console.log(`  vectors    ${m.vectors}${embedderNote(m)}`);
   console.log(`  indexed    ${fmtAge(m.indexedAt)}${dim(` (keyword ${fmtMs(m.indexMs)}${m.embedMs ? `, vectors ${fmtMs(m.embedMs)}` : ""})`)}`);
   const langs = Object.entries(m.languages)
     .sort((a, b) => b[1] - a[1])
@@ -194,6 +188,19 @@ export async function statusCmd(opts: StatusCmdOptions): Promise<void> {
     .join(" · ");
   if (langs) console.log(`  languages  ${langs}`);
   console.log(dim(`  embedder   ${embedderInfo()}`));
+  // The platform table this machine loaded, when there is one: the same
+  // index in another place, so only what can differ is shown - its counts,
+  // its vectors and when it was last written.
+  if (platform) {
+    console.log(`  platform   ${fmtCount(platform.chunks)} chunks from ${fmtCount(platform.files)} files, vectors ${platform.vectors}${embedderNote(platform)}, written ${fmtAge(platform.indexedAt)}`);
+  }
+}
+
+/** ` (provider model, Nd)` for a recorded embedder; empty when none. A
+ * platform-embedded column has no client-known width, so the `d` suffix
+ * prints only for a recorded one. */
+function embedderNote(m: Manifest): string {
+  return m.embedder ? dim(`  (${m.embedder.provider} ${m.embedder.model}${m.embedder.dim !== undefined ? `, ${m.embedder.dim}d` : ""})`) : "";
 }
 
 export interface UsageCmdOptions {

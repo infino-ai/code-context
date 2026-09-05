@@ -3,10 +3,11 @@
 //
 // One-shot index build for a bench repo, timed and recorded, so the cost of
 // getting the index in place is a number in the report next to the query
-// numbers. The hosted side runs the server build's own CLI against the
-// platform database (`cx index --db <url>`); the local side runs the same
-// CLI against .infino/ for the comparison row. Either way the CLI's --json
-// stats land on the record verbatim.
+// numbers. The hosted side runs the server build's own CLI with the platform
+// database named (`cx index --db <url>`), which writes the local index and
+// the platform table in one build; the local side runs the same CLI without
+// it, for the comparison row. Either way the CLI's --json stats land on the
+// record verbatim.
 //
 // Usage: node load-hosted.mjs [repoPath] [side=hosted]
 //   repoPath  the repo to index (or $CX_BENCH_REPO)
@@ -33,8 +34,8 @@ const OUTPUT_BUFFER_BYTES = 64 * 1024 * 1024;
 
 /** The command a side runs. The hosted side carries the same flags the lane's
  * MCP server gets (hostedFlags: --db, --api-key-file, --embed-provider), so
- * `cx index` loads the table into the database the lane will query, embedded
- * the way the lane expects. */
+ * `cx index` loads the table into the database the lane's platform tools
+ * will query, embedded the way the lane expects. */
 export function indexArgs({ cli, repo, side, flags = [] }) {
   const args = [cli, "index", "--json"];
   if (side === "hosted") args.push(...flags);

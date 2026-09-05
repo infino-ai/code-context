@@ -14,9 +14,9 @@
 // Usage: node run-questions.mjs [repoPath] [lanes] [questionsFile]
 //   repoPath      the indexed repo (or $CX_BENCH_REPO); `cx index <repo>` first
 //   lanes         "files,combo" (default) - comma-separated lane names from the
-//                 table in lanes.mjs (files|cx|combo|hosted|hosted-agent); the
-//                 hosted lanes need CX_BENCH_DB_URL and CX_BENCH_KEY_FILE set
-//                 and the repo loaded into that database first (load-hosted.mjs)
+//                 table in lanes.mjs (files|cx|combo|hosted|hosted-agent|...);
+//                 the platform lanes need CX_BENCH_DB_URL and CX_BENCH_KEY_FILE
+//                 set and the repo indexed with --db first (load-hosted.mjs)
 //   questionsFile path to a questions JSON (default questions/infino.json)
 // Model is set in lanes.mjs (BENCH_MODEL, default claude-sonnet-4-6).
 import { readFileSync } from "node:fs";
@@ -28,15 +28,15 @@ const repoPath = repoArg ?? process.env.CX_BENCH_REPO;
 if (!repoPath) {
   console.error("usage: node run-questions.mjs [repoPath] [lanes=files,combo] [questionsFile]");
   console.error("  index the repo first: cx index <repoPath>   (or set CX_BENCH_REPO)");
-  console.error(`  lanes: ${Object.keys(LANES).join("|")}; hosted lanes need CX_BENCH_DB_URL + CX_BENCH_KEY_FILE`);
+  console.error(`  lanes: ${Object.keys(LANES).join("|")}; platform lanes need CX_BENCH_DB_URL + CX_BENCH_KEY_FILE`);
   console.error("  questionsFile defaults to questions/infino.json; see bench/questions/");
   process.exit(1);
 }
 const repoDir = resolve(repoPath);
 const indexDir = process.env.CX_INDEX_DIR ?? join(repoDir, ".infino");
 const lanes = (lanesArg ?? "files,combo").split(",").map((s) => s.trim());
-// An unknown lane or a hosted lane without its credentials fails here, before
-// the first paid model call, instead of on every question.
+// An unknown lane or a platform lane without its credentials fails here,
+// before the first paid model call, instead of on every question.
 try {
   for (const lane of lanes) checkLaneEnv(lane);
 } catch (err) {

@@ -13,8 +13,8 @@ import { RepoRegistry } from "../src/mcp/repos.js";
  * assert identity (same ctx reused) and count (no redundant connects). */
 const fakeConn = (dir: string) => ({ __dir: dir } as unknown as Connection);
 
-/** The hosted target of a registry started with `--db`. The fetch is never
- * reached here: constructing the client makes no request. */
+/** The platform database of a registry started with `--db`. The fetch is
+ * never reached here: constructing the client makes no request. */
 const HOSTED = {
   target: { baseUrl: "https://api.example.test", database: "cx", apiKey: "inf_test_key_do_not_log" },
   options: {
@@ -121,37 +121,33 @@ describe("RepoRegistry.dirFor", () => {
   });
 });
 
-describe("RepoRegistry.targetFor", () => {
-  it("is the index dir for every root in local mode", () => {
+describe("RepoRegistry with a platform database", () => {
+  it("is the index dir for every root without one, and no context carries a client", () => {
     const { registry } = makeRegistry(A, { dirs: [B] });
-    expect(registry.targetFor(A)).toBe(join(A, ".infino"));
-    expect(registry.targetFor(B)).toBe(join(B, ".infino"));
     expect(registry.get(A).target).toBe(join(A, ".infino"));
+    expect(registry.get(B).target).toBe(join(B, ".infino"));
+    expect(registry.get(A).hosted).toBeUndefined();
+    expect(registry.get(A).hostedMemo).toBeUndefined();
   });
 
-  it("is the hosted URL (no key) for the default root only; a `path` naming another repo stays local", () => {
-    const { registry } = makeRegistry(A, { dirs: [B], hosted: true });
-    expect(registry.targetFor(A)).toBe("https://api.example.test/cx");
-    expect(registry.targetFor(A)).not.toContain(HOSTED.target.apiKey);
-    expect(registry.targetFor(B)).toBe(join(B, ".infino"));
-  });
-
-  it("gives the hosted default root a platform client and no engine connection", () => {
+  it("gives the default root an engine connection AND the platform client; a `path` naming another repo has the local index only", () => {
     const { registry, connects } = makeRegistry(A, { dirs: [B], hosted: true });
     const a = registry.get(A);
+    expect(a.db).toBeDefined();
     expect(a.hosted).toBeDefined();
-    expect(a.db).toBeUndefined();
-    expect(a.target).toBe("https://api.example.test/cx");
-    expect(a.dir).toBe(join(A, ".infino")); // the sidecar still lives in the repo
     expect(a.hostedMemo).toEqual({ ready: false });
-    expect(connects()).toBe(0);
+    expect(a.dir).toBe(join(A, ".infino"));
+    expect(a.target).toBe(join(A, ".infino"));
+    expect(JSON.stringify(a.target)).not.toContain(HOSTED.target.apiKey);
+    expect(connects()).toBe(1);
 
-    // The secondary repo is local: an engine connection, no client.
+    // The secondary repo: an engine connection, no client - the database
+    // holds one chunks table.
     const b = registry.get(B);
     expect(b.db).toBeDefined();
     expect(b.hosted).toBeUndefined();
     expect(b.target).toBe(join(B, ".infino"));
-    expect(connects()).toBe(1);
+    expect(connects()).toBe(2);
   });
 });
 

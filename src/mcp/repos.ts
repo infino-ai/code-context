@@ -7,11 +7,12 @@
 // clock, and mutation lock, held in a small LRU so a session that roams across
 // many repos doesn't accumulate connections without bound.
 //
-// Hosted mode changes one repo only: the DEFAULT root's chunks table lives on
-// the platform database the server was started against, so that context gets
-// the platform client instead of an engine connection. A `path` naming another
-// repo stays local - a hosted database holds one chunks table, and a second
-// repo's chunks in it would be indistinguishable from the first's.
+// When a platform database is configured (--db <url>) the DEFAULT root's
+// context also carries the platform client: that repository's chunks table
+// lives there beside its local index, written by the same builds and syncs
+// and read by the `subagent` and `explore` tools. A `path` naming another repo
+// has the local index only - a platform database holds one chunks table, and
+// a second repo's chunks in it would be indistinguishable from the first's.
 //
 // The connection and filesystem-stat calls are injected so this unit tests
 // without a real engine or on-disk repo.
@@ -19,7 +20,7 @@
 import { statSync } from "node:fs";
 import { join } from "node:path";
 import type { Connection } from "@infino-ai/infino";
-import { indexDir, resolveRoot, INDEX_DIR_NAME, hostedLabel } from "../core/config.js";
+import { indexDir, resolveRoot, INDEX_DIR_NAME } from "../core/config.js";
 import { hostedDbFor, newHostedMemo, type HostedMemo } from "../core/context.js";
 import type { HostedDb, HostedOptions, HostedTarget } from "../core/hosted.js";
 
@@ -27,15 +28,16 @@ import type { HostedDb, HostedOptions, HostedTarget } from "../core/hosted.js";
 export interface RepoCtx {
   /** Absolute, resolved repo root. */
   root: string;
-  /** Index directory for this repo (the sidecar, when hosted). */
+  /** Index directory for this repo. */
   dir: string;
-  /** Where the chunks table lives: the index dir, or the hosted URL (no key). */
+  /** Where the local index lives, for messages and logs: the index dir. */
   target: string;
-  /** The in-process engine connection; absent for the hosted default root. */
-  db?: Connection;
-  /** The platform client; present for the hosted default root only. */
+  /** The in-process engine connection: the local index every tool reads. */
+  db: Connection;
+  /** The platform client; present for the default root when a database is
+   * configured. */
   hosted?: HostedDb;
-  /** Readiness / synthesized-manifest memo for the hosted client. */
+  /** Readiness memo for the platform table, beside `hosted`. */
   hostedMemo?: HostedMemo;
   /** performance.now() of the last auto-sync staleness check. */
   lastSyncCheck: number;
@@ -55,7 +57,7 @@ export interface RepoRegistryOptions {
   stat?: (path: string) => StatLike;
   /** Max repos kept open at once; the least-recently-used is evicted past it. */
   maxOpen?: number;
-  /** The hosted target of the default root, when the server runs hosted.
+  /** The platform database of the default root, when one is configured.
    * `options` tune the client (tests inject a fetch through it). */
   hosted?: { target: HostedTarget; options?: HostedOptions };
 }
@@ -85,16 +87,10 @@ export class RepoRegistry {
     return root === this.defaultRoot ? indexDir(root) : join(root, INDEX_DIR_NAME);
   }
 
-  /** Where a root's chunks table lives: the hosted URL for the default root
-   * when the server runs hosted, else the root's own index dir. Only the
-   * default root is ever hosted - the server was started against one
-   * database, which holds one chunks table; a `path` naming another repo is
-   * served from that repo's local index. */
-  targetFor(root: string): string {
-    return this.isHostedRoot(root) ? hostedLabel(this.hosted!.target) : this.dirFor(root);
-  }
-
-  private isHostedRoot(root: string): boolean {
+  /** Whether a root's context carries the platform client: only the default
+   * root's, and only when a database is configured - the server was started
+   * against one database, which holds one chunks table. */
+  private hasPlatform(root: string): boolean {
     return this.hosted !== undefined && root === this.defaultRoot;
   }
 
@@ -105,8 +101,7 @@ export class RepoRegistry {
 
   /** Resolve + validate a requested root into its (cached) context. Throws a
    * clear error for a missing or non-directory path. Most-recently-used repos
-   * stay live; the least-recently-used is evicted past `maxOpen`. An engine
-   * connection is opened for local targets only. */
+   * stay live; the least-recently-used is evicted past `maxOpen`. */
   get(requested?: string): RepoCtx {
     const root = requested ? resolveRoot(requested) : this.defaultRoot;
     const existing = this.repos.get(root);
@@ -124,18 +119,17 @@ export class RepoRegistry {
     }
     if (!stat.isDirectory()) throw new Error(`not a directory: ${root}`);
     const dir = this.dirFor(root);
-    const target = this.targetFor(root);
-    const ctx: RepoCtx = this.isHostedRoot(root)
-      ? {
-          root,
-          dir,
-          target,
-          hosted: hostedDbFor(this.hosted!.target, this.hosted!.options),
-          hostedMemo: newHostedMemo(),
-          lastSyncCheck: 0,
-          mutation: null,
-        }
-      : { root, dir, target, db: this.connect(dir), lastSyncCheck: 0, mutation: null };
+    const ctx: RepoCtx = {
+      root,
+      dir,
+      target: dir,
+      db: this.connect(dir),
+      ...(this.hasPlatform(root)
+        ? { hosted: hostedDbFor(this.hosted!.target, this.hosted!.options), hostedMemo: newHostedMemo() }
+        : {}),
+      lastSyncCheck: 0,
+      mutation: null,
+    };
     this.repos.set(root, ctx);
     if (this.repos.size > this.maxOpen) {
       const lru = this.repos.keys().next().value!;

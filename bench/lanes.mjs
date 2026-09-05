@@ -80,18 +80,17 @@ const exploreOnPlatform = {
     "say so. The caller will not see your tool results.",
   model: EXPLORE_MODEL,
 };
-/** The embedding provider a hosted lane's server uses when the caller does
- * not pick one: the product default - the platform embeds - since the hosted
- * lanes measure the hosted product as shipped. CX_BENCH_EMBED_PROVIDER=local
- * runs the same local model the local lanes use instead, so the two sides
- * differ in where the index lives and nothing else. */
+/** Who fills the platform table's vectors when the caller does not pick: the
+ * product default - the platform embeds - since the platform lanes measure the
+ * product as shipped. CX_BENCH_EMBED_PROVIDER=local ships the local model's
+ * vectors instead. */
 export const DEFAULT_HOSTED_EMBED_PROVIDER = "platform";
 
-/** The harness's own env for a hosted lane: the database URL, the FILE holding
- * its key, and the optional provider override. The server takes these as
- * flags (--db, --api-key-file, --embed-provider), never from its environment;
- * these names carry the CX_BENCH_ prefix of the other harness knobs so nothing
- * the server could read is set by accident. */
+/** The harness's own env for a platform lane: the database URL, the FILE
+ * holding its key, and the optional provider override. The server takes these
+ * as flags (--db, --api-key-file, --embed-provider), never from its
+ * environment; these names carry the CX_BENCH_ prefix of the other harness
+ * knobs so nothing the server could read is set by accident. */
 export const BENCH_DB_URL = "CX_BENCH_DB_URL";
 export const BENCH_KEY_FILE = "CX_BENCH_KEY_FILE";
 export const BENCH_EMBED_PROVIDER = "CX_BENCH_EMBED_PROVIDER";
@@ -102,20 +101,21 @@ export const BENCH_AGENT_MAX_TURNS = "CX_BENCH_AGENT_MAX_TURNS";
  * the server's --subagent-k; unset leaves the server's default. */
 export const BENCH_AGENT_K = "CX_BENCH_AGENT_K";
 
-/** The env a hosted lane needs before it can run. */
+/** The env a platform lane needs before it can run. */
 const HOSTED_REQUIRES = [BENCH_DB_URL, BENCH_KEY_FILE];
 
 /** Server env that is common to every MCP lane. Auto-sync is off in every
- * lane: the index is built before the run and a re-sync mid-question would
- * put a stat walk on the clock. (In hosted mode the server forces auto-index
- * and auto-sync off itself: a hosted build is a separate, metered step -
- * load-hosted.mjs - never something a question triggers.) */
+ * lane: the index is built before the run (load-hosted.mjs, which with --db
+ * writes the local index and the platform table in one build) and a re-sync
+ * mid-question would put a stat walk on the clock. */
 const mcpEnvBase = (repoDir, indexDir) => ({ CX_ROOT: repoDir, CX_INDEX_DIR: indexDir, CX_AUTO_SYNC: "0" });
 
-/** The server flags that point a `cx` command at the hosted database: the
- * same for the MCP server of a hosted lane and for the `cx index` of
- * load-hosted.mjs, so the table is loaded the way the lane queries it. The
- * key travels as the path of its file; nothing here reads it. */
+/** The server flags that name the platform database: the same for the MCP
+ * server of a platform lane and for the `cx index` of load-hosted.mjs, so the
+ * table is loaded the way the lane's tools expect it. With --db the server
+ * registers the subagent and explore tools; find, search and sql read the
+ * local index either way. The key travels as the path of its file; nothing
+ * here reads it. */
 export function hostedFlags(env = process.env) {
   return [
     "--db",
@@ -127,18 +127,19 @@ export function hostedFlags(env = process.env) {
   ];
 }
 
-/** The server flags that add subagent to a hosted lane, with the turn
- * cap and the facts-per-call when the harness names them. */
+/** The server flags that cap the agent tools, when the harness names a turn
+ * cap or a facts-per-call; empty otherwise (the tools themselves come with
+ * --db). */
 export function agentFlags(env = process.env) {
   const cap = env[BENCH_AGENT_MAX_TURNS];
   const k = env[BENCH_AGENT_K];
-  return ["--subagent", ...(cap ? ["--subagent-max-turns", cap] : []), ...(k ? ["--subagent-k", k] : [])];
+  return [...(cap ? ["--subagent-max-turns", cap] : []), ...(k ? ["--subagent-k", k] : [])];
 }
 
 /** The lane table. Each lane is the identical hermetic base plus:
- *   kind      "local" (index in .infino/ on this machine) or "hosted" (index
- *             in a platform database over HTTPS) - recorded on every row as
- *             laneKind, since the engine version differs between the two
+ *   kind      "local" (the server has the local index alone) or "hosted" (the
+ *             server also has the platform database, where the subagent and
+ *             explore tools run) - recorded on every row as laneKind
  *   tools     the built-in tools the agent gets
  *   mcp       whether the code-context server is attached
  *   env       server env for the MCP lanes (repoDir, indexDir) => object
@@ -151,18 +152,20 @@ export function agentFlags(env = process.env) {
  *   cx         - the MCP tools plus Read (retrieval via the index)
  *   combo      - both, which is what installing the MCP server actually
  *                produces in a real client
- *   hosted     - combo, but the server talks to a platform database
- *   hosted-agent - hosted plus the subagent tool (the platform's own
- *                  agent loop)
+ *   hosted     - combo with the platform database configured, and the
+ *                subagent and explore tools it brings hidden: the three
+ *                local tools alone, as a control for the lanes below
+ *   hosted-agent - combo plus the subagent tool (the platform's own agent
+ *                  loop); explore hidden
  *   agent-only - Read plus subagent alone: find, search and sql are
  *                hidden, so every retrieval goes through the platform's agent.
  *                Measures that agent's answers and cost in isolation - not how
  *                often a model would choose it (hosted-agent measures that).
  *   stock-explore    - files plus the Agent tool with the built-in Explore
  *                      subagent: pure Sonnet as a real session has it
- *   index-explore    - stock-explore plus the local MCP server, with Explore
+ *   index-explore    - stock-explore plus the MCP server, with Explore
  *                      overridden to run on code-context's tools (Haiku inside)
- *   platform-explore - the same over the hosted server, with Explore
+ *   platform-explore - the same with the platform database, with Explore
  *                      overridden to run on the explore tool alone (the
  *                      platform's explore mode: reads, follows, answers)
  *   find-subagent    - the owner's surface: stock tools, find, and subagent,
@@ -177,13 +180,22 @@ export const LANES = {
   files: { kind: "local", tools: STOCK_TOOLS, mcp: false, requires: [] },
   cx: { kind: "local", tools: ["Read"], mcp: true, env: mcpEnvBase, requires: [] },
   combo: { kind: "local", tools: STOCK_TOOLS, mcp: true, env: mcpEnvBase, requires: [] },
-  hosted: { kind: "hosted", tools: STOCK_TOOLS, mcp: true, env: mcpEnvBase, args: hostedFlags, requires: HOSTED_REQUIRES },
+  hosted: {
+    kind: "hosted",
+    tools: STOCK_TOOLS,
+    mcp: true,
+    env: mcpEnvBase,
+    args: hostedFlags,
+    disallowedTools: ["subagent", "explore"].map((tool) => `${CX_TOOL_PREFIX}${tool}`),
+    requires: HOSTED_REQUIRES,
+  },
   "hosted-agent": {
     kind: "hosted",
     tools: STOCK_TOOLS,
     mcp: true,
     env: mcpEnvBase,
     args: (env) => [...hostedFlags(env), ...agentFlags(env)],
+    disallowedTools: [`${CX_TOOL_PREFIX}explore`],
     requires: HOSTED_REQUIRES,
   },
   "agent-only": {

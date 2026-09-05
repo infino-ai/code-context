@@ -45,20 +45,20 @@ shared vocabulary are weaker until vectors land.
 The default embedding model optimizes quality-per-minute on commodity
 hardware; a larger model would rank better but index much slower. The choice
 is documented in [the embedder eval](embedder-eval.md), and the model is
-configurable. A hosted index is embedded by the platform by default;
-`--embed-provider local` keeps this machine's model and ships the vectors if
-that matters to you.
+configurable. The platform copy of the index (`--db`) is embedded by the
+platform's own model by default; `--embed-provider local` ships this
+machine's vectors there instead if that matters to you.
 
-### A hosted index puts the network in the loop
+### The platform copy puts the network in the build
 
-With `--db` every query is an HTTPS round trip to the platform, and a
-database that is not yet ready is retried for a bounded time
-(`--cold-start-secs`) before the client gives up. The table is shared, so the
-conveniences of the local index that rewrite it behind your back - the first
-query building it, every query re-syncing it - are off; loading and syncing
-are the explicit `cx index --db`. What you get in exchange is no model and no
-build on the machine, and one index for every machine and agent that points
-at it.
+With `--db` every build and every sync also writes the platform table, over
+HTTPS, and a database that is not yet ready is retried for a bounded time
+(`--cold-start-secs`) before the client gives up. `find`, `search` and `sql`
+never wait on it - they read the local index - but a sync is not done until
+both sides have the diff, and a platform failure is reported and retried by
+the next sync rather than papered over. What you get in exchange is the
+`subagent` and `explore` tools, which run on the platform and return facts
+and grounded answers instead of the coding agent crawling the repo itself.
 
 ### It is built for largely append-and-edit source trees
 

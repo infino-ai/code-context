@@ -7,17 +7,16 @@
 // staged story prints as it happens: keyword search goes live first,
 // vectors follow.
 //
-// With --db <url> the chunks table is loaded into a platform database
-// instead: the same walk and sidecar, one pass over the network, and
-// the platform-side cost (append calls, write tokens) in the printed and JSON
-// stats. This command is the only path that ever drops and reloads a hosted
-// table - see the indexer's hosted loader.
+// With --db <url> the same build or sync also writes the repository's chunks
+// table on that platform database - the local index and the platform table
+// are one index in two places - and the platform-side cost (append calls,
+// write tokens) joins the printed and JSON stats.
 
 import { watch } from "node:fs";
-import { openForIndexingAsync } from "../core/context.js";
+import { openForIndexing, platformLabel } from "../core/context.js";
 import { indexRepoStaged, syncRepo, type IndexOptions, type IndexStats, type SyncResult } from "../core/indexer.js";
-import { createEmbedder, createIndexingEmbedder, embedderInfo } from "../core/embedder.js";
-import { DEFAULT_CAPS, INDEX_DIR_NAME, embedProvider, hostedAnalyzer } from "../core/config.js";
+import { createEmbedder, createIndexingEmbedder, embedderInfo, platformEmbedderInfo } from "../core/embedder.js";
+import { DEFAULT_CAPS, INDEX_DIR_NAME, embedProvider, hostedAnalyzer, type EmbedProvider } from "../core/config.js";
 import { bold, dim, green, yellow, fmtMs, fmtCount, progressLine, progressDone } from "../core/output.js";
 
 export interface IndexCmdOptions {
@@ -35,7 +34,7 @@ const PHASES: Record<string, string> = {
   "commit-text": "committing keyword index",
   embed: "embedding chunks",
   "commit-vectors": "committing vector index",
-  load: "loading the hosted table",
+  load: "loading the platform table",
 };
 
 /** Debounce window for --watch: file events settle before a sync starts. */
@@ -45,14 +44,14 @@ const WATCH_DEBOUNCE_MS = 2000;
 const LANGUAGES_SHOWN = 8;
 
 export async function indexCmd(path: string | undefined, opts: IndexCmdOptions): Promise<void> {
-  const target = await openForIndexingAsync(path);
+  const target = openForIndexing(path);
   const { root, dir, db, hosted } = target;
-  // Null under --embed-provider platform (the platform embeds); undefined
-  // with --no-embed (no vectors at all). The indexer's `embedProvider` tells
-  // those two apart for a hosted load, so it is only set when vectors are on.
   const embedder = opts.embed === false ? undefined : createEmbedder();
-  const provider = hosted && opts.embed !== false ? embedProvider() : undefined;
-  const analyzer = hosted ? hostedAnalyzer() : undefined;
+  // --no-embed means no vectors anywhere: with no local embedder, `local`
+  // gives the platform table no embedding column either. Otherwise the
+  // platform table's column is filled as --embed-provider says.
+  const provider: EmbedProvider = opts.embed === false ? "local" : embedProvider();
+  const analyzer = hostedAnalyzer();
   const caps = {
     ...DEFAULT_CAPS,
     ...(opts.maxFiles ? { maxFiles: Number(opts.maxFiles) } : {}),
@@ -82,11 +81,11 @@ export async function indexCmd(path: string | undefined, opts: IndexCmdOptions):
   if (!opts.json) {
     console.log(`${bold("code-context")} - indexing ${root}`);
     const embedding = opts.embed === false ? "off (--no-embed)" : embedderInfo();
-    console.log(
-      hosted
-        ? dim(`table: ${target.target} · sidecar: ${dir} · analyzer: ${analyzer} · embedder: ${embedding}`)
-        : dim(`index: ${dir} · embedder: ${embedding}`),
-    );
+    console.log(dim(`index: ${dir} · embedder: ${embedding}`));
+    if (hosted) {
+      const platformEmbedding = opts.embed === false ? "off (--no-embed)" : platformEmbedderInfo();
+      console.log(dim(`platform table: ${platformLabel(hosted)} · analyzer: ${analyzer} · embedder: ${platformEmbedding}`));
+    }
   }
 
   const once = async (): Promise<void> => {
@@ -112,14 +111,7 @@ export async function indexCmd(path: string | undefined, opts: IndexCmdOptions):
     if (!opts.json) {
       progressDone();
       const t = run.text;
-      // A hosted load is one pass, so `text` is already the finished table;
-      // a local build reports keyword-live here and vectors below.
-      console.log(
-        green("✓") +
-          (hosted
-            ? ` loaded ${fmtCount(t.chunks)} chunks from ${fmtCount(t.files)} files into ${target.target} in ${fmtMs(t.indexMs)}${hostedCost(t)}`
-            : ` keyword search live - ${fmtCount(t.chunks)} chunks from ${fmtCount(t.files)} files in ${fmtMs(t.indexMs)}`),
-      );
+      console.log(green("✓") + ` keyword search live - ${fmtCount(t.chunks)} chunks from ${fmtCount(t.files)} files in ${fmtMs(t.indexMs)}`);
       if (t.truncatedFiles) {
         console.log(yellow(`! ${fmtCount(t.truncatedFiles)} files over the ${fmtCount(caps.maxFiles)}-file cap were skipped (raise with --max-files)`));
       }
@@ -132,14 +124,19 @@ export async function indexCmd(path: string | undefined, opts: IndexCmdOptions):
     }
     progressDone();
     if (final.vectors === "ready") {
-      console.log(
-        green("✓") +
-          (final.embedMs === undefined
-            ? " semantic search ready - the platform embeds server-side"
-            : ` semantic search ready - vectors built in ${fmtMs(final.embedMs)}`),
-      );
+      console.log(green("✓") + ` semantic search ready - vectors built in ${fmtMs(final.embedMs ?? 0)}`);
     } else if (final.embedError) {
       console.log(yellow(`! vector stage failed (${final.embedError}) - keyword search stays live; re-run \`cx index\` to retry`));
+    }
+    if (hosted) {
+      if (final.hosted) {
+        console.log(
+          green("✓") +
+            ` platform table loaded - ${fmtCount(final.chunks)} chunks into ${platformLabel(hosted)} in ${fmtMs(final.hosted.loadWallMs)}${hostedCost(final)}`,
+        );
+      } else if (final.hostedError) {
+        console.log(yellow(`! platform load failed (${final.hostedError}) - the local index is complete; re-run \`cx index --full\` to retry`));
+      }
     }
     const langs = Object.entries(final.languages)
       .sort((a, b) => b[1] - a[1])
@@ -181,8 +178,8 @@ export async function indexCmd(path: string | undefined, opts: IndexCmdOptions):
   await new Promise(() => {}); // run until interrupted
 }
 
-/** ` (N appends, T write tokens)` for a hosted result, empty for a local one.
- * Tokens print only when the platform metered them. */
+/** ` (N appends, T write tokens)` when the platform table was written, empty
+ * otherwise. Tokens print only when the platform metered them. */
 function hostedCost(stats: { hosted?: IndexStats["hosted"] }): string {
   const h = stats.hosted;
   if (!h) return "";
@@ -207,7 +204,7 @@ function printSync(outcome: SyncResult, json?: boolean): void {
   console.log(
     green("✓") +
       ` synced in ${fmtMs(outcome.tookMs)} - ${parts.join(", ")} ` +
-      dim(`(+${fmtCount(outcome.chunksAdded)}/-${fmtCount(outcome.chunksRemoved)} chunks, ${fmtCount(outcome.chunks)} total${outcome.vectors === "ready" ? ", vectors current" : ""})`) +
+      dim(`(+${fmtCount(outcome.chunksAdded)}/-${fmtCount(outcome.chunksRemoved)} chunks, ${fmtCount(outcome.chunks)} total${outcome.vectors === "ready" ? ", vectors current" : ""}${outcome.hosted ? ", platform table too" : ""})`) +
       hostedCost(outcome),
   );
 }

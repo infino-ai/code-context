@@ -9,7 +9,7 @@
 
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { MANIFEST_NAME, TABLE } from "./config.js";
+import { MANIFEST_NAME, PLATFORM_MANIFEST_NAME, TABLE } from "./config.js";
 import type { Analyzer } from "./analyzer.js";
 
 /** On-disk index format. Bump when the table schema or the embedded text
@@ -35,11 +35,10 @@ export interface Manifest {
   version: number;
   /** Table name the index lives in (always `chunks` today). */
   table: string;
-  /** Where the table lives. `hosted` marks a manifest that describes a table
-   * on a platform database (written by the hosted loader and by the reader
-   * that synthesizes one from the server's schema); a manifest without it
-   * describes a local index and is never trusted for a hosted target, since
-   * the two tables share nothing but the sidecar directory. */
+  /** Where the table lives. `hosted` marks the manifest of the chunks table on
+   * the platform database (the platform manifest file, written by the loader);
+   * a manifest without it describes the local index. The two are never mixed:
+   * the reader of each file rejects the other's origin. */
   origin?: "hosted";
   vectors: VectorState;
   /** The FTS analyzer the table's `content` index was built with. Queries are
@@ -72,9 +71,14 @@ export function manifestPath(indexDirPath: string): string {
   return join(indexDirPath, MANIFEST_NAME);
 }
 
-export function readManifest(indexDirPath: string): Manifest | undefined {
+/** The platform table's manifest lives beside the local one. */
+export function platformManifestPath(indexDirPath: string): string {
+  return join(indexDirPath, PLATFORM_MANIFEST_NAME);
+}
+
+function readManifestFile(path: string): Manifest | undefined {
   try {
-    const raw = readFileSync(manifestPath(indexDirPath), "utf8");
+    const raw = readFileSync(path, "utf8");
     const parsed = JSON.parse(raw) as Manifest;
     // A manifest from an older format reads as absent, so the index rebuilds
     // rather than being queried with a stale schema / raw-embedded vectors.
@@ -85,9 +89,32 @@ export function readManifest(indexDirPath: string): Manifest | undefined {
   }
 }
 
-export function writeManifest(indexDirPath: string, manifest: Manifest): void {
+function writeManifestFile(indexDirPath: string, path: string, manifest: Manifest): void {
   mkdirSync(indexDirPath, { recursive: true });
-  writeFileSync(manifestPath(indexDirPath), JSON.stringify(manifest, null, 2) + "\n");
+  writeFileSync(path, JSON.stringify(manifest, null, 2) + "\n");
+}
+
+/** The local index's manifest. A file that describes the platform table
+ * (origin `hosted`, written by builds before the two manifests were split)
+ * reads as absent: the local index it sits beside was never described. */
+export function readManifest(indexDirPath: string): Manifest | undefined {
+  const manifest = readManifestFile(manifestPath(indexDirPath));
+  return manifest?.origin === "hosted" ? undefined : manifest;
+}
+
+export function writeManifest(indexDirPath: string, manifest: Manifest): void {
+  writeManifestFile(indexDirPath, manifestPath(indexDirPath), manifest);
+}
+
+/** The platform table's manifest, or undefined when this machine never loaded
+ * it (a table loaded elsewhere has no record here). */
+export function readPlatformManifest(indexDirPath: string): Manifest | undefined {
+  const manifest = readManifestFile(platformManifestPath(indexDirPath));
+  return manifest?.origin === "hosted" ? manifest : undefined;
+}
+
+export function writePlatformManifest(indexDirPath: string, manifest: Manifest): void {
+  writeManifestFile(indexDirPath, platformManifestPath(indexDirPath), { ...manifest, origin: "hosted" });
 }
 
 export function emptyManifest(): Manifest {

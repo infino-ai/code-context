@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: Copyright The Infino Authors
 //
-// The hosted REST client against a scripted fake fetch: request shapes as the
-// platform's request structs spell them, auth and content negotiation headers,
-// the cold-start retry loop, error decoding, telemetry, and the Arrow IPC an
-// append carries. No network is ever touched.
+// The platform REST client against a scripted fake fetch: request shapes as
+// the platform's request structs spell them, auth and content negotiation
+// headers, the cold-start retry loop, error decoding, telemetry, and the Arrow
+// IPC an append carries. No network is ever touched.
 
 import * as arrow from "apache-arrow";
 import { describe, expect, it } from "vitest";
@@ -121,87 +121,20 @@ describe("isHostedUrl", () => {
 // --- request shapes -------------------------------------------------------------------
 
 describe("request shapes", () => {
-  it("bm25_search posts {table_name, field_name, query, k, mode, projection} with auth and JSON accept", async () => {
-    const { db, calls } = client([json([{ _id: 7, path: "a.ts", score: 1.5 }], { "x-infino-read-tokens": "0.050" })]);
-    const rows = await db.bm25Search("chunks", "content", "fox", 10, { projection: ["path", "score"] });
-    expect(rows).toEqual([{ _id: 7, path: "a.ts", score: 1.5 }]);
+  it("query_sql posts {query} to /v1/query_sql with auth and JSON accept, and decodes the row array", async () => {
+    const { db, calls } = client([json([{ _id: 7, n: 3 }], { "x-infino-read-tokens": "0.050" })]);
+    const rows = await db.querySql("SELECT COUNT(*) AS n FROM chunks");
+    expect(rows).toEqual([{ _id: 7, n: 3 }]);
     expect(calls).toHaveLength(1);
     const call = calls[0];
-    expect(call.url).toBe("https://api.example.test/v1/bm25_search/cx");
+    expect(call.url).toBe("https://api.example.test/v1/query_sql/cx");
     expect(call.method).toBe("POST");
     expect(call.headers.authorization).toBe(`Bearer ${KEY}`);
     expect(call.headers.accept).toBe("application/json");
     expect(call.headers["content-type"]).toBe("application/json");
-    expect(bodyJson(call)).toEqual({ table_name: "chunks", field_name: "content", query: "fox", k: 10, mode: "or", projection: ["path", "score"] });
+    expect(bodyJson(call)).toEqual({ query: "SELECT COUNT(*) AS n FROM chunks" });
     // The _id arrives as a JSON integer and stays a number.
     expect(typeof rows[0]._id).toBe("number");
-  });
-
-  it("bm25_search omits projection when none is given and honours mode", async () => {
-    const { db, calls } = client([json([])]);
-    await db.bm25Search("chunks", "content", "fox bar", 5, { mode: "and" });
-    expect(bodyJson(calls[0])).toEqual({ table_name: "chunks", field_name: "content", query: "fox bar", k: 5, mode: "and" });
-  });
-
-  it("find posts the literal with its options to /v1/find and returns the body as it came", async () => {
-    const found = { total: 1, truncated: false, lines: [{ columns: { path: "a.rs", start_line: 3 }, line_index: 0, line: "x" }], groups_total: 1, groups: [{ value: "a.rs", lines: 1 }] };
-    const { db, calls } = client([json(found), json(found)]);
-    expect(
-      await db.find("chunks", "content", "std::env::var", { ignoreCase: false, projection: ["path", "start_line"], groupBy: "path", lineBase: "start_line", limit: 500 }),
-    ).toEqual(found);
-    expect(calls[0].url).toBe("https://api.example.test/v1/find/cx");
-    expect(bodyJson(calls[0])).toEqual({
-      table_name: "chunks",
-      field_name: "content",
-      literal: "std::env::var",
-      ignore_case: false,
-      projection: ["path", "start_line"],
-      group_by: "path",
-      line_base: "start_line",
-      limit: 500,
-    });
-    await db.find("chunks", "content", "x");
-    expect(bodyJson(calls[1])).toEqual({ table_name: "chunks", field_name: "content", literal: "x" });
-  });
-
-  it("token_match posts {table_name, field_name, query, mode, projection} to /v1/token_match", async () => {
-    const { db, calls } = client([json([{ _id: 1, path: "a.ts" }])]);
-    const rows = await db.tokenMatch("chunks", "content", "parse config", { mode: "and", projection: ["path"] });
-    expect(rows).toEqual([{ _id: 1, path: "a.ts" }]);
-    expect(calls[0].url).toBe("https://api.example.test/v1/token_match/cx");
-    expect(bodyJson(calls[0])).toEqual({ table_name: "chunks", field_name: "content", query: "parse config", mode: "and", projection: ["path"] });
-  });
-
-  it("hybrid_search sends a client vector as vector_query", async () => {
-    const { db, calls } = client([json([])]);
-    await db.hybridSearch("chunks", "content", "fox", "embedding", [0.1, 0.2], 8, { projection: ["path"] });
-    expect(calls[0].url).toBe("https://api.example.test/v1/hybrid_search/cx");
-    expect(bodyJson(calls[0])).toEqual({
-      table_name: "chunks",
-      text_field: "content",
-      text_query: "fox",
-      mode: "or",
-      vector_field: "embedding",
-      vector_query: [0.1, 0.2],
-      k: 8,
-      projection: ["path"],
-    });
-  });
-
-  it("hybrid_search sends text for an embedding column as vector_text, never both", async () => {
-    const { db, calls } = client([json([])]);
-    await db.hybridSearch("chunks", "content", "fox", "embedding", { text: "fox" }, 8);
-    const body = bodyJson(calls[0]);
-    expect(body.vector_text).toBe("fox");
-    expect(body).not.toHaveProperty("vector_query");
-    expect(body).not.toHaveProperty("projection");
-  });
-
-  it("query_sql posts {query} to /v1/query_sql and decodes the row array", async () => {
-    const { db, calls } = client([json([{ n: 3 }])]);
-    expect(await db.querySql("SELECT COUNT(*) AS n FROM chunks")).toEqual([{ n: 3 }]);
-    expect(calls[0].url).toBe("https://api.example.test/v1/query_sql/cx");
-    expect(bodyJson(calls[0])).toEqual({ query: "SELECT COUNT(*) AS n FROM chunks" });
   });
 
   it("a read with an empty body is an empty result", async () => {

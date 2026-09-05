@@ -18,10 +18,9 @@
 //                             ever embedded and never shrink, so bulk work
 //                             runs where exit() can give the memory back.
 //
-// With --embed-provider platform there is no embedder on this machine at
-// all: the hosted table's embedding column is filled and queried server-side,
-// so both constructors return null and every caller that gets null must not
-// embed (search stays keyword-ranked, a build skips its vector stage).
+// Both constructors embed the LOCAL index. Who fills the platform table's
+// vectors (--embed-provider: the platform's own model by default, or these
+// vectors shipped) is the indexer's business; nothing here changes with it.
 //
 // CX_EMBED_MODEL / CX_EMBED_DTYPE exist for development and evaluation (see
 // docs/embedder-eval.md) and are deliberately undocumented product surface.
@@ -92,10 +91,12 @@ function getPipe() {
   return pipe;
 }
 
-/** The in-process embedder, or null when the platform embeds server-side
- * (--embed-provider platform) - there is nothing to run here then. */
+/** The in-process embedder. The local index is always embedded here; who
+ * fills the platform table's vectors (--embed-provider) is the indexer's
+ * business, not this one's. Nullable in the signature for callers that run
+ * without vectors (CX_NO_EMBED, --no-embed). */
 export function createEmbedder(): Embedder | null {
-  return embedProvider() === "platform" ? null : createLocalEmbedder();
+  return createLocalEmbedder();
 }
 
 /** The in-process pipeline, unconditionally. The child-process embedder falls
@@ -158,10 +159,8 @@ interface WorkerOk {
 /** A build-scoped embedder that runs the model in a child process and gives
  * the memory back on dispose(). Falls back to the in-process embedder if the
  * child can't start (missing dist worker when running from source, exotic
- * node setups) - indexing never fails over process plumbing. Null when the
- * platform embeds server-side (--embed-provider platform). */
+ * node setups) - indexing never fails over process plumbing. */
 export function createIndexingEmbedder(): Embedder | null {
-  if (embedProvider() === "platform") return null;
   let child: ChildProcess | null = null;
   let lines: Interface | null = null;
   let pending: Array<{ resolve: (line: string) => void; reject: (err: Error) => void }> = [];
@@ -296,7 +295,12 @@ export function createIndexingEmbedder(): Embedder | null {
   };
 }
 
-/** Human-readable description of the embedder, for status output. */
+/** Human-readable description of the local embedder, for status output. */
 export function embedderInfo(): string {
-  return embedProvider() === "platform" ? "platform (server-side)" : `local ${MODEL} (no key, no network)`;
+  return `local ${MODEL} (no key, no network)`;
+}
+
+/** Human-readable description of who fills the platform table's vectors. */
+export function platformEmbedderInfo(): string {
+  return embedProvider() === "platform" ? "platform (server-side)" : `local ${MODEL}, vectors shipped`;
 }

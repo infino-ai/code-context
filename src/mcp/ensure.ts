@@ -19,8 +19,7 @@ import type { IndexStats } from "../core/indexer.js";
 export interface EnsureDeps {
   /** Whether a missing index should be built on demand (CX_AUTO_INDEX). */
   autoIndexEnabled: boolean;
-  /** Open the current index for a repo, or null when there isn't one. May be
-   * async: a hosted repo's readiness is a server round trip. */
+  /** Open the current index for a repo, or null when there isn't one. */
   getHandle(ctx: RepoCtx): IndexHandle | null | Promise<IndexHandle | null>;
   /** Acquire the repo's mutation lock and run a staged build, resolving at
    * keyword-live with the stage-1 stats; null if a build/sync is already in
@@ -42,12 +41,7 @@ export type EnsureResult =
 export async function ensureIndexed(ctx: RepoCtx, deps: EnsureDeps): Promise<EnsureResult> {
   const existing = await deps.getHandle(ctx);
   if (existing) return { handle: existing };
-  // A hosted repo's table is shared by everyone the database serves and is
-  // loaded only by an explicit `cx index --db`; a query never builds it. The
-  // environment forces auto-index off for a hosted target, and the guard is
-  // repeated here, on the path that would run the build, so the invariant
-  // does not rest on the two settings being read from the same variable.
-  if (!deps.autoIndexEnabled || ctx.hosted) return { needsIndex: true };
+  if (!deps.autoIndexEnabled) return { needsIndex: true };
 
   const build = deps.build(ctx);
   let stats: IndexStats | undefined;

@@ -98,13 +98,14 @@ describe("indexing", () => {
     expect(final.vectors).toBe("ready");
   });
 
-  it("sync asks for a rebuild when the requested analyzer differs from the recorded one", async () => {
-    // The analyzer is fixed at table creation; a sync cannot change it.
+  it("sync leaves the local index on the engine's analyzer whatever --analyzer says (that names the platform table's)", async () => {
+    // The local table is built through the binding's bare IndexSpec.fts and
+    // takes the engine default; the analyzer option describes the platform
+    // table, which this index has none of, so a sync is unaffected by it.
     const out = await syncRepo({ root, db: handle.db, indexDirPath: dir, embedder: fakeEmbedder, analyzer: "standard" });
-    expect(out.action).toBe("rebuild-required");
-    expect((out as { reason: string }).reason).toMatch(/analyzer changed \(index: ascii_lower, current: standard\)/);
-    // The recorded analyzer, or none named, is fine.
-    const same = await syncRepo({ root, db: handle.db, indexDirPath: dir, embedder: fakeEmbedder, analyzer: "ascii_lower" });
+    expect(out.action).toBe("noop");
+    expect(readManifest(dir)!.analyzer).toBe("ascii_lower");
+    const same = await syncRepo({ root, db: handle.db, indexDirPath: dir, embedder: fakeEmbedder });
     expect(same.action).toBe("noop");
   });
 });

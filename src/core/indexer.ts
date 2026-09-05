@@ -23,17 +23,18 @@
 //     before any drop; embed errors surface before pass B's drop; sync embeds
 //     before it deletes a single row.
 //
-// HOSTED mode (`cx index --db <url>`) keeps the sidecar exactly as above -
-// spills, file state and manifest are local files - but the chunks table
-// lives on a platform database reached through HostedDb. A hosted load is a
-// single pass, not staged: the text is embedded first (a model failure then
-// costs nothing, the previous table still serves), and only then is the table
-// dropped, created with both indexes and filled in APPEND_BATCH waves. Two
-// drop → create → append round trips over the network would double the cost
-// of every load for a keyword-live window nobody is waiting on - the loader
-// is a person at a terminal, not a query. Same-process atomicity does not
-// apply: other processes read the shared table, and the platform makes each
-// append one commit.
+// THE PLATFORM TABLE. When a platform database is configured (--db <url>) the
+// same repository's chunks table also lives there, reached through HostedDb,
+// and every build and sync writes both: the two are one index in two places.
+// A build loads the platform table after the local stages, in one pass -
+// drop, create with both indexes, append in APPEND_BATCH waves - from the same
+// spill the local build replayed, so the two tables hold the same rows. A sync
+// applies the same diff to both, the platform's deletes and appends started
+// first and the local ones run while they are in flight; the file state that
+// says "this diff is applied" is written only when both sides have it, so a
+// failure on either side is re-applied next time (a sync is idempotent).
+// Same-process atomicity does not apply to the platform table: other
+// processes read it, and the platform makes each append one commit.
 
 import {
   appendFileSync,
@@ -58,10 +59,18 @@ import { createInterface } from "node:readline";
 import { join, relative, sep } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { IndexSpec, type Connection, type OptimizeOptions, type RowRecord } from "@infino-ai/infino";
-import { APPEND_BATCH, EMBED_BATCH, TABLE, DEFAULT_CAPS, type IndexCaps, type EmbedProvider } from "./config.js";
+import { APPEND_BATCH, EMBED_BATCH, TABLE, DEFAULT_CAPS, DEFAULT_HOSTED_EMBED_PROVIDER, type IndexCaps, type EmbedProvider } from "./config.js";
 import { walkRepo } from "./walker.js";
 import { shouldIndexFile, chunkFile, looksBinary, embedText, type Chunk } from "./chunker.js";
-import { readManifest, writeManifest, INDEX_FORMAT_VERSION, type Manifest, type VectorState } from "./manifest.js";
+import {
+  readManifest,
+  writeManifest,
+  readPlatformManifest,
+  writePlatformManifest,
+  INDEX_FORMAT_VERSION,
+  type Manifest,
+  type VectorState,
+} from "./manifest.js";
 import {
   analyzerOf,
   ENGINE_DEFAULT_ANALYZER,
@@ -118,45 +127,41 @@ const VECTOR_METRIC = "cosine";
 
 export interface IndexOptions {
   root: string;
-  /** The in-process engine connection (local mode). Exactly one of `db` /
-   * `hosted` is set - what openForIndexingAsync yields. */
-  db?: Connection;
-  /** The platform client (hosted mode): the chunks table lives on the
-   * database it addresses, and the index directory is only the sidecar. */
+  /** The in-process engine connection: the local index every build and sync
+   * writes. */
+  db: Connection;
+  /** The platform client, when a database is configured: its chunks table is
+   * written beside the local index by the same build or sync. */
   hosted?: HostedDb;
-  /** Where the manifest is written (the index directory). */
+  /** Where the manifests and the file state are written (the index directory). */
   indexDirPath: string;
-  /** Omit (or pass null - what createEmbedder() returns when the platform
-   * embeds server-side) for a keyword-only index; vectors can be added by
-   * re-indexing. The caller owns the embedder's lifecycle (dispose, when it
-   * has one). */
+  /** The local model that embeds the local index (and, under
+   * `embedProvider: "local"`, the platform table). Omit or pass null for a
+   * keyword-only index; vectors can be added by re-indexing. The caller owns
+   * the embedder's lifecycle (dispose, when it has one). */
   embedder?: Embedder | null;
-  /** Hosted only: who fills the `embedding` column. `platform` declares an
-   * embedding column the platform fills from `content` with its own model (no
-   * embedder runs here, and the rows are appended without the column);
-   * `local`, the default, sends the vectors `embedder` produces. With `local`
-   * and no embedder the table is keyword-only. A local build ignores this:
-   * the in-process engine has no server-side model. */
+  /** Platform table only: who fills its `embedding` column. `platform`, the
+   * default, declares an embedding column the platform fills from `content`
+   * with its own model (the rows are appended without the column); `local`
+   * sends the vectors `embedder` produces. With `local` and no embedder the
+   * platform table is keyword-only. The local index always embeds locally. */
   embedProvider?: EmbedProvider;
   caps?: IndexCaps;
-  /** The FTS analyzer the `content` index is built with, recorded in the
-   * manifest so queries mirror the right one. Omit for a local build - the
-   * binding's bare `IndexSpec.fts(column)` takes the engine default
-   * (ENGINE_DEFAULT_ANALYZER), and this code does not ask for any other, so a
-   * local caller must not pass a different value. A hosted build sends the
-   * value to the platform explicitly (HOSTED_DEFAULT_ANALYZER when none is
-   * given - see hostedAnalyzer) and records what it sent. A sync whose value
-   * differs from the recorded one reports rebuild-required: the table's
-   * analyzer is fixed at create time. */
+  /** Platform table only: the FTS analyzer its `content` index is created
+   * with (HOSTED_DEFAULT_ANALYZER when none is given - see hostedAnalyzer),
+   * sent to the platform explicitly and recorded in the platform manifest. The
+   * local index is built with the engine default through the binding's bare
+   * `IndexSpec.fts(column)`. A sync whose value differs from the recorded one
+   * reports rebuild-required: a table's analyzer is fixed at create time. */
   analyzer?: Analyzer;
-  /** `load` is the hosted single pass (drop, create, append waves); the other
-   * phases are shared by both modes. */
+  /** `load` is the platform pass (drop, create, append waves) after the local
+   * stages; the other phases are the local build's. */
   onPhase?: (phase: "scan" | "chunk" | "commit-text" | "embed" | "commit-vectors" | "load") => void;
   /** Progress within the current phase. */
   onProgress?: (done: number, total: number) => void;
 }
 
-/** What a hosted load or sync cost on the platform side, summed from the
+/** What a platform load or sync cost on the platform side, summed from the
  * client's per-call telemetry. Lives in the stats (and so in `cx index --json`
  * and the ledger), never in a tool result. */
 export interface HostedLoadStats {
@@ -180,13 +185,17 @@ export interface IndexStats {
   maxFiles: number;
   languages: Record<string, number>;
   vectors: VectorState;
-  /** Local: wall clock to keyword-live (stage 1). Hosted: the whole load. */
+  /** Wall clock to keyword-live (stage 1). */
   indexMs: number;
   embedMs?: number;
   /** Present when the vector stage failed; the keyword index is still live. */
   embedError?: string;
-  /** Hosted mode only: the platform-side cost of the load. */
+  /** Present when a platform database is configured: the platform-side cost
+   * of loading its table. */
   hosted?: HostedLoadStats;
+  /** Present when the platform load failed; the local index is complete and
+   * the platform table is whatever it was. */
+  hostedError?: string;
 }
 
 const TEXT_SCHEMA = {
@@ -199,11 +208,11 @@ const TEXT_SCHEMA = {
 } as const;
 
 /** A staged run: `text` resolves when keyword search is live; `completion`
- * resolves when the vector stage lands (== `text` when there is no embedder).
- * `completion` never rejects - a vector-stage failure is recorded in the
- * stats (embedError) and the manifest, with the keyword index still live.
- * A hosted load is one pass, so `text` and `completion` carry the same,
- * final stats. */
+ * resolves when the vector stage and, when a platform database is configured,
+ * the platform load have landed (== `text` when there is neither). `completion`
+ * never rejects - a vector-stage failure is recorded in the stats
+ * (embedError) and the manifest with the keyword index still live, and a
+ * platform-load failure in `hostedError` with the local index complete. */
 export interface StagedIndexRun {
   text: IndexStats;
   completion: Promise<IndexStats>;
@@ -216,26 +225,17 @@ export async function indexRepo(opts: IndexOptions): Promise<IndexStats> {
 }
 
 /** Index in stages (MCP flow: reply once keyword search is live, let vectors
- * backfill in-process). Hosted: one pass, see loadHosted. */
+ * backfill in-process), then load the platform table when one is configured. */
 export async function indexRepoStaged(opts: IndexOptions): Promise<StagedIndexRun> {
   const { root, indexDirPath, embedder, onPhase, onProgress } = opts;
   const caps = opts.caps ?? DEFAULT_CAPS;
   const t0 = performance.now();
-  // A contradictory hosted request is refused before any work: the platform
-  // fills an embedding column itself, so a local embedder has nothing to add
-  // and a caller passing both has misread one of the two switches.
-  if (opts.hosted && opts.embedProvider === "platform" && embedder) {
-    throw new Error("embedProvider is \"platform\" (the table's embedding column is filled server-side) but a local embedder was given - pass neither, or drop one");
-  }
 
   // Keep the index out of the user's commits before we write a byte of it.
   ensureIndexIgnored(root, indexDirPath);
 
   const scanned = await scanToSpill(opts, caps);
-  if (opts.hosted) return loadHosted(opts, opts.hosted, scanned, caps, t0);
-
-  const db = localConnection(opts);
-  const analyzer = opts.analyzer ?? ENGINE_DEFAULT_ANALYZER;
+  const db = opts.db;
   const { spill, files, chunkCount, languages, fileState, truncatedFiles } = scanned;
 
   // --- stage 1: swap in the keyword table -------------------------------------
@@ -261,49 +261,64 @@ export async function indexRepoStaged(opts: IndexOptions): Promise<StagedIndexRu
       vectors: embedder ? "building" : "none",
       indexMs,
     };
-    writeManifest(indexDirPath, toManifest(stats, analyzer));
+    writeManifest(indexDirPath, toManifest(stats, ENGINE_DEFAULT_ANALYZER));
     writeFileState(indexDirPath, fileState);
-    if (!embedder) {
+    if (!embedder && !opts.hosted) {
       spill.release();
       return { text: stats, completion: Promise.resolve(stats) };
     }
 
-    // --- stage 2: embed, then swap in the hybrid table -------------------------
+    // --- stage 2: embed and swap in the hybrid table; then the platform load ---
     // A failure anywhere before the swap (model download, endpoint down, full
     // disk) leaves the stage-1 keyword table live and the manifest honest -
     // search degrades, indexing never fails. The swap itself is again one
-    // synchronous block. `completion` must never reject; its finally owns the
-    // spill from here on.
+    // synchronous block. The platform load comes after, from the same spill
+    // and the same vectors, so the two tables hold the same rows; its failure
+    // is recorded, never thrown. `completion` must never reject; its finally
+    // owns the spill from here on.
     const completion = (async () => {
+      let dim: number | undefined;
       try {
-        onPhase?.("embed");
-        const tEmbed = performance.now();
-        const dim =
-          chunkCount === 0
-            ? await embedder.dim() // no chunks to embed - just size the schema
-            : await embedSpill(spill, embedder, chunkCount, onProgress);
+        if (embedder) {
+          try {
+            onPhase?.("embed");
+            const tEmbed = performance.now();
+            dim =
+              chunkCount === 0
+                ? await embedder.dim() // no chunks to embed - just size the schema
+                : await embedSpill(spill, embedder, chunkCount, onProgress);
 
-        onPhase?.("commit-vectors");
-        db.dropTable(TABLE, true);
-        const hybridTable = db.createTable(
-          TABLE,
-          { ...TEXT_SCHEMA, [EMBEDDING_COLUMN]: { vector: dim } },
-          new IndexSpec().fts(CONTENT_COLUMN).vector(EMBEDDING_COLUMN, dim, VECTOR_METRIC),
-        );
-        // Zero chunks ⇒ no vector spill was ever written; the empty table is
-        // already complete.
-        if (chunkCount > 0) appendSpillSync(hybridTable, spill, chunkCount, dim, onProgress);
-        compact(hybridTable);
-        stats.vectors = "ready";
-        stats.embedMs = Math.round(performance.now() - tEmbed);
-        writeManifest(indexDirPath, toManifest(stats, analyzer, localEmbedderInfo(embedder, dim)));
-      } catch (err) {
-        stats.vectors = "none";
-        stats.embedError = (err as Error).message;
-        try {
-          writeManifest(indexDirPath, toManifest(stats, analyzer));
-        } catch {
-          /* disk gone - nothing left to record on, and completion must not reject */
+            onPhase?.("commit-vectors");
+            db.dropTable(TABLE, true);
+            const hybridTable = db.createTable(
+              TABLE,
+              { ...TEXT_SCHEMA, [EMBEDDING_COLUMN]: { vector: dim } },
+              new IndexSpec().fts(CONTENT_COLUMN).vector(EMBEDDING_COLUMN, dim, VECTOR_METRIC),
+            );
+            // Zero chunks ⇒ no vector spill was ever written; the empty table is
+            // already complete.
+            if (chunkCount > 0) appendSpillSync(hybridTable, spill, chunkCount, dim, onProgress);
+            compact(hybridTable);
+            stats.vectors = "ready";
+            stats.embedMs = Math.round(performance.now() - tEmbed);
+            writeManifest(indexDirPath, toManifest(stats, ENGINE_DEFAULT_ANALYZER, localEmbedderInfo(embedder, dim)));
+          } catch (err) {
+            dim = undefined;
+            stats.vectors = "none";
+            stats.embedError = (err as Error).message;
+            try {
+              writeManifest(indexDirPath, toManifest(stats, ENGINE_DEFAULT_ANALYZER));
+            } catch {
+              /* disk gone - nothing left to record on, and completion must not reject */
+            }
+          }
+        }
+        if (opts.hosted) {
+          try {
+            stats.hosted = await loadPlatform(opts, opts.hosted, scanned, caps, embedder && dim !== undefined ? { embedder, dim } : undefined, stats);
+          } catch (err) {
+            stats.hostedError = (err as Error).message;
+          }
         }
       } finally {
         spill.release();
@@ -315,13 +330,6 @@ export async function indexRepoStaged(opts: IndexOptions): Promise<StagedIndexRu
     spill.release();
     throw err;
   }
-}
-
-/** The engine connection of a local build; a caller that set neither `db`
- * nor `hosted` is named rather than left to a property of undefined. */
-function localConnection(opts: IndexOptions): Connection {
-  if (!opts.db) throw new Error("indexer: neither an engine connection (db) nor a hosted client was given - openForIndexingAsync yields one of the two");
-  return opts.db;
 }
 
 // --- scan + chunk ------------------------------------------------------------------
@@ -398,82 +406,63 @@ async function scanToSpill(opts: IndexOptions, caps: IndexCaps): Promise<Scanned
   return { spill, files, chunkCount, languages, fileState, truncatedFiles };
 }
 
-// --- the hosted load -------------------------------------------------------------------
+// --- the platform load -------------------------------------------------------------------
 
-/** Load the spilled chunks into the platform's chunks table in one pass:
- * embed (local provider), then drop → create → append waves. Embedding runs
- * before the drop so a model failure throws with the previous table intact
- * and nothing spent on the network. The table gets the FTS index with the
- * requested analyzer and, when there are vectors, either a client-vector
- * column of the embedder's width with a cosine index or a platform-filled
- * embedding column (which the platform indexes by itself - a vector entry
- * naming it is a 400). Records a hosted manifest and the file state so a
- * later `cx index --db` can sync incrementally. */
-async function loadHosted(
+/** Load the spilled chunks into the platform's chunks table in one pass after
+ * the local stages: drop → create → append waves, from the spill the local
+ * build replayed, so both tables hold the same rows. The table gets the FTS
+ * index with the requested analyzer and, when there are vectors, either a
+ * client-vector column carrying the local embedder's vectors (`embedProvider:
+ * "local"`, the vector spill already written by the local stage) with a
+ * cosine index, or a platform-filled embedding column (which the platform
+ * indexes by itself - a vector entry naming it is a 400). Records the
+ * platform manifest so a later sync can apply its diff to this table too.
+ * Throws on a platform failure; the caller records it and the local index
+ * stands. */
+async function loadPlatform(
   opts: IndexOptions,
   hosted: HostedDb,
   scanned: Scanned,
   caps: IndexCaps,
-  t0: number,
-): Promise<StagedIndexRun> {
-  const { indexDirPath, embedder, onPhase, onProgress } = opts;
-  const provider: EmbedProvider = opts.embedProvider ?? "local";
+  vectors: { embedder: Embedder; dim: number } | undefined,
+  stats: IndexStats,
+): Promise<HostedLoadStats> {
+  const { indexDirPath, onPhase, onProgress } = opts;
+  const provider: EmbedProvider = opts.embedProvider ?? DEFAULT_HOSTED_EMBED_PROVIDER;
   const analyzer = opts.analyzer ?? HOSTED_DEFAULT_ANALYZER;
-  const { spill, files, chunkCount, languages, fileState, truncatedFiles } = scanned;
-  try {
-    const stats: IndexStats = {
-      files,
-      chunks: chunkCount,
-      ...(truncatedFiles > 0 ? { truncatedFiles } : {}),
-      maxFiles: caps.maxFiles,
-      languages,
-      vectors: "none",
-      indexMs: 0,
-    };
+  const { spill, chunkCount } = scanned;
 
-    let dim: number | undefined;
-    if (provider === "local" && embedder) {
-      onPhase?.("embed");
-      const tEmbed = performance.now();
-      dim = chunkCount === 0 ? await embedder.dim() : await embedSpill(spill, embedder, chunkCount, onProgress);
-      stats.embedMs = Math.round(performance.now() - tEmbed);
-      // Zero chunks ⇒ no vector spill was ever written and nothing is appended.
-      if (chunkCount > 0) verifyVectorSpill(spill, chunkCount, dim);
-    }
-    const platform = provider === "platform";
-    const columns = hostedColumns(platform ? { platform: true } : { dim });
-    const indexes = hostedIndexes(analyzer, dim !== undefined);
+  const platform = provider === "platform";
+  const dim = platform ? undefined : vectors?.dim;
+  // Zero chunks ⇒ no vector spill was ever written and nothing is appended.
+  if (dim !== undefined && chunkCount > 0) verifyVectorSpill(spill, chunkCount, dim);
+  const columns = hostedColumns(platform ? { platform: true } : { dim });
+  const indexes = hostedIndexes(analyzer, dim !== undefined);
 
-    onPhase?.("load");
-    const tLoad = performance.now();
-    const meter = newHostedMeter();
-    // This is the ONLY place a hosted chunks table is ever dropped, and it
-    // runs only because the user typed `cx index --db <url>`: the table is
-    // shared by everyone the database serves, so a query, an auto-index or
-    // an auto-sync never replaces it (those switches are forced off for a
-    // hosted target) - an explicit reload is the one thing that does.
-    if ((await hosted.listTables()).includes(TABLE)) {
-      await hosted.dropTable(TABLE, true);
-      meterHostedCall(meter, hosted);
-    }
-    await hosted.createTable(TABLE, columns, indexes);
+  onPhase?.("load");
+  const tLoad = performance.now();
+  const meter = newHostedMeter();
+  // A build replaces the platform table the way it replaces the local one:
+  // the two are the same index, and a build is a full rebuild of both.
+  if ((await hosted.listTables()).includes(TABLE)) {
+    await hosted.dropTable(TABLE, true);
     meterHostedCall(meter, hosted);
-    if (chunkCount > 0) await appendSpillHosted(hosted, spill, chunkCount, columns, dim, platform, meter, onProgress);
-
-    stats.hosted = { ...meter, loadWallMs: Math.round(performance.now() - tLoad) };
-    stats.vectors = platform || dim !== undefined ? "ready" : "none";
-    stats.indexMs = Math.round(performance.now() - t0);
-    const embedderInfo = platform
-      ? { provider: PLATFORM_EMBEDDER_PROVIDER, model: PLATFORM_EMBEDDER_MODEL }
-      : embedder && dim !== undefined
-        ? localEmbedderInfo(embedder, dim)
-        : undefined;
-    writeManifest(indexDirPath, toManifest(stats, analyzer, embedderInfo, "hosted"));
-    writeFileState(indexDirPath, fileState);
-    return { text: stats, completion: Promise.resolve(stats) };
-  } finally {
-    spill.release();
   }
+  await hosted.createTable(TABLE, columns, indexes);
+  meterHostedCall(meter, hosted);
+  if (chunkCount > 0) await appendSpillHosted(hosted, spill, chunkCount, columns, dim, platform, meter, onProgress);
+
+  const loadStats: HostedLoadStats = { ...meter, loadWallMs: Math.round(performance.now() - tLoad) };
+  const embedderInfo = platform
+    ? { provider: PLATFORM_EMBEDDER_PROVIDER, model: PLATFORM_EMBEDDER_MODEL }
+    : vectors && dim !== undefined
+      ? localEmbedderInfo(vectors.embedder, dim)
+      : undefined;
+  writePlatformManifest(
+    indexDirPath,
+    toManifest({ ...stats, vectors: platform || dim !== undefined ? "ready" : "none", hosted: loadStats }, analyzer, embedderInfo, "hosted"),
+  );
+  return loadStats;
 }
 
 /** Running totals of a hosted load's platform calls; `loadWallMs` is added
@@ -841,7 +830,8 @@ export interface SyncResult {
   truncatedFiles: number;
   vectors: VectorState;
   tookMs: number;
-  /** Hosted mode only: the platform-side cost of the deletes and appends. */
+  /** Present when a platform database is configured: the platform-side cost
+   * of its deletes and appends. */
   hosted?: HostedLoadStats;
 }
 
@@ -857,60 +847,68 @@ const rebuildRequired = (reason: string): SyncOutcome => ({ action: "rebuild-req
  * embedded BEFORE any stale row is deleted, so an embed failure (which throws)
  * leaves the index exactly as it was.
  *
- * Hosted: the same diff against the sidecar's file state, applied to the
- * platform table as delete-by-path-predicate plus append waves. It needs the
- * file state the load from THIS machine wrote; a table loaded elsewhere (the
- * sidecar then holds only a manifest synthesized from the server) has no
- * diff base, and the outcome says so rather than guessing. */
+ * When a platform database is configured the same diff goes to its table too,
+ * as delete-by-path-predicate plus append waves, started before the local
+ * apply so both are in flight together. The platform table needs the record
+ * this machine's build wrote (the platform manifest and the file state); a
+ * table loaded elsewhere has no diff base here, and the outcome says so
+ * rather than guessing. The file state is written only once both sides have
+ * the diff, so a failure on either is re-applied by the next sync. */
 export async function syncRepo(opts: IndexOptions): Promise<SyncOutcome> {
-  const { root, indexDirPath, embedder, onPhase } = opts;
+  const { root, indexDirPath, embedder, onPhase, db } = opts;
   const hosted = opts.hosted;
-  const provider: EmbedProvider = opts.embedProvider ?? "local";
+  const provider: EmbedProvider = opts.embedProvider ?? DEFAULT_HOSTED_EMBED_PROVIDER;
   const caps = opts.caps ?? DEFAULT_CAPS;
   const t0 = performance.now();
 
   const manifest = readManifest(indexDirPath);
   const prev = readFileState(indexDirPath);
-  if (!manifest) return rebuildRequired("no prior index state");
-  if (hosted) {
-    if (manifest.origin !== "hosted") {
-      return rebuildRequired(`the sidecar in ${indexDirPath} describes a local index, not the hosted table`);
-    }
-    if (!prev) {
-      return rebuildRequired(
-        `no file state for the hosted table in ${indexDirPath} (it was loaded from another machine, or the sidecar was removed) - only a full reload can bring it up to date`,
-      );
-    }
-    if (!(await hosted.listTables()).includes(TABLE)) return rebuildRequired(`no ${TABLE} table on the hosted target`);
-  } else {
-    if (manifest.origin === "hosted") return rebuildRequired(`the sidecar in ${indexDirPath} describes a hosted table, not a local index`);
-    if (!prev || !localConnection(opts).listTables().includes(TABLE)) return rebuildRequired("no prior index state");
-  }
+  if (!manifest || !prev || !db.listTables().includes(TABLE)) return rebuildRequired("no prior index state");
   if (manifest.vectors === "building") return rebuildRequired("vector backfill in progress");
 
-  // Who fills the vectors is fixed by the table: a platform-embedded column
-  // takes no client vectors and a client-vector column takes no platform
-  // text, so a provider switch is a rebuild, as is a model switch.
+  // The local index's vectors: a model switch is a rebuild.
   const hasVectors = manifest.vectors === "ready";
-  const indexedPlatform = manifest.embedder?.provider === PLATFORM_EMBEDDER_PROVIDER;
   if (hasVectors) {
-    if (indexedPlatform && provider !== "platform") {
-      return rebuildRequired(`embedder changed (index: ${PLATFORM_EMBEDDER_PROVIDER}, current: ${embedder?.model ?? "none"})`);
-    }
-    if (!indexedPlatform && provider === "platform") {
-      return rebuildRequired(`embedder changed (index: ${manifest.embedder?.model ?? "client vectors"}, current: ${PLATFORM_EMBEDDER_PROVIDER})`);
-    }
-    if (!indexedPlatform && !embedder) return rebuildRequired("index has vectors but no embedder is configured");
-    if (!indexedPlatform && embedder && manifest.embedder && manifest.embedder.model !== embedder.model) {
+    if (!embedder) return rebuildRequired("index has vectors but no embedder is configured");
+    if (manifest.embedder && manifest.embedder.model !== embedder.model) {
       return rebuildRequired(`embedder changed (index: ${manifest.embedder.model}, current: ${embedder.model})`);
     }
   }
-  // The analyzer is fixed when the table is created; rows appended by a sync
-  // are tokenized with the table's, whatever the caller now wants. An absent
-  // recorded value falls back by where the table lives (see analyzerOf).
-  const recordedAnalyzer = analyzerOf(manifest);
-  if (opts.analyzer !== undefined && opts.analyzer !== recordedAnalyzer) {
-    return rebuildRequired(`analyzer changed (index: ${recordedAnalyzer}, current: ${opts.analyzer})`);
+
+  // The platform table: it must be one this machine loaded, still exist, and
+  // take the vectors the current settings produce. Who fills its vectors is
+  // fixed by the table - a platform-embedded column takes no client vectors
+  // and a client-vector column takes no platform text - so a provider switch
+  // is a rebuild, and so is its analyzer: rows appended by a sync are
+  // tokenized with the table's, whatever the caller now wants.
+  let platformManifest: Manifest | undefined;
+  let platformClientVectors = false;
+  if (hosted) {
+    platformManifest = readPlatformManifest(indexDirPath);
+    if (!platformManifest) {
+      return rebuildRequired(
+        `no record of the platform table in ${indexDirPath} (it was loaded from another machine, or never loaded) - a build loads it`,
+      );
+    }
+    if (!(await hosted.listTables()).includes(TABLE)) return rebuildRequired(`no ${TABLE} table on the platform database`);
+    const indexedPlatform = platformManifest.embedder?.provider === PLATFORM_EMBEDDER_PROVIDER;
+    if (platformManifest.vectors === "ready") {
+      if (indexedPlatform && provider !== "platform") {
+        return rebuildRequired(`embedder changed (platform table: ${PLATFORM_EMBEDDER_PROVIDER}, current: ${embedder?.model ?? "none"})`);
+      }
+      if (!indexedPlatform && provider === "platform") {
+        return rebuildRequired(`embedder changed (platform table: ${platformManifest.embedder?.model ?? "client vectors"}, current: ${PLATFORM_EMBEDDER_PROVIDER})`);
+      }
+      if (!indexedPlatform && !embedder) return rebuildRequired("platform table has client vectors but no embedder is configured");
+      if (!indexedPlatform && embedder && platformManifest.embedder && platformManifest.embedder.model !== embedder.model) {
+        return rebuildRequired(`embedder changed (platform table: ${platformManifest.embedder.model}, current: ${embedder.model})`);
+      }
+      platformClientVectors = !indexedPlatform;
+    }
+    const recordedAnalyzer = analyzerOf(platformManifest);
+    if (opts.analyzer !== undefined && opts.analyzer !== recordedAnalyzer) {
+      return rebuildRequired(`analyzer changed (platform table: ${recordedAnalyzer}, current: ${opts.analyzer})`);
+    }
   }
 
   // Sweep crash leftovers on every sync, INCLUDING ones about to no-op: on an
@@ -939,18 +937,13 @@ export async function syncRepo(opts: IndexOptions): Promise<SyncOutcome> {
     writeFileState(indexDirPath, diff.next); // refresh stat fingerprints
     // Files added or removed *beyond* the cap never show up in the diff (the
     // candidate list is already capped), so the truncation count can change
-    // while the indexed content doesn't. Reconcile the manifest when it drifts,
-    // otherwise the "index is partial" marker goes stale.
+    // while the indexed content doesn't. Reconcile the manifests when it
+    // drifts, otherwise the "index is partial" marker goes stale.
     if (truncatedFiles !== (manifest.truncatedFiles ?? 0)) {
-      const reconciled: Manifest = { ...manifest };
-      if (truncatedFiles > 0) {
-        reconciled.truncatedFiles = truncatedFiles;
-        reconciled.maxFiles = caps.maxFiles;
-      } else {
-        delete reconciled.truncatedFiles;
-        delete reconciled.maxFiles;
-      }
-      writeManifest(indexDirPath, reconciled);
+      writeManifest(indexDirPath, withTruncation(manifest, truncatedFiles, caps));
+    }
+    if (platformManifest && truncatedFiles !== (platformManifest.truncatedFiles ?? 0)) {
+      writePlatformManifest(indexDirPath, withTruncation(platformManifest, truncatedFiles, caps));
     }
     return {
       action: "noop",
@@ -998,73 +991,65 @@ export async function syncRepo(opts: IndexOptions): Promise<SyncOutcome> {
     }
 
     // --- embed them (before ANY delete - a throw here must cost nothing) --------
-    // A platform-embedded table needs no vectors from here: the platform fills
-    // its column as the rows land.
+    // One pass serves both tables. A platform-embedded column needs no vectors
+    // from here: the platform fills it as the rows land.
     let dim: number | undefined;
-    if (hasVectors && !indexedPlatform && embedder && chunksAdded > 0) {
+    if ((hasVectors || platformClientVectors) && embedder && chunksAdded > 0) {
       onPhase?.("embed");
       dim = await embedSpill(spill, embedder, chunksAdded, opts.onProgress);
     }
 
-    // --- apply: deletes + appends -----------------------------------------------------
+    // --- apply: deletes + appends, to both tables at once ----------------------------
     // `added` paths are deleted too: it makes a re-run of an interrupted sync
-    // idempotent instead of duplicating rows.
+    // idempotent instead of duplicating rows. The platform apply is started
+    // first, so its first round trip is on the wire while the local block
+    // runs; the local block is one synchronous stretch, so same-process
+    // readers never see the deletes without the appends.
     onPhase?.("commit-text");
-    const stale = [...diff.added, ...diff.changed, ...diff.deleted];
+    const predicates = stalePredicates([...diff.added, ...diff.changed, ...diff.deleted]);
+    const platformApply = hosted
+      ? applyPlatformDiff(
+          hosted,
+          predicates,
+          spill,
+          chunksAdded,
+          platformManifest?.embedder?.provider === PLATFORM_EMBEDDER_PROVIDER ? { platform: true } : { dim: platformClientVectors ? dim : undefined },
+          opts.onProgress,
+        )
+      : undefined;
     let chunksRemoved = 0;
-    let hostedStats: HostedLoadStats | undefined;
-    if (hosted) {
-      const tLoad = performance.now();
-      const meter = newHostedMeter();
-      for (const predicate of stalePredicates(stale)) {
-        const counts = await hosted.deleteWhere(TABLE, predicate);
-        chunksRemoved += Number(counts.n_tombstoned);
-        meterHostedCall(meter, hosted);
-      }
-      if (chunksAdded > 0) {
-        const columns = hostedColumns(indexedPlatform ? { platform: true } : { dim });
-        await appendSpillHosted(hosted, spill, chunksAdded, columns, dim, indexedPlatform, meter, opts.onProgress);
-      }
-      hostedStats = { ...meter, loadWallMs: Math.round(performance.now() - tLoad) };
-    } else {
-      // One synchronous block, so same-process readers never see the deletes
-      // without the appends.
-      const table = localConnection(opts).openTable(TABLE);
-      for (const predicate of stalePredicates(stale)) chunksRemoved += table.delete(predicate).nTombstoned;
-      if (chunksAdded > 0) appendSpillSync(table, spill, chunksAdded, dim);
-      // Compact after deletes/appends to keep tombstones clean. Hosted
-      // compaction is the platform's job (optimize/gc are refused there).
+    try {
+      const table = db.openTable(TABLE);
+      for (const predicate of predicates) chunksRemoved += table.delete(predicate).nTombstoned;
+      if (chunksAdded > 0) appendSpillSync(table, spill, chunksAdded, hasVectors ? dim : undefined);
+      // Compact after deletes/appends to keep tombstones clean. The platform
+      // table's compaction is the platform's job.
       compact(table);
+    } catch (err) {
+      // The platform apply is in flight; let it settle before the local
+      // failure is reported, so no rejection goes unobserved. The file state
+      // is not written, so the next sync re-applies the diff to both.
+      await platformApply?.catch(() => undefined);
+      throw err;
     }
+    const hostedStats = platformApply ? await platformApply : undefined;
 
     // --- persist state + recount ----------------------------------------------------
+    // Only now is the diff applied everywhere it must be.
     writeFileState(indexDirPath, diff.next);
-    const query = (sql: string): Promise<RowRecord[]> =>
-      hosted ? hosted.querySql(sql) : Promise.resolve(localConnection(opts).querySql(sql));
-    const [{ n: chunkCount, f: fileCount }] = (await query(
-      `SELECT COUNT(*) AS n, COUNT(DISTINCT path) AS f FROM ${TABLE}`,
-    )) as [{ n: unknown; f: unknown }];
-    const langRows = (await query(`SELECT lang, COUNT(*) AS n FROM ${TABLE} GROUP BY lang`)) as Array<{ lang: string; n: unknown }>;
-    const languages: Record<string, number> = {};
-    for (const r of langRows) languages[r.lang || "other"] = Number(r.n);
-    const nextManifest: Manifest = {
-      ...manifest,
-      files: Number(fileCount),
-      chunks: Number(chunkCount),
-      languages,
-      indexedAt: new Date().toISOString(),
-    };
-    // Track truncation as the tree grows or shrinks: set the fields when files
-    // are now over the cap, clear the stale ones (spread from `manifest`) when
-    // the tree has dropped back under it.
-    if (truncatedFiles > 0) {
-      nextManifest.truncatedFiles = truncatedFiles;
-      nextManifest.maxFiles = caps.maxFiles;
-    } else {
-      delete nextManifest.truncatedFiles;
-      delete nextManifest.maxFiles;
-    }
+    const nextManifest = withTruncation(
+      { ...manifest, ...tableCounts(db.querySql(TABLE_COUNTS_SQL), db.querySql(TABLE_LANGUAGES_SQL)), indexedAt: new Date().toISOString() },
+      truncatedFiles,
+      caps,
+    );
     writeManifest(indexDirPath, nextManifest);
+    if (hosted && platformManifest) {
+      const [counts, langs] = await Promise.all([hosted.querySql(TABLE_COUNTS_SQL), hosted.querySql(TABLE_LANGUAGES_SQL)]);
+      writePlatformManifest(
+        indexDirPath,
+        withTruncation({ ...platformManifest, ...tableCounts(counts, langs), indexedAt: nextManifest.indexedAt }, truncatedFiles, caps),
+      );
+    }
 
     return {
       action: "synced",
@@ -1083,6 +1068,59 @@ export async function syncRepo(opts: IndexOptions): Promise<SyncOutcome> {
   } finally {
     spill.release();
   }
+}
+
+/** Apply a sync's diff to the platform table: the stale paths deleted, then
+ * the fresh rows appended in waves. `vectors` says what rides with the rows -
+ * nothing for a platform-embedded column, the local vectors of width `dim`
+ * for a client-vector column, none when the table is keyword-only. */
+async function applyPlatformDiff(
+  hosted: HostedDb,
+  predicates: string[],
+  spill: Spill,
+  chunksAdded: number,
+  vectors: { platform: true } | { dim?: number },
+  onProgress?: (done: number, total: number) => void,
+): Promise<HostedLoadStats> {
+  const tLoad = performance.now();
+  const meter = newHostedMeter();
+  for (const predicate of predicates) {
+    await hosted.deleteWhere(TABLE, predicate);
+    meterHostedCall(meter, hosted);
+  }
+  if (chunksAdded > 0) {
+    const platform = "platform" in vectors;
+    const dim = platform ? undefined : vectors.dim;
+    await appendSpillHosted(hosted, spill, chunksAdded, hostedColumns(vectors), dim, platform, meter, onProgress);
+  }
+  return { ...meter, loadWallMs: Math.round(performance.now() - tLoad) };
+}
+
+/** The recount a sync writes back to a manifest. */
+const TABLE_COUNTS_SQL = `SELECT COUNT(*) AS n, COUNT(DISTINCT path) AS f FROM ${TABLE}`;
+const TABLE_LANGUAGES_SQL = `SELECT lang, COUNT(*) AS n FROM ${TABLE} GROUP BY lang`;
+
+/** The manifest fields a recount refreshes, from the two queries' rows. */
+function tableCounts(counts: RowRecord[], langs: RowRecord[]): Pick<Manifest, "files" | "chunks" | "languages"> {
+  const [{ n: chunkCount, f: fileCount }] = counts as [{ n: unknown; f: unknown }];
+  const languages: Record<string, number> = {};
+  for (const r of langs as Array<{ lang: string; n: unknown }>) languages[r.lang || "other"] = Number(r.n);
+  return { files: Number(fileCount), chunks: Number(chunkCount), languages };
+}
+
+/** `manifest` with its truncation fields tracking the tree as it grows or
+ * shrinks: set when files are now over the cap, cleared when the tree has
+ * dropped back under it. */
+function withTruncation(manifest: Manifest, truncatedFiles: number, caps: IndexCaps): Manifest {
+  const next: Manifest = { ...manifest };
+  if (truncatedFiles > 0) {
+    next.truncatedFiles = truncatedFiles;
+    next.maxFiles = caps.maxFiles;
+  } else {
+    delete next.truncatedFiles;
+    delete next.maxFiles;
+  }
+  return next;
 }
 
 /** `path IN (...)` predicates over the stale paths, DELETE_PATHS_PER_PREDICATE

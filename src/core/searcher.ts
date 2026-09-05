@@ -15,17 +15,17 @@
 //            GROUP BY, with {{name}} placeholders embedded server-side for the
 //            vector functions.
 //
-// Each door runs against a LOCAL index (the in-process engine) or a HOSTED
-// one (the platform client on the handle). The result objects are identical
-// in both modes - the model never learns where the table lives - and what the
-// hosted call cost goes to the usage ledger (hostedTelemetry), not into the
+// Every door runs against the LOCAL index (the in-process engine on the
+// handle). The platform table the `subagent` and `explore` tools read is the
+// same index in another place; these doors never reach for it. What a
+// platform call cost goes to the usage ledger (hostedTelemetry), not into a
 // result.
 
-import { localDb, EMBEDDING_COLUMN, PLATFORM_EMBEDDER_PROVIDER, type IndexHandle } from "./context.js";
+import { localDb, EMBEDDING_COLUMN, type IndexHandle } from "./context.js";
 import { TABLE, DEFAULT_SEARCH_K, DEFAULT_FIND_LIMIT, MAX_FIND_LIMIT } from "./config.js";
 import type { Embedder } from "./embedder.js";
 import type { Manifest } from "./manifest.js";
-import type { HostedDb, RowRecord } from "./hosted.js";
+import type { HostedDb } from "./hosted.js";
 import { analyzerOf, analyzerTokens, hasIndexableToken } from "./analyzer.js";
 
 // The analyzer mirror is re-exported from the door that uses it: `find`
@@ -37,21 +37,13 @@ export { analyzerOf, analyzerTokens };
 /** The FTS-indexed column every door queries. */
 const CONTENT_COLUMN = "content";
 
-/** Whether the table's vector column is one the platform fills and queries
- * with its own model. Such a table takes query TEXT for its vector leg, never
- * a client vector, whatever embedder this process has configured. */
-export function platformEmbedded(manifest: Manifest): boolean {
-  return manifest.embedder?.provider === PLATFORM_EMBEDDER_PROVIDER;
-}
-
 /** Refuse to embed a query with a model other than the one the index was
  * built with: a same-dimension swap would return silently wrong vector
  * results. Shared by every path that embeds a query (search, sql). Nothing to
- * check for a platform-embedded table (its model is the platform's) or when
- * the index recorded no model. */
+ * check when the index recorded no model. */
 function checkQueryEmbedder(manifest: Manifest, embedder: Embedder): void {
   const indexed = manifest.embedder;
-  if (platformEmbedded(manifest) || !indexed || indexed.model === embedder.model) return;
+  if (!indexed || indexed.model === embedder.model) return;
   throw new Error(
     `query embedder (${embedder.model}) does not match the index embedder (${indexed.model}) - ` +
       `set CX_EMBED_MODEL=${indexed.model} or re-run \`cx index\``,
@@ -91,11 +83,12 @@ export function jsonify(value: unknown, pretty = false): string {
   );
 }
 
-/** The ledger's record of what the hosted call behind a query cost: the round
- * trip of the answering request and the tokens the platform metered. Read
- * right after the query, while the client's last call is that query's.
- * Undefined for a local handle, so callers spread it into the usage entry
- * unconditionally. Ledger-only: the tool result stays the same in both modes. */
+/** The ledger's record of what the platform call behind a `subagent` or
+ * `explore` result cost: the round trip of the answering request and the
+ * tokens the platform metered. Read right after the call, while the client's
+ * last call is that one. Undefined when there is no platform client, so
+ * callers spread it into the usage entry unconditionally. Ledger-only: never
+ * part of a tool result. */
 export function hostedTelemetry(handle: { hosted?: HostedDb }): { rttMs: number; readTokens?: number; writeTokens?: number } | undefined {
   const info = handle.hosted?.lastCall();
   if (!info) return undefined;
@@ -137,16 +130,12 @@ export interface SearchResult {
 
 const PROJECTION = ["path", "start_line", "end_line", "lang", "symbol", "content", "score"];
 
-/** The vector leg of a search, or null for a keyword-only pass: the query
- * text itself for a platform-embedded table (the platform embeds it with the
- * column's model), the locally embedded vector when an embedder is at hand,
- * and nothing when there is no client-side embedder (--embed-provider
- * platform against a client-vector table) - no vector to fuse means the
- * search stays keyword-ranked. */
-async function vectorLeg(manifest: Manifest, embedder: Embedder | null, query: string): Promise<number[] | { text: string } | null> {
-  if (manifest.vectors !== "ready") return null;
-  if (platformEmbedded(manifest)) return { text: query };
-  if (!embedder) return null;
+/** The vector leg of a search, or null for a keyword-only pass: the locally
+ * embedded query when the index has vectors and an embedder is at hand;
+ * nothing otherwise (no vector to fuse means the search stays
+ * keyword-ranked). */
+async function vectorLeg(manifest: Manifest, embedder: Embedder | null, query: string): Promise<number[] | null> {
+  if (manifest.vectors !== "ready" || !embedder) return null;
   checkQueryEmbedder(manifest, embedder);
   const [vector] = await embedder.embed([query]);
   return vector;
@@ -160,23 +149,10 @@ export async function search(
 ): Promise<SearchResult> {
   const leg = await vectorLeg(handle.manifest, embedder, query);
   const ranking: "hybrid" | "keyword" = leg ? "hybrid" : "keyword";
-  let rows: Array<Record<string, unknown>>;
-  if (handle.hosted) {
-    rows = leg
-      ? await handle.hosted.hybridSearch(TABLE, CONTENT_COLUMN, query, EMBEDDING_COLUMN, leg, k, { projection: PROJECTION })
-      : await handle.hosted.bm25Search(TABLE, CONTENT_COLUMN, query, k, { projection: PROJECTION });
-  } else {
-    const table = localDb(handle).openTable(TABLE);
-    if (leg && !Array.isArray(leg)) {
-      // A local engine has no server-side model; only the platform can embed
-      // query text. A local manifest never records the platform provider, so
-      // this names a mixed-up sidecar rather than a reachable state.
-      throw new Error(`${handle.target} is a local index but its manifest records a platform-embedded table - re-run \`cx index\``);
-    }
-    rows = leg
-      ? table.hybridSearch(CONTENT_COLUMN, query, EMBEDDING_COLUMN, leg, k, { projection: PROJECTION })
-      : table.bm25Search(CONTENT_COLUMN, query, k, { projection: PROJECTION });
-  }
+  const table = localDb(handle).openTable(TABLE);
+  const rows: Array<Record<string, unknown>> = leg
+    ? table.hybridSearch(CONTENT_COLUMN, query, EMBEDDING_COLUMN, leg, k, { projection: PROJECTION })
+    : table.bm25Search(CONTENT_COLUMN, query, k, { projection: PROJECTION });
   return {
     query,
     ranking,
@@ -216,10 +192,8 @@ export async function search(
 // The query goes to the engine as text, not pre-tokenized: the engine
 // tokenizes it with the index's own analyzer, so the candidate set is exact
 // for whichever analyzer the table has (a client mirror of the Unicode
-// `standard` rules could drift, e.g. on CJK segmentation). The same text goes
-// to a hosted table - the platform runs the same engine and tokenizes the
-// query with the table's index. What the client does strip is the engine's
-// *query grammar* - see plainTerms below.
+// `standard` rules could drift, e.g. on CJK segmentation). What the client
+// does strip is the engine's *query grammar* - see plainTerms below.
 
 export interface FindMatch {
   path: string;
@@ -271,23 +245,9 @@ const FIND_LINE_CAP = 240;
  * the excerpt shows what leads into the match rather than starting on it. */
 const FIND_EXCERPT_LEAD = 60;
 
-/** Columns a local find reads from its candidate chunks: no `end_line` (each
- * match cites its own line) and no `score` (there is none - matches are
- * unranked). */
+/** Columns a find reads from its candidate chunks: no `end_line` (each match
+ * cites its own line) and no `score` (there is none - matches are unranked). */
 const FIND_PROJECTION = ["path", "start_line", "symbol", "content"];
-
-/** Columns a hosted find asks the platform to return beside each line: the
- * ones that place it. The line itself comes back as the excerpt; `content`
- * is never shipped. */
-const HOSTED_FIND_PROJECTION = ["path", "start_line", "symbol"];
-
-/** The column a hosted find's per-group counts are grouped by: lines per file. */
-const HOSTED_FIND_GROUP_BY = "path";
-
-/** The column holding each chunk's first line, named so the platform counts a
- * line held by two overlapping fixed-window chunks once (the local path
- * dedupes by path and repo line for the same reason). */
-const HOSTED_FIND_LINE_BASE = "start_line";
 
 /** The characters the engine's FTS query parser reads as grammar rather than
  * text: a `+` or `-` leading a whitespace-delimited run marks a must / must-not
@@ -338,9 +298,8 @@ export function excerpt(text: string, at: number, needleLength: number): string 
   return `${start > 0 ? "..." : ""}${text.slice(start, end)}${end < text.length ? "..." : ""}`;
 }
 
-/** Async because a hosted candidate lookup is a network round trip; the
- * local engine call is synchronous underneath and a rejected validation
- * surfaces as a rejection either way. */
+/** Async so a rejected validation surfaces as a rejection like every other
+ * door's; the engine call underneath is synchronous. */
 export async function find(handle: IndexHandle, query: string, opts: FindOptions = {}): Promise<FindResult> {
   if (query.length === 0) throw new Error("find needs a non-empty string to look for");
   if (/[\r\n]/.test(query)) {
@@ -362,21 +321,6 @@ export async function find(handle: IndexHandle, query: string, opts: FindOptions
   const ignoreCase = opts.ignoreCase ?? false;
   const limit = Math.min(opts.limit ?? DEFAULT_FIND_LIMIT, MAX_FIND_LIMIT);
   const partial = partialIndex(handle.manifest);
-
-  // Hosted: the platform's find does the whole job in the worker - the
-  // candidate token match, the per-line literal check, the excerpts, the cap
-  // and the per-file counts - so nothing but the matching lines crosses the
-  // wire. Local: the same steps, here, over the candidate chunks.
-  if (handle.hosted) {
-    const found = await handle.hosted.find(TABLE, CONTENT_COLUMN, query, {
-      ignoreCase,
-      projection: HOSTED_FIND_PROJECTION,
-      groupBy: HOSTED_FIND_GROUP_BY,
-      lineBase: HOSTED_FIND_LINE_BASE,
-      limit,
-    });
-    return { query, ignoreCase, ...hostedFindResult(found), ...(partial ? { partial } : {}) };
-  }
 
   const terms = plainTerms(query);
   const candidates = localDb(handle).openTable(TABLE).tokenMatch(CONTENT_COLUMN, terms, { mode: "and", projection: FIND_PROJECTION });
@@ -420,52 +364,9 @@ export async function find(handle: IndexHandle, query: string, opts: FindOptions
   };
 }
 
-/** The platform's find response in the local result's shape. A line arrives
- * with its projected columns and its index within the chunk's text, so its
- * repo line is `start_line + line_index`; the per-group counts are complete
- * (counted before the limit) and already ordered most lines first, and
- * `groups_total` is the number of files whether or not the groups list was
- * cut. A line whose placing columns are missing or malformed is dropped
- * rather than cited wrongly. */
-export function hostedFindResult(found: RowRecord): Pick<FindResult, "matches" | "total" | "files" | "byFile" | "truncated"> {
-  const matches: FindMatch[] = [];
-  for (const raw of Array.isArray(found.lines) ? found.lines : []) {
-    const line = asRecord(raw);
-    const columns = asRecord(line.columns);
-    const path = columns.path;
-    const startLine = Number(columns.start_line);
-    const index = Number(line.line_index);
-    if (typeof path !== "string" || !Number.isFinite(startLine) || !Number.isFinite(index) || typeof line.line !== "string") continue;
-    const symbol = typeof columns.symbol === "string" && columns.symbol !== "" ? columns.symbol : undefined;
-    matches.push({ path, line: startLine + index, text: line.line, ...(symbol ? { symbol } : {}) });
-  }
-  const byFile: FindFileCount[] = [];
-  for (const raw of Array.isArray(found.groups) ? found.groups : []) {
-    const group = asRecord(raw);
-    const count = Number(group.lines);
-    if (typeof group.value !== "string" || !Number.isFinite(count)) continue;
-    byFile.push({ path: group.value, count });
-  }
-  const total = Number.isFinite(Number(found.total)) ? Number(found.total) : matches.length;
-  const files = Number.isFinite(Number(found.groups_total)) ? Number(found.groups_total) : byFile.length;
-  return { matches, total, files, byFile, ...(found.truncated === true ? { truncated: true } : {}) };
-}
-
-/** `value` as a record; anything else is empty. */
-function asRecord(value: unknown): RowRecord {
-  return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as RowRecord) : {};
-}
-
 // --- sql --------------------------------------------------------------------
 
 const PLACEHOLDER = /\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/g;
-
-/** The platform's own query-vector placeholder, `{{q:"text"}}`: the name is
- * fixed to `q`, the text runs to the first `"}}`, and there is no escaping,
- * so a text containing either of these sequences cannot be expressed. */
-const PLATFORM_PLACEHOLDER_OPEN = '{{q:"';
-const PLATFORM_PLACEHOLDER_CLOSE = '"}}';
-const PLATFORM_PLACEHOLDER_UNESCAPABLE = ["}}", '"'];
 
 /** The distinct `{{name}}` placeholders a statement references, in order. */
 function placeholderNames(sql: string): string[] {
@@ -475,7 +376,7 @@ function placeholderNames(sql: string): string[] {
 }
 
 /** The embed text for one placeholder; a referenced placeholder with no
- * supplied text is a hard error, in both substitution forms. */
+ * supplied text is a hard error. */
 function embedTextFor(name: string, embeds: Record<string, string>): string {
   const text = embeds[name];
   if (typeof text !== "string" || text.length === 0) {
@@ -501,39 +402,12 @@ export async function applyEmbeds(
   if (referenced.length === 0) return sql;
   if (!embeds) throw noEmbedMap(referenced);
   if (!embedder) {
-    throw new Error(
-      `query has placeholder(s) {{${referenced.join("}}, {{")}}} but no client-side embedder is configured (--embed-providerplatform)`,
-    );
+    throw new Error(`query has placeholder(s) {{${referenced.join("}}, {{")}}} but no embedder is configured (CX_NO_EMBED)`);
   }
   const literals = new Map<string, string>();
   for (const name of referenced) {
     const [vec] = await embedder.embed([embedTextFor(name, embeds)]);
     literals.set(name, `'${vec.join(",")}'`);
-  }
-  return sql.replace(PLACEHOLDER, (full, name) => literals.get(name) ?? full);
-}
-
-/** Substitute `{{name}}` placeholders with the platform's own `{{q:"text"}}`
- * placeholder, which the platform embeds with the table's model before the
- * statement runs - the form a platform-embedded table needs, since no client
- * vector matches its column. The name is always `q` on the platform side;
- * code-context's names only pick the text. A text the platform's syntax
- * cannot carry (it holds `}}` or a double quote - there is no escaping) is
- * refused rather than truncated into a different query. */
-export function applyPlatformEmbeds(sql: string, embeds: Record<string, string> | undefined): string {
-  const referenced = placeholderNames(sql);
-  if (referenced.length === 0) return sql;
-  if (!embeds) throw noEmbedMap(referenced);
-  const literals = new Map<string, string>();
-  for (const name of referenced) {
-    const text = embedTextFor(name, embeds);
-    const bad = PLATFORM_PLACEHOLDER_UNESCAPABLE.find((seq) => text.includes(seq));
-    if (bad !== undefined) {
-      throw new Error(
-        `embed text for {{${name}}} contains ${JSON.stringify(bad)}, which the platform's {{q:"..."}} placeholder cannot carry (it has no escaping) - reword the text`,
-      );
-    }
-    literals.set(name, `${PLATFORM_PLACEHOLDER_OPEN}${text}${PLATFORM_PLACEHOLDER_CLOSE}`);
   }
   return sql.replace(PLACEHOLDER, (full, name) => literals.get(name) ?? full);
 }
@@ -556,21 +430,12 @@ export async function runSql(
   embeds?: Record<string, string>,
 ): Promise<Array<Record<string, unknown>>> {
   // Guard before substituting: the embed text is never part of the statement
-  // the guard reads (a `;` inside a platform placeholder's text is the
-  // platform's to embed, not a second statement), and floats carry nothing
-  // the guard cares about either way.
+  // the guard reads, and floats carry nothing the guard cares about.
   const guarded = guardSql(sql);
-  let statement: string;
-  if (handle.hosted && platformEmbedded(handle.manifest)) {
-    statement = applyPlatformEmbeds(guarded, embeds);
-  } else {
-    // The mismatch guard applies to every path that embeds a query, not just
-    // `search` - a same-dimension model swap would otherwise return silently
-    // wrong vector_search/hybrid_search results through SQL.
-    if (embedder && placeholderNames(guarded).length > 0) checkQueryEmbedder(handle.manifest, embedder);
-    statement = await applyEmbeds(guarded, embeds, embedder);
-  }
-  return handle.hosted
-    ? handle.hosted.querySql(statement)
-    : (localDb(handle).querySql(statement) as Array<Record<string, unknown>>);
+  // The mismatch guard applies to every path that embeds a query, not just
+  // `search` - a same-dimension model swap would otherwise return silently
+  // wrong vector_search/hybrid_search results through SQL.
+  if (embedder && placeholderNames(guarded).length > 0) checkQueryEmbedder(handle.manifest, embedder);
+  const statement = await applyEmbeds(guarded, embeds, embedder);
+  return localDb(handle).querySql(statement) as Array<Record<string, unknown>>;
 }

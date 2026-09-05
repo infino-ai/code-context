@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: Copyright The Infino Authors
 //
-// The hosted REST client: code-context's "hosted mode" talks to an Infino
-// platform database over its `/v1/<op>/<database>` data plane instead of an
-// in-process engine. This file owns the wire: request shapes (field names as
-// the platform's request structs spell them), auth, the cold-start retry loop,
-// error decoding, and the Arrow IPC encoding an append carries. Nothing here
-// knows about chunks or tools - the callers keep the tool results identical to
-// local mode and put the per-call telemetry (`HostedCallInfo`) in the usage
-// ledger, never in what the model sees.
+// The platform REST client: code-context talks to an Infino platform database
+// over its `/v1/<op>/<database>` data plane to keep the repository's chunks
+// table there beside the local index (every build and sync writes both) and
+// to run the `subagent` and `explore` tools against it. This file owns the
+// wire: request shapes (field names as the platform's request structs spell
+// them), auth, the cold-start retry loop, error decoding, and the Arrow IPC
+// encoding an append carries. Nothing here knows about chunks or tools - the
+// callers put the per-call telemetry (`HostedCallInfo`) in the usage ledger,
+// never in what the model sees.
 
 import * as arrow from "apache-arrow";
 
@@ -374,98 +375,13 @@ export class HostedDb {
 
   // --- reads ---
 
-  /** `POST /v1/query_sql/{db}` with `{query}`: rows as a JSON array. */
+  /** `POST /v1/query_sql/{db}` with `{query}`: rows as a JSON array. The one
+   * read the client makes outside `sub_agent` - a sync's recount of the
+   * table. The search routes (bm25, hybrid, token_match, find) are the
+   * platform's own loop's to call; `find`, `search` and `sql` read the local
+   * index. */
   async querySql(sql: string): Promise<RowRecord[]> {
     return this.rows(await this.postJson("query_sql", { query: sql }, true), "query_sql");
-  }
-
-  async bm25Search(
-    table: string,
-    column: string,
-    query: string,
-    k: number,
-    opts: { projection?: string[]; mode?: "or" | "and" } = {},
-  ): Promise<RowRecord[]> {
-    const body: RowRecord = {
-      table_name: table,
-      field_name: column,
-      query,
-      k,
-      mode: opts.mode ?? "or",
-      ...(opts.projection ? { projection: opts.projection } : {}),
-    };
-    return this.rows(await this.postJson("bm25_search", body, true), "bm25_search");
-  }
-
-  /** BM25 + vector fused with RRF. The vector leg takes the caller's own
-   * vector (`vector_query`) or, for an embedding column, the text the platform
-   * embeds (`vector_text`). */
-  async hybridSearch(
-    table: string,
-    textColumn: string,
-    query: string,
-    vectorColumn: string,
-    vector: number[] | { text: string },
-    k: number,
-    opts: { projection?: string[] } = {},
-  ): Promise<RowRecord[]> {
-    const body: RowRecord = {
-      table_name: table,
-      text_field: textColumn,
-      text_query: query,
-      mode: "or",
-      vector_field: vectorColumn,
-      ...(Array.isArray(vector) ? { vector_query: vector } : { vector_text: vector.text }),
-      k,
-      ...(opts.projection ? { projection: opts.projection } : {}),
-    };
-    return this.rows(await this.postJson("hybrid_search", body, true), "hybrid_search");
-  }
-
-  /** `POST /v1/find/{db}`: the lines of an indexed text column that contain
-   * `literal`, at line grain - grep -n over the table, done in the worker.
-   * The platform takes the literal as typed (its own grammar characters read
-   * as punctuation), refuses one with no searchable token or with a newline
-   * (400), and answers `{total, truncated, lines: [{columns, line_index,
-   * line}], groups_total, groups: [{value, lines}]}`: the first `limit` lines
-   * with the projected columns and their index within the row's text, each
-   * cut to an excerpt around the literal, and the complete per-group counts
-   * when `groupBy` names a column. */
-  async find(
-    table: string,
-    column: string,
-    literal: string,
-    opts: { ignoreCase?: boolean; projection?: string[]; groupBy?: string; lineBase?: string; limit?: number } = {},
-  ): Promise<RowRecord> {
-    const body: RowRecord = { table_name: table, field_name: column, literal };
-    if (opts.ignoreCase !== undefined) body.ignore_case = opts.ignoreCase;
-    if (opts.projection !== undefined) body.projection = opts.projection;
-    if (opts.groupBy !== undefined) body.group_by = opts.groupBy;
-    // The integer column holding each row's first line: with it the platform
-    // counts a line two overlapping rows both hold once, at line_base +
-    // line_index; without it every row's lines count.
-    if (opts.lineBase !== undefined) body.line_base = opts.lineBase;
-    if (opts.limit !== undefined) body.limit = opts.limit;
-    return this.parseJson(await this.postJson("find", body, true), "find") as RowRecord;
-  }
-
-  /** Unranked: every row whose indexed `column` holds the query's tokens. The
-   * raw query string goes as-is; the platform tokenizes it with the index's
-   * own analyzer, so no client-side pre-tokenizing is needed. */
-  async tokenMatch(
-    table: string,
-    column: string,
-    query: string,
-    opts: { projection?: string[]; mode?: "or" | "and" } = {},
-  ): Promise<RowRecord[]> {
-    const body: RowRecord = {
-      table_name: table,
-      field_name: column,
-      query,
-      mode: opts.mode ?? "or",
-      ...(opts.projection ? { projection: opts.projection } : {}),
-    };
-    return this.rows(await this.postJson("token_match", body, true), "token_match");
   }
 
   // --- sub_agent ---

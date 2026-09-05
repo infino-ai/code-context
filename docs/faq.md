@@ -22,27 +22,28 @@ line, cited `path:line`, complete and unranked, with no file scanned.
 Not unless you ask it to. By default there are no accounts, no API keys, and
 no server: the embedding model is a small local model downloaded once from
 the public model hub, and after that everything runs offline. The one opt-in
-is a hosted index (next question), where the chunks are loaded into a
-database you own on infino-platform and queries go there over HTTPS.
+is `--db` (next question), which also keeps the index in a database you own
+on infino-platform, so the platform's `subagent` and `explore` tools can run
+over it.
 
-### Can the index live on infino-platform instead of my machine?
+### Can the index also live on infino-platform?
 
-Yes. `cx index --db https://host/<database> --api-key-file <path>` walks and
-chunks the repo here and loads the chunks table into that database; by
-default the platform embeds it, so no model runs on your machine and there is
-no vector backfill. `cx mcp --db ...` (or any of `find`, `search`, `sql`,
-`status` with `--db`) then serves the same three tools over that table, with
-the same results. Every hosted setting is a command-line flag (`--db`,
-`--api-key-file`, `--embed-provider`, `--analyzer`, the two timeouts); the key
-comes from a file or from `INFINO_API_KEY`, never from the command line, and
-`.infino/` in the repo stays as a small sidecar for the manifest and the
-usage ledger. Because a hosted table is shared, nothing builds or re-syncs
-it as a side effect of a query: `cx index --db` is the explicit load, re-run
-to sync. With `cx mcp --db ... --subagent` a fourth tool joins, `subagent`,
-which hands a question or task to the platform's retrieval agent and returns
-the rows it retrieved - exact `path:line` places with the code, plus counts
-and rankings - for the coding agent to compose from; never a written summary.
-The README's hosted section has the flag table.
+Yes, and it is the same index. `cx index --db https://host/<database>
+--api-key-file <path>` builds the local index exactly as without the flag and
+then loads the same chunks into that database; every sync after it (the
+explicit `cx index`, or the MCP server's auto-sync as queries arrive) applies
+the same diff to both, so the two never drift. `find`, `search` and `sql`
+keep reading the local index. `cx mcp --db ...` adds two tools that run on the
+platform copy: `subagent`, which hands a question or task to the platform's
+retrieval agent and returns the rows it retrieved - exact `path:line` places
+with the code, plus counts and rankings - for the coding agent to compose
+from, never a written summary; and `explore`, which takes a question about a
+mechanism that spans files and returns a written answer grounded in the facts
+it lists. By default the platform embeds its copy with its own model. Every
+platform setting is a command-line flag on `cx index` and `cx mcp` (`--db`,
+`--api-key-file`, `--embed-provider`, `--analyzer`, the timeouts, the tool
+caps); the key comes from a file or from `INFINO_API_KEY`, never from the
+command line. The README's platform section has the flag table.
 
 ### How fast is it usable after indexing starts?
 
@@ -58,9 +59,9 @@ No. The first `find`, `search`, or `sql` on a repo that has never been indexed
 builds the index inline and answers on that same call - keyword search is live in
 seconds, vectors backfill behind it. Run `cx index` first if you'd rather
 kick the build off explicitly, or set `CX_AUTO_INDEX=0` to make an unindexed
-query return a "index it first" error instead of building. (A hosted index
-is the exception: it is shared, so a query never builds or re-syncs it, and
-`cx index --db` is the explicit load.)
+query return a "index it first" error instead of building. With `--db` the
+same first-query build also loads the platform copy, once the local stages
+are done.
 
 ### Can one server handle more than one repo?
 

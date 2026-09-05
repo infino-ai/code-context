@@ -40,18 +40,19 @@ import {
   MAX_FIND_LIMIT,
   hostedTarget,
   hostedLabel,
+  hostedAnalyzer,
+  embedProvider,
   autoIndexEnabled as autoIndexSetting,
   autoSyncEnabled as autoSyncSetting,
   exploreMaxTurns,
   exploreMaxWallSecs,
-  subagentEnabled,
   subagentK,
   subagentMaxTurns,
   subagentMaxWallSecs,
 } from "../core/config.js";
 import { runExploreAgent, runRetrievalAgent } from "../core/retrieval-agent.js";
 import { readManifest, type Manifest } from "../core/manifest.js";
-import { localDb, openHostedHandle, newHostedMemo, type IndexHandle } from "../core/context.js";
+import { localDb, newHostedMemo, platformLabel, platformTableReady, type IndexHandle } from "../core/context.js";
 import { find, search, runSql, jsonify, partialIndex } from "../core/searcher.js";
 import {
   newSession,
@@ -68,55 +69,66 @@ import {
 import {
   indexRepoStaged,
   syncRepo,
+  type IndexOptions,
   type SyncOutcome,
   type IndexStats,
   type StagedIndexRun,
 } from "../core/indexer.js";
-import { createEmbedder, createIndexingEmbedder, embedderInfo, type Embedder } from "../core/embedder.js";
+import { createEmbedder, createIndexingEmbedder, embedderInfo, platformEmbedderInfo, type Embedder } from "../core/embedder.js";
 import { RepoRegistry, type RepoCtx } from "./repos.js";
 import { ensureIndexed, type EnsureResult } from "./ensure.js";
 
 export async function serveMcp(rootPath?: string): Promise<void> {
   const defaultRoot = resolveRoot(rootPath);
 
-  // Hosted mode (--db <url>): the default root's chunks table lives on a
-  // platform database. Resolved once here - a bad URL or a missing key fails
-  // the server at startup, not on the first tool call. The key stays inside
-  // the target; only `hostedLabel` ever reaches a log line.
+  // The platform database (--db <url>), when one is configured: the default
+  // root's chunks table also lives there, written by every build and sync
+  // beside the local index and read by the `subagent` and `explore` tools.
+  // Resolved once here - a bad URL or a missing key fails the server at
+  // startup, not on the first tool call. The key stays inside the target;
+  // only `hostedLabel` ever reaches a log line.
   const hosted = hostedTarget();
 
-  // Null when the platform embeds server-side (--embed-provider platform):
-  // the query paths then run without a client-side vector.
+  // The local model: query embedding for search/sql and the sync's small
+  // batches. Null under CX_NO_EMBED.
   let embedder: Embedder | null = null;
-  const getEmbedder = (): Embedder | null => (embedder ??= createEmbedder());
+  const getEmbedder = (): Embedder | null => (process.env.CX_NO_EMBED ? null : (embedder ??= createEmbedder()));
 
   // --- per-repo state ---------------------------------------------------------
   // One server serves every repo a session touches: the optional `path` tool
   // arg targets one, defaulting to the startup root. Each repo keeps its own
   // connection, auto-sync clock, and mutation lock, held in a small LRU so a
   // session that roams across many repos doesn't accumulate connections. Only
-  // the default root can be hosted (see RepoRegistry.targetFor).
+  // the default root's context carries the platform client (see RepoRegistry).
   const registry = new RepoRegistry(defaultRoot, { connect, ...(hosted ? { hosted: { target: hosted } } : {}) });
   const repoFor = (requested?: string): RepoCtx => registry.get(requested);
 
-  // Local: the manifest is re-read per call so staged vector readiness is
-  // noticed the moment it lands. Hosted: readiness is the server's (the table
-  // exists), memoized on the context once seen; the manifest is the sidecar's
-  // when it is a hosted one, else synthesized once from the server's schema.
-  const getHandle = async (ctx: RepoCtx): Promise<IndexHandle | null> => {
-    if (ctx.hosted) return openHostedHandle(ctx.hosted, ctx.root, ctx.dir, (ctx.hostedMemo ??= newHostedMemo()));
+  // The manifest is re-read per call so staged vector readiness is noticed
+  // the moment it lands.
+  const getHandle = (ctx: RepoCtx): IndexHandle | null => {
     if (!existsSync(ctx.dir)) return null;
     const manifest = readManifest(ctx.dir);
     if (!manifest) return null;
     return { root: ctx.root, dir: ctx.dir, target: ctx.target, db: ctx.db, manifest };
   };
 
+  /** The indexer options a build or sync of `ctx` shares: the local index
+   * always, and the platform table when the context carries the client - the
+   * two are written together, so no path here ever writes one without the
+   * other. */
+  const indexTargets = (ctx: RepoCtx): Pick<IndexOptions, "root" | "db" | "hosted" | "indexDirPath" | "embedProvider" | "analyzer" | "caps"> => ({
+    root: ctx.root,
+    db: localDb(ctx),
+    indexDirPath: ctx.dir,
+    caps: DEFAULT_CAPS,
+    ...(ctx.hosted ? { hosted: ctx.hosted, embedProvider: embedProvider(), analyzer: hostedAnalyzer() } : {}),
+  });
+
   // --- freshness: one index mutation at a time per repo, auto-sync on queries -
   // Queries are not queued behind syncs; they run against the current index and
   // the next query sees the fresh one. CX_AUTO_SYNC=0 disables; the debounce
   // keeps the stat walk off the hot path (~20ms to ~2s depending on repo size).
-  // Both switches are forced off for a hosted target whatever the env says: a
-  // query must never drop and recreate a table other people share.
+  // A sync writes the platform table too, so the two never drift.
   const autoSyncEnabled = autoSyncSetting();
   const syncIntervalMs = Number(process.env.CX_SYNC_INTERVAL_SECS ?? 30) * 1000;
   // A search/sql on a never-indexed repo builds the index inline, then answers
@@ -158,49 +170,28 @@ export async function serveMcp(rootPath?: string): Promise<void> {
 
   /** Acquire the repo's mutation lock and run a staged build; resolves at
    * keyword-live with stage-1 stats, or null if a build is already in flight.
-   * Local repos only (`localDb` throws for a hosted one; auto-index is off
-   * there so this is never reached for it). */
+   * The build's completion (vectors, then the platform table when one is
+   * configured) runs on in the background. */
   const buildIndex = (ctx: RepoCtx): Promise<IndexStats> | null =>
     exclusive(ctx, async () => {
       const emb = buildEmbedder();
-      const run = await indexRepoStaged({
-        root: ctx.root,
-        db: localDb(ctx),
-        indexDirPath: ctx.dir,
-        embedder: emb,
-        caps: DEFAULT_CAPS,
-      });
+      const run = await indexRepoStaged({ ...indexTargets(ctx), embedder: emb });
       backfill(run, emb);
       return run.text;
     });
 
   const doSync = async (ctx: RepoCtx): Promise<SyncOutcome> => {
-    const outcome = await syncRepo({
-      root: ctx.root,
-      db: localDb(ctx),
-      indexDirPath: ctx.dir,
-      embedder: process.env.CX_NO_EMBED ? null : getEmbedder(),
-      caps: DEFAULT_CAPS,
-    });
+    const outcome = await syncRepo({ ...indexTargets(ctx), embedder: getEmbedder() });
     if (outcome.action === "rebuild-required" && outcome.reason !== "vector backfill in progress") {
       const emb = buildEmbedder();
-      const run = await indexRepoStaged({
-        root: ctx.root,
-        db: localDb(ctx),
-        indexDirPath: ctx.dir,
-        embedder: emb,
-        caps: DEFAULT_CAPS,
-      });
+      const run = await indexRepoStaged({ ...indexTargets(ctx), embedder: emb });
       backfill(run, emb);
     }
     return outcome;
   };
 
   const maybeAutoSync = (ctx: RepoCtx) => {
-    // A hosted table is never synced by a query, whatever the switch says: the
-    // guard sits here, on the one path that would run the mutation, and not
-    // only in the environment flag that is meant to keep it off.
-    if (ctx.hosted || !autoSyncEnabled || performance.now() - ctx.lastSyncCheck < syncIntervalMs) return;
+    if (!autoSyncEnabled || performance.now() - ctx.lastSyncCheck < syncIntervalMs) return;
     ctx.lastSyncCheck = performance.now();
     // Deferred so the triggering query's engine call runs first; the sync's
     // stat walk still shares the process, so on very large repos a
@@ -217,11 +208,7 @@ export async function serveMcp(rootPath?: string): Promise<void> {
     isError: true,
   });
   const noIndex = (ctx: RepoCtx) =>
-    fail(
-      ctx.hosted
-        ? `no ${TABLE} table at ${ctx.target} - load it with \`cx index --db ${ctx.target}\`.`
-        : `no index for ${ctx.root} yet - run \`cx index\` there once (keyword search is live in seconds).`,
-    );
+    fail(`no index for ${ctx.root} yet - run \`cx index\` there once (keyword search is live in seconds).`);
 
   /** Marker attached to a query result when this call built the index. */
   const autoIndexNote = (stats: IndexStats) => ({
@@ -232,11 +219,29 @@ export async function serveMcp(rootPath?: string): Promise<void> {
       (stats.vectors === "building" ? " and vectors are backfilling in the background" : ""),
   });
 
-  // The hosted `subagent` tool (--subagent, default off). Its routing line
-  // joins the instructions only when the tool is registered: the instructions
-  // are prompt text on every turn, and a line for a tool that is not there
-  // would cost tokens and steer toward nothing.
-  const subagent = subagentEnabled();
+  /** The platform tools' precondition: the context carries the platform
+   * client and its chunks table exists. A repo other than the default root has
+   * no platform table; a table not there yet is either being loaded by the
+   * build in flight or was never loaded. Null when ready. */
+  const platformNotReady = async (tool: string, ctx: RepoCtx): Promise<ReturnType<typeof fail> | null> => {
+    if (!ctx.hosted) {
+      return fail(`${tool} works on the repository the server was started for, whose index is also on the platform database; ${ctx.root} has a local index only`);
+    }
+    if (await platformTableReady(ctx.hosted, (ctx.hostedMemo ??= newHostedMemo()))) return null;
+    const label = platformLabel(ctx.hosted);
+    return fail(
+      ctx.mutation
+        ? `the ${TABLE} table at ${label} is being loaded by the index build in progress - retry when it finishes`
+        : `no ${TABLE} table at ${label} yet - run \`cx index --db ${label}\` to load it`,
+    );
+  };
+
+  // The platform tools (`subagent`, `explore`) are registered whenever a
+  // platform database is configured. Their routing lines join the
+  // instructions only then: the instructions are prompt text on every turn,
+  // and a line for a tool that is not there would cost tokens and steer
+  // toward nothing.
+  const subagent = hosted !== null;
 
   const server = new McpServer(
     { name: "code-context", version: "0.1.2" },
@@ -305,7 +310,7 @@ export async function serveMcp(rootPath?: string): Promise<void> {
         const result = await search(handle, getEmbedder(), query, k);
         let usage: string | undefined;
         if (receiptOn) {
-          const entry = withPlatform(searchEntry(result, ctx.root), ctx);
+          const entry = searchEntry(result, ctx.root);
           recordUsage(ctx.dir, entry);
           usage = formatReceipt(entry, session);
         }
@@ -379,7 +384,7 @@ export async function serveMcp(rootPath?: string): Promise<void> {
         const result = await find(handle, query, { ignoreCase, limit });
         let usage: string | undefined;
         if (receiptOn) {
-          const entry = withPlatform(findEntry(result), ctx);
+          const entry = findEntry(result);
           recordUsage(ctx.dir, entry);
           usage = formatReceipt(entry, session);
         }
@@ -449,7 +454,7 @@ export async function serveMcp(rootPath?: string): Promise<void> {
         const partial = partialIndex(handle.manifest);
         let usage: string | undefined;
         if (receiptOn) {
-          const entry = withPlatform(sqlEntry(query, rows), ctx);
+          const entry = sqlEntry(query, rows);
           recordUsage(ctx.dir, entry);
           usage = formatReceipt(entry, session);
         }
@@ -470,7 +475,7 @@ export async function serveMcp(rootPath?: string): Promise<void> {
     server.registerTool(
       "subagent",
       {
-        title: "Retrieval subagent over the hosted index",
+        title: "Retrieval subagent over the repository index",
         description:
           "A read-only retrieval subagent over the repository index. Give it a question or task in " +
           "plain language; it searches and ranks across the index itself and returns the facts it " +
@@ -501,12 +506,11 @@ export async function serveMcp(rootPath?: string): Promise<void> {
         } catch (err) {
           return fail((err as Error).message);
         }
-        // Only the hosted default root has a retrieval agent behind it; a
-        // local repo (any `path` other than the default root) does not.
-        if (!ctx.hosted) return fail("subagent needs a hosted index: serve with --db");
-        // The same readiness check the other tools make: without a chunks
-        // table the platform would spend the whole cold-start budget on
-        // "no table described yet" before saying anything useful.
+        // The same first-query build the other tools make (it writes the
+        // platform table too), then the platform table's own readiness:
+        // without a chunks table the platform would spend the whole
+        // cold-start budget on "no table described yet" before saying
+        // anything useful.
         let ensured: EnsureResult;
         try {
           ensured = await ensureIndexed(ctx, { autoIndexEnabled, getHandle, build: buildIndex });
@@ -514,12 +518,14 @@ export async function serveMcp(rootPath?: string): Promise<void> {
           return fail(`indexing failed: ${(err as Error).message}`);
         }
         if ("needsIndex" in ensured) return noIndex(ctx);
+        const notReady = await platformNotReady("subagent", ctx);
+        if (notReady) return notReady;
         try {
           const t0 = performance.now();
           // The spend (turns, tokens) goes to the ledger and the receipt only;
           // the result the model sees is the facts: sql, hits, rows, queries.
           const { result, spend } = await runRetrievalAgent(
-            ctx.hosted,
+            ctx.hosted!,
             { question },
             { maxTurns: subagentMaxTurns(), maxWallSecs: subagentMaxWallSecs(), k: subagentK() },
           );
@@ -543,7 +549,7 @@ export async function serveMcp(rootPath?: string): Promise<void> {
     server.registerTool(
       "explore",
       {
-        title: "Exploration subagent over the hosted index",
+        title: "Exploration subagent over the repository index",
         description:
           "A read-only exploration subagent over the repository index. Give it a question about a " +
           "mechanism that spans files - how X works end to end, what calls what, where a value flows; " +
@@ -572,7 +578,6 @@ export async function serveMcp(rootPath?: string): Promise<void> {
         } catch (err) {
           return fail((err as Error).message);
         }
-        if (!ctx.hosted) return fail("explore needs a hosted index: serve with --db");
         let ensured: EnsureResult;
         try {
           ensured = await ensureIndexed(ctx, { autoIndexEnabled, getHandle, build: buildIndex });
@@ -580,10 +585,12 @@ export async function serveMcp(rootPath?: string): Promise<void> {
           return fail(`indexing failed: ${(err as Error).message}`);
         }
         if ("needsIndex" in ensured) return noIndex(ctx);
+        const notReady = await platformNotReady("explore", ctx);
+        if (notReady) return notReady;
         try {
           const t0 = performance.now();
           const { result, spend } = await runExploreAgent(
-            ctx.hosted,
+            ctx.hosted!,
             { question },
             { maxTurns: exploreMaxTurns(), maxWallSecs: exploreMaxWallSecs(), k: subagentK() },
           );
@@ -607,21 +614,14 @@ export async function serveMcp(rootPath?: string): Promise<void> {
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  if (hosted) {
-    // The host and the provider, never the key. Readiness is not probed here:
-    // a cold database can take a while to answer, and the first tool call
-    // reports "no chunks table" itself when the table is missing.
-    console.error(
-      `code-context MCP server ready on stdio (default root: ${defaultRoot}, hosted ${TABLE} table at ${hostedLabel(hosted)}, ` +
-        `embedder: ${embedderInfo()}; auto-index and auto-sync are off for the hosted table; ` +
-        "tools accept an optional 'path' to target other, local repos)",
-    );
-    return;
-  }
   const manifest: Manifest | undefined = readManifest(indexDir(defaultRoot));
+  // The platform's host and its embedder, never the key. The table's
+  // readiness is not probed here: a cold database can take a while to answer,
+  // and the first platform tool call reports "no chunks table" itself.
+  const platform = hosted ? `, ${TABLE} table also at ${hostedLabel(hosted)} (embedder there: ${platformEmbedderInfo()})` : "";
   console.error(
     `code-context MCP server ready on stdio (default root: ${defaultRoot}, index: ${
       manifest ? `${manifest.chunks} chunks, vectors ${manifest.vectors}` : "none yet"
-    }, embedder: ${embedderInfo()}; tools accept an optional 'path' to target other repos)`,
+    }, embedder: ${embedderInfo()}${platform}; tools accept an optional 'path' to target other repos)`,
   );
 }

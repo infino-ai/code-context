@@ -3,7 +3,7 @@
 Real agent runs (Claude Agent SDK) comparing **stock file tools** against the
 same agent with the **code-context MCP added** - same model, same turn budget,
 hermetic lanes. The only variable is whether the agent has the index, and,
-for the hosted lanes, where that index lives.
+for the platform lanes, which of the platform tools it has beside it.
 
 Needs: Node ≥ 20 and `ANTHROPIC_API_KEY` in the environment. Everything writes
 under `bench/.work/` (gitignored).
@@ -42,22 +42,24 @@ recall; on a well-known open-source repo the baseline can shortcut from memory.
 
 The lane table lives in `lanes.mjs` (`LANES`); an unknown lane name is an
 error, not a silent fall-through to the files lane. Every lane shares the same
-hermetic base and differs only in the toolset and, for the hosted pair, in
-where the server's index lives.
+hermetic base and differs only in the toolset. `find`, `search` and `sql`
+read the local index in every lane; the platform lanes start the server with
+`--db`, which keeps the same index on a platform database too and registers
+the `subagent` and `explore` tools that run there.
 
 | lane           | kind   | built-in tools            | MCP server | server command line, after `cx mcp` (every MCP lane also gets `CX_ROOT`, `CX_INDEX_DIR`, `CX_AUTO_SYNC=0` in its env) | needs in your env                        |
 | -------------- | ------ | ------------------------- | ---------- | ---------------------------------------------------------------------------------------------------------------------- | ---------------------------------------- |
 | `files`        | local  | Glob, Grep, Read, LS, Bash | no         | -                                                                                                                      | -                                        |
 | `cx`           | local  | Read                      | yes        | -                                                                                                                      | -                                        |
 | `combo`        | local  | Glob, Grep, Read, LS, Bash | yes        | -                                                                                                                      | -                                        |
-| `hosted`       | hosted | Glob, Grep, Read, LS, Bash | yes        | `--db $CX_BENCH_DB_URL --api-key-file $CX_BENCH_KEY_FILE --embed-provider platform` (`CX_BENCH_EMBED_PROVIDER` overrides the provider) | `CX_BENCH_DB_URL`, `CX_BENCH_KEY_FILE`  |
-| `hosted-agent` | hosted | Glob, Grep, Read, LS, Bash | yes        | as `hosted` plus `--subagent`                                                                                          | `CX_BENCH_DB_URL`, `CX_BENCH_KEY_FILE`  |
-| `agent-only`   | hosted | Read                      | yes        | as `hosted-agent`, with `find`, `search` and `sql` removed from the model's context (the SDK's `disallowedTools`)      | `CX_BENCH_DB_URL`, `CX_BENCH_KEY_FILE`  |
+| `hosted`       | hosted | Glob, Grep, Read, LS, Bash | yes        | `--db $CX_BENCH_DB_URL --api-key-file $CX_BENCH_KEY_FILE --embed-provider platform` (`CX_BENCH_EMBED_PROVIDER` overrides the provider), with `subagent` and `explore` removed from the model's context (the SDK's `disallowedTools`): the three local tools alone, a control | `CX_BENCH_DB_URL`, `CX_BENCH_KEY_FILE`  |
+| `hosted-agent` | hosted | Glob, Grep, Read, LS, Bash | yes        | as `hosted` with `subagent` kept (`explore` hidden)                                                                    | `CX_BENCH_DB_URL`, `CX_BENCH_KEY_FILE`  |
+| `agent-only`   | hosted | Read                      | yes        | as `hosted-agent`, with `find`, `search` and `sql` removed too                                                         | `CX_BENCH_DB_URL`, `CX_BENCH_KEY_FILE`  |
 
 | `stock-explore`    | local  | Glob, Grep, Read, LS, Bash, Agent | no  | - (the built-in Explore subagent)                                                                             | -                                        |
 | `index-explore`    | local  | Glob, Grep, Read, LS, Bash, Agent | yes | `Explore` overridden: `find`, `search`, `sql`, Read, Haiku inside                                             | -                                        |
-| `platform-explore` | hosted | Glob, Grep, Read, LS, Bash, Agent | yes | as `hosted-agent`, `Explore` overridden: `explore` (the platform's explore mode), Read, Haiku relaying          | `CX_BENCH_DB_URL`, `CX_BENCH_KEY_FILE`  |
-| `find-subagent`    | hosted | Glob, Grep, Read, LS, Bash        | yes | as `hosted-agent`, with `search`, `sql` and `explore` removed from the model's context: `find` and `subagent` remain | `CX_BENCH_DB_URL`, `CX_BENCH_KEY_FILE`  |
+| `platform-explore` | hosted | Glob, Grep, Read, LS, Bash, Agent | yes | `--db ...`, `Explore` overridden: `explore` (the platform's explore mode), Read, Haiku relaying                 | `CX_BENCH_DB_URL`, `CX_BENCH_KEY_FILE`  |
+| `find-subagent`    | hosted | Glob, Grep, Read, LS, Bash        | yes | `--db ...`, with `search`, `sql` and `explore` removed from the model's context: `find` and `subagent` remain   | `CX_BENCH_DB_URL`, `CX_BENCH_KEY_FILE`  |
 | `find-explore`     | hosted | Glob, Grep, Read, LS, Bash        | yes | `find-subagent` with `explore` in `subagent`'s place: the main agent asks the platform's explore mode directly   | `CX_BENCH_DB_URL`, `CX_BENCH_KEY_FILE`  |
 
 The agent lanes pass `CX_BENCH_AGENT_MAX_TURNS`, when set, through as the
@@ -71,35 +73,36 @@ change only what the read-only `Explore` subagent runs on; rows record
 inside them), so delegation is read off the rows.
 
 `combo` is what installing the MCP server actually produces in a real client;
-`hosted` is the same agent and the same three tools with the index in a
-platform database (`CX_BENCH_DB_URL` is `https://host/<database>`, the shape
-the engine's own URI parser accepts); `hosted-agent` adds the `subagent`
-tool, a question or task handed to the platform's own agent loop, which
-returns the rows it retrieved, and measures whether the model picks it;
+`hosted` is the same agent and the same three tools with the server started
+against a platform database (`CX_BENCH_DB_URL` is `https://host/<database>`,
+the shape the engine's own URI parser accepts) and the two tools that brings
+hidden - a control for the lanes that use them; `hosted-agent` keeps the
+`subagent` tool, a question or task handed to the platform's own agent loop,
+which returns the rows it retrieved, and measures whether the model picks it;
 `agent-only` leaves it as the only retrieval tool and measures its answers
 and cost in isolation; `find-subagent` pairs it with `find` alone.
-A hosted lane fails before the first paid model call when `CX_BENCH_DB_URL` or
-`CX_BENCH_KEY_FILE` is missing. The server is configured by its command line
-alone (the `CX_BENCH_*` names are the harness's, never read by `cx`), and the
-key reaches it as the path of the file holding it: no script here reads or
+A platform lane fails before the first paid model call when `CX_BENCH_DB_URL`
+or `CX_BENCH_KEY_FILE` is missing. The server is configured by its command
+line alone (the `CX_BENCH_*` names are the harness's, never read by `cx`), and
+the key reaches it as the path of the file holding it: no script here reads or
 prints the key, and results record `dbHost` (the host) and nothing else of the
-URL. Auto-index is off in hosted mode by the server's own rule: loading a repo
-into the database is a separate, metered step (below), never something a
-question triggers.
+URL. The index is built before a run (below) so no question pays for a build;
+with `--db` one `cx index` writes the local index and the platform table
+together - they are one index in two places.
 
-Getting a hosted database ready:
+Getting the index in place, on both sides:
 
 ```bash
 export CX_BENCH_DB_URL=https://<host>/<database> CX_BENCH_KEY_FILE=~/.infino/key
-node load-hosted.mjs /path/to/repo              # cx index --json --db ... --api-key-file ... --embed-provider platform <repo>, timed -> .work/results/index-build.jsonl
-node load-hosted.mjs /path/to/repo local        # the same CLI against .infino/, for the comparison row
+node load-hosted.mjs /path/to/repo              # cx index --json --db ... --api-key-file ... --embed-provider platform <repo>: local index + platform table, timed -> .work/results/index-build.jsonl
+node load-hosted.mjs /path/to/repo local        # the same CLI without --db (local index only), for the comparison row
 node warm-hosted.mjs                            # POST /v1/list_tables until 200; prints rtt and whether a cold start was seen
 node run-questions.mjs /path/to/repo combo,hosted
 ```
 
 `load-hosted.mjs` runs the server build's own CLI (`dist/cli.js`, or
-`CX_BENCH_CLI`) with the `--db` flag hosted mode adds to `cx index`. A CLI
-that does not have the flag yet fails with commander's "unknown option" line,
+`CX_BENCH_CLI`) with the `--db` flags the platform lanes pass to `cx mcp`. A
+CLI that does not have the flag fails with commander's "unknown option" line,
 which the record keeps verbatim (`error`) rather than pretending a build
 happened. `warm-hosted.mjs` exists because a database that is not ready yet
 answers a retryable status with a `Retry-After`, and a question landing on
@@ -127,13 +130,13 @@ Lane design notes (they matter for fairness):
   `questions.jsonl` can hold every variant.
 - The run summary compares every other lane against the first lane given, so
   the default `files,combo` reads "combo vs files" and `combo,hosted` reads
-  the hosted server against the local one.
+  the server started with `--db` against the one without.
 
 ## What a result row carries
 
 Every row in `.work/results/questions.jsonl` has the question (`q`, `cat`,
 `repo`), the lane (`lane`, `laneKind` = `local`|`hosted`, `dbHost` = the
-platform host for a hosted lane, else `null`), the build (`build`, `cli`,
+platform host for a platform lane, else `null`), the build (`build`, `cli`,
 `model`), the run totals (`tokens`, `usage`, `costUsd`, `wallMs`, `calls`,
 `answer`, `error`, `ts`) and the tool trace:
 
@@ -147,8 +150,8 @@ platform host for a hosted lane, else `null`), the build (`build`, `cli`,
   (...)`); both are `null` for built-in tools and for a result that was not
   JSON.
 - `cxTookMs` - the sum of `tookMs` over the code-context calls of the run:
-  the engine's share of the wall clock, comparable between local and hosted
-  since the tool result has the same shape in both. Hosted-only telemetry
+  the tools' share of the wall clock, comparable across lanes since the tool
+  result has the same shape in all of them. The platform tools' telemetry
   (round trip, platform tokens) is not in the tool result the model sees - it
   goes to the server's usage ledger - so it is not on the row either.
 
@@ -160,8 +163,8 @@ carries the server's structured output as `tool_use_result`
 Build records (`.work/results/index-build.jsonl`, from `load-hosted.mjs`):
 `{ side: "hosted"|"local", repo, dbHost, cli, build, wallMs, exitCode, error, ts }`
 plus every field of the CLI's `--json` output (`files`, `chunks`, `vectors`,
-`indexMs`, `embedMs`, ... for a full build; the sync outcome for an
-incremental one).
+`indexMs`, `embedMs`, and with `--db` the platform load's `hosted` cost, ...
+for a full build; the sync outcome for an incremental one).
 
 ## Reading a multi-build results file
 
@@ -170,7 +173,7 @@ label, or `since..until` ISO timestamps for rows recorded before the label
 existed. Every reader filters to one lane: `compare-builds.mjs` takes it as
 the third positional (default `combo`), `judge.mjs` as the sixth (default
 `combo`; pass `""` for the cats slot to keep the default there). Run a reader
-once per lane to put a hosted run next to the local one.
+once per lane to put one lane's run next to another's.
 
 ```bash
 node compare-builds.mjs "" V0,V3          # per set: tokens, cost, calls, cx ms, first tool; CX_MD=1 for markdown, CX_DETAIL=1 per question
@@ -187,17 +190,16 @@ order and returns a winner, a confidence, and how many claims each answer
 makes that the code does not support; `JUDGE_LIMIT=n` caps the pairs for a
 smoke run. Judging costs about a quarter of a dollar per pair.
 
-## Caveats to state in any local-vs-hosted report
+## Caveats to state in any report that includes the platform tools
 
-1. **The engine version is a lane attribute.** The local lanes run the
-   `@infino-ai/infino` Node binding this checkout links; the hosted lanes run
-   whatever the platform runs. A gap in `cxTookMs` or in hit ranking between
-   `combo` and `hosted` can be the engine version, not the transport; say
-   which binding version the local run used.
+1. **The engine version is a tool attribute.** `find`, `search` and `sql` run
+   the `@infino-ai/infino` Node binding this checkout links, in every lane;
+   `subagent` and `explore` run whatever the platform runs. A gap in hit
+   ranking between the two kinds of tool can be the engine version, not the
+   tool; say which binding version the run used.
 2. **The platform's metering headers are cost, not work.** Report the
    `x-infino-read-tokens` figure as cost, never as a latency or work proxy;
-   the work proxy is `took_ms`, which the tool result carries the same way in
-   both lanes.
+   the work proxy is `took_ms`, which every tool result carries the same way.
 
 ## Tests
 

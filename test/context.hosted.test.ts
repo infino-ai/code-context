@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: Copyright The Infino Authors
 //
-// Hosted mode through config, context and embedder: the command-line surface
-// (--db, the key from --api-key-file or INFINO_API_KEY, --embed-provider, the
-// client and agent budgets, --analyzer, the forced-off auto switches), opening
-// a hosted index against a scripted fake fetch (readiness from list_tables, the
-// manifest synthesized from the server or read from a hosted sidecar), and the
-// null embedder the platform provider yields. No network, no engine: a hosted
-// open never touches a local catalog.
+// The platform database through config, context, manifest and embedder: the
+// command-line surface (--db, the key from --api-key-file or INFINO_API_KEY,
+// --embed-provider, the client and agent budgets, --analyzer), what opening an
+// index yields with and without a database (the local index always; the
+// platform client beside it for a build), the two manifests in one index dir,
+// the platform table's readiness memo, and the embedder that is local either
+// way. No network and no engine catalog is ever touched here.
 
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -23,6 +23,8 @@ import {
   DEFAULT_SUBAGENT_K,
   DEFAULT_SUBAGENT_MAX_TURNS,
   DEFAULT_SUBAGENT_MAX_WALL_SECS,
+  MANIFEST_NAME,
+  PLATFORM_MANIFEST_NAME,
   TABLE,
   configureHosted,
   hostedSettingsFromFlags,
@@ -44,20 +46,23 @@ import {
 } from "../src/core/config.js";
 import {
   NoIndexError,
-  PLATFORM_DEFAULT_ANALYZER,
-  PLATFORM_EMBEDDER_MODEL,
-  PLATFORM_EMBEDDER_PROVIDER,
-  localDb,
+  hostedDbFor,
   newHostedMemo,
   openForIndexing,
-  openForIndexingAsync,
-  openHostedHandle,
   openIndex,
-  openIndexAsync,
-  hostedDbFor,
+  platformLabel,
+  platformTableReady,
 } from "../src/core/context.js";
-import { INDEX_FORMAT_VERSION, readManifest, writeManifest, type Manifest } from "../src/core/manifest.js";
-import { createEmbedder, createIndexingEmbedder, embedderInfo } from "../src/core/embedder.js";
+import {
+  INDEX_FORMAT_VERSION,
+  emptyManifest,
+  readManifest,
+  readPlatformManifest,
+  writeManifest,
+  writePlatformManifest,
+  type Manifest,
+} from "../src/core/manifest.js";
+import { createEmbedder, createIndexingEmbedder, embedderInfo, platformEmbedderInfo } from "../src/core/embedder.js";
 
 // --- settings fixture -----------------------------------------------------------------
 
@@ -91,8 +96,8 @@ function settingsFor(flags: HostedFlags = {}) {
   return hostedSettingsFromFlags({ db: URL, ...flags }, { [API_KEY_ENV]: KEY });
 }
 
-/** Install a hosted target, as the CLI does once it has parsed the flags. */
-function hostedMode(flags: HostedFlags = {}): void {
+/** Install a platform database, as the CLI does once it has parsed the flags. */
+function withPlatform(flags: HostedFlags = {}): void {
   configureHosted(settingsFor(flags));
 }
 
@@ -122,33 +127,9 @@ function fakeFetch(script: unknown[]) {
 /** The op segment of a recorded request's URL: `/v1/<op>/<db>`. */
 const opOf = (call: Recorded): string => call.url.split("/v1/")[1].split("/")[0];
 
-/** The server's schema for a chunks table whose vectors the platform fills. */
-const PLATFORM_EMBEDDED_SCHEMA = [
-  { name: "path", type: "large_utf8", nullable: true },
-  { name: "content", type: "large_utf8", nullable: true },
-  { name: "embedding", type: "embedding", source: ["content"], nullable: false },
-];
-
-/** A chunks table with client-supplied vectors. */
-const CLIENT_VECTOR_SCHEMA = [
-  { name: "path", type: "large_utf8", nullable: true },
-  { name: "embedding", type: "vector", dim: 4, nullable: true },
-];
-
-/** A keyword-only chunks table. */
-const KEYWORD_SCHEMA = [
-  { name: "path", type: "large_utf8", nullable: true },
-  { name: "content", type: "large_utf8", nullable: true },
-];
-
-const COUNTS = [
-  { lang: "ts", n: 5, f: 2 },
-  { lang: "rs", n: 3, f: 1 },
-];
-
 let root: string;
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), "cx-hosted-"));
+  root = mkdtempSync(join(tmpdir(), "cx-platform-"));
 });
 afterEach(() => {
   rmSync(root, { recursive: true, force: true });
@@ -156,20 +137,19 @@ afterEach(() => {
 
 // --- config -----------------------------------------------------------------------------
 
-describe("hosted settings", () => {
-  it("is local without --db, and a hosted flag without --db is a usage error, not ignored", () => {
+describe("platform settings", () => {
+  it("is null without --db, and a platform flag without --db is a usage error, not ignored", () => {
     expect(hostedSettingsFromFlags({}, {})).toBeNull();
     expect(isHosted()).toBe(false);
     expect(hostedTarget()).toBeNull();
     expect(() => hostedSettingsFromFlags({ embedProvider: "platform" }, {})).toThrow(/--embed-provider needs --db <url>/);
-    expect(() => hostedSettingsFromFlags({ subagent: true }, {})).toThrow(/--subagent needs --db <url>/);
     expect(() => hostedSettingsFromFlags({ analyzer: "standard" }, {})).toThrow(/--analyzer needs --db <url>/);
-    // commander hands an unset boolean flag through as undefined or false; neither is a stray
-    expect(hostedSettingsFromFlags({ subagent: false }, {})).toBeNull();
+    expect(() => hostedSettingsFromFlags({ subagentK: "5" }, {})).toThrow(/--subagent-k needs --db/);
+    expect(() => hostedSettingsFromFlags({ exploreMaxWallSecs: "5" }, {})).toThrow(/--explore-max-wall-secs needs --db/);
   });
 
   it("builds the target from --db with the key from INFINO_API_KEY", () => {
-    hostedMode();
+    withPlatform();
     expect(isHosted()).toBe(true);
     expect(hostedTarget()).toEqual({ baseUrl: "https://api.example.test", database: "cx", apiKey: KEY });
   });
@@ -196,12 +176,12 @@ describe("hosted settings", () => {
     expect(settingsFor({ db: "http://127.0.0.1:9110/cx" })?.target).toMatchObject({ baseUrl: "http://127.0.0.1:9110", database: "cx" });
   });
 
-  it("embeds on the platform by default for a hosted target, locally for a local index, and refuses a misspelling", () => {
-    expect(embedProvider()).toBe("local");
+  it("fills the platform table's vectors on the platform by default, refuses a misspelling", () => {
     expect(DEFAULT_HOSTED_EMBED_PROVIDER).toBe("platform");
-    hostedMode();
     expect(embedProvider()).toBe("platform");
-    hostedMode({ embedProvider: "local" });
+    withPlatform();
+    expect(embedProvider()).toBe("platform");
+    withPlatform({ embedProvider: "local" });
     expect(embedProvider()).toBe("local");
     expect(settingsFor({ embedProvider: "Platform" })?.embedProvider).toBe("platform");
     expect(() => settingsFor({ embedProvider: "openai" })).toThrow(/--embed-provider must be "platform" or "local"/);
@@ -211,61 +191,58 @@ describe("hosted settings", () => {
     expect(hostedClientOptions()).toEqual({ timeoutMs: DEFAULT_DB_TIMEOUT_MS, coldStartSecs: DEFAULT_DB_COLD_START_SECS });
     expect(DEFAULT_DB_TIMEOUT_MS).toBe(60_000);
     expect(DEFAULT_DB_COLD_START_SECS).toBe(120);
-    hostedMode({ dbTimeoutMs: "1500", coldStartSecs: "7" });
+    withPlatform({ dbTimeoutMs: "1500", coldStartSecs: "7" });
     expect(hostedClientOptions()).toEqual({ timeoutMs: 1500, coldStartSecs: 7 });
     expect(() => settingsFor({ dbTimeoutMs: "soon" })).toThrow(/--db-timeout-ms must be a positive integer/);
     expect(() => settingsFor({ coldStartSecs: "0" })).toThrow(/--cold-start-secs must be a positive integer/);
   });
 
-  it("creates the hosted table with ascii_lower unless --analyzer says otherwise, and refuses a name the engine lacks", () => {
+  it("creates the platform table with ascii_lower unless --analyzer says otherwise, and refuses a name the engine lacks", () => {
     expect(hostedAnalyzer()).toBe("ascii_lower");
-    hostedMode();
+    withPlatform();
     expect(hostedAnalyzer()).toBe("ascii_lower");
-    hostedMode({ analyzer: "standard" });
+    withPlatform({ analyzer: "standard" });
     expect(hostedAnalyzer()).toBe("standard");
     expect(() => settingsFor({ analyzer: "icu" })).toThrow(/--analyzer must be "ascii_lower" or "standard"/);
   });
 
-  it("keeps the subagent tool off by default and reads its caps from the flags", () => {
-    hostedMode();
+  it("registers the platform tools whenever a database is configured, with caps from the flags", () => {
     expect(subagentEnabled()).toBe(false);
+    withPlatform();
+    expect(subagentEnabled()).toBe(true);
     expect(subagentMaxTurns()).toBe(DEFAULT_SUBAGENT_MAX_TURNS);
     expect(subagentMaxWallSecs()).toBe(DEFAULT_SUBAGENT_MAX_WALL_SECS);
     expect(DEFAULT_SUBAGENT_MAX_TURNS).toBe(4);
     expect(DEFAULT_SUBAGENT_MAX_WALL_SECS).toBe(120);
     expect(subagentK()).toBe(DEFAULT_SUBAGENT_K);
     expect(DEFAULT_SUBAGENT_K).toBe(DEFAULT_SEARCH_K);
-    hostedMode({ subagent: true, subagentMaxTurns: "3", subagentMaxWallSecs: "30", subagentK: "100" });
-    expect(subagentEnabled()).toBe(true);
+    withPlatform({ subagentMaxTurns: "3", subagentMaxWallSecs: "30", subagentK: "100" });
     expect(subagentMaxTurns()).toBe(3);
     expect(subagentMaxWallSecs()).toBe(30);
     expect(subagentK()).toBe(100);
     expect(() => settingsFor({ subagentMaxTurns: "-1" })).toThrow(/--subagent-max-turns must be a positive integer/);
     expect(() => settingsFor({ subagentK: "0" })).toThrow(/--subagent-k must be a positive integer/);
-    expect(() => settingsFor({ db: undefined, subagentK: "5" })).toThrow(/--subagent-k needs --db/);
   });
 
   it("leaves explore's turn cap to the platform unless a flag names one, and gives it its own wall", () => {
-    hostedMode({ subagent: true });
+    withPlatform();
     expect(exploreMaxTurns()).toBeUndefined();
     expect(exploreMaxWallSecs()).toBe(DEFAULT_EXPLORE_MAX_WALL_SECS);
     expect(DEFAULT_EXPLORE_MAX_WALL_SECS).toBe(300);
-    hostedMode({ subagent: true, exploreMaxTurns: "12", exploreMaxWallSecs: "600" });
+    withPlatform({ exploreMaxTurns: "12", exploreMaxWallSecs: "600" });
     expect(exploreMaxTurns()).toBe(12);
     expect(exploreMaxWallSecs()).toBe(600);
     expect(() => settingsFor({ exploreMaxTurns: "x" })).toThrow(/--explore-max-turns must be a positive integer/);
-    expect(() => settingsFor({ db: undefined, exploreMaxWallSecs: "5" })).toThrow(/--explore-max-wall-secs needs --db/);
   });
 
-  it("forces auto-index and auto-sync off for a hosted target whatever the env says", () => {
+  it("leaves auto-index and auto-sync to the env with or without a database - both write both places", () => {
+    expect(autoIndexEnabled()).toBe(true);
+    expect(autoSyncEnabled()).toBe(true);
+    withPlatform();
     expect(autoIndexEnabled()).toBe(true);
     expect(autoSyncEnabled()).toBe(true);
     process.env.CX_AUTO_INDEX = "0";
-    expect(autoIndexEnabled()).toBe(false);
-    delete process.env.CX_AUTO_INDEX;
-    hostedMode();
-    process.env.CX_AUTO_INDEX = "1";
-    process.env.CX_AUTO_SYNC = "true";
+    process.env.CX_AUTO_SYNC = "false";
     expect(autoIndexEnabled()).toBe(false);
     expect(autoSyncEnabled()).toBe(false);
   });
@@ -273,196 +250,138 @@ describe("hosted settings", () => {
 
 // --- embedder -----------------------------------------------------------------------------
 
-describe("embedder under the platform provider", () => {
-  it("creates no embedder and says so", () => {
-    hostedMode(); // platform is the hosted default
-    expect(createEmbedder()).toBeNull();
-    expect(createIndexingEmbedder()).toBeNull();
-    expect(embedderInfo()).toBe("platform (server-side)");
-  });
-
-  it("describes the local model by default", () => {
+describe("the embedder with a platform database configured", () => {
+  it("is the local model either way; only the platform table's description changes", () => {
     expect(embedderInfo()).toMatch(/^local .* \(no key, no network\)$/);
+    withPlatform();
+    expect(createEmbedder()).not.toBeNull();
+    expect(createEmbedder()!.provider).toBe("local");
+    expect(createIndexingEmbedder()).not.toBeNull();
+    expect(embedderInfo()).toMatch(/^local .* \(no key, no network\)$/);
+    expect(platformEmbedderInfo()).toBe("platform (server-side)");
+    withPlatform({ embedProvider: "local" });
+    expect(platformEmbedderInfo()).toMatch(/^local .*, vectors shipped$/);
   });
 });
 
-// --- opening a hosted index ---------------------------------------------------------------
+// --- opening the index --------------------------------------------------------------------
 
-describe("openIndexAsync (hosted)", () => {
-  it("is ready when list_tables names the chunks table and synthesizes the manifest from the server", async () => {
-    hostedMode();
-    const fake = fakeFetch([[TABLE, "other"], PLATFORM_EMBEDDED_SCHEMA, COUNTS]);
-    const handle = await openIndexAsync(root, { fetch: fake.fetch });
+describe("openIndex", () => {
+  it("reads the local index whether or not a database is configured, and names the root when there is none", () => {
+    expect(() => openIndex(root)).toThrow(NoIndexError);
+    expect(() => openIndex(root)).toThrow(new RegExp(`no index found under ${root}`));
+    withPlatform();
+    expect(() => openIndex(root)).toThrow(NoIndexError);
+    expect(existsSync(join(root, ".infino"))).toBe(false);
+  });
 
-    expect(handle.hosted).toBeDefined();
-    expect(handle.db).toBeUndefined();
+  it("opens the local catalog from its manifest, never the platform table's", () => {
+    const dir = join(root, ".infino");
+    writeManifest(dir, { ...emptyManifest(), files: 1, chunks: 2 });
+    withPlatform();
+    const handle = openIndex(root);
     expect(handle.root).toBe(root);
-    expect(handle.dir).toBe(join(root, ".infino"));
-    expect(handle.target).toBe(URL);
-
-    // Three round trips, all to this database with the bearer key and JSON accept.
-    expect(fake.calls.map(opOf)).toEqual(["list_tables", "schema", "query_sql"]);
-    for (const call of fake.calls) {
-      expect(call.url).toContain("/cx");
-      expect(call.headers.authorization).toBe(`Bearer ${KEY}`);
-      expect(call.headers.accept).toBe("application/json");
-    }
-    expect(JSON.parse(fake.calls[1].body!)).toEqual({ table_name: TABLE });
-
-    const m = handle.manifest;
-    expect(m.version).toBe(INDEX_FORMAT_VERSION);
-    expect(m.table).toBe(TABLE);
-    expect(m.origin).toBe("hosted");
-    expect(m.vectors).toBe("ready");
-    expect(m.embedder).toEqual({ provider: PLATFORM_EMBEDDER_PROVIDER, model: PLATFORM_EMBEDDER_MODEL });
-    expect(m.analyzer).toBe(PLATFORM_DEFAULT_ANALYZER);
-    expect(m.analyzer).toBe("standard");
-    expect(m.chunks).toBe(8);
-    expect(m.files).toBe(3);
-    expect(m.languages).toEqual({ ts: 5, rs: 3 });
-
-    // Cached to the sidecar, marked hosted, and no local catalog was created.
-    const sidecar = readManifest(handle.dir);
-    expect(sidecar).toEqual(m);
-    expect(existsSync(join(handle.dir, "_catalog"))).toBe(false);
+    expect(handle.dir).toBe(dir);
+    expect(handle.target).toBe(dir);
+    expect(handle.db).toBeDefined();
+    expect(handle.manifest.chunks).toBe(2);
+    expect(handle.manifest.origin).toBeUndefined();
   });
 
-  it("throws NoIndexError naming the target and the load command when the table is absent", async () => {
-    hostedMode();
-    const fake = fakeFetch([["something_else"]]);
-    const err = await openIndexAsync(root, { fetch: fake.fetch }).catch((e: unknown) => e);
-    expect(err).toBeInstanceOf(NoIndexError);
-    expect((err as Error).message).toBe(`no ${TABLE} table at ${URL} - load it with \`cx index --db ${URL}\`.`);
-    expect((err as Error).message).not.toContain(KEY);
-    // Nothing beyond the listing was asked, and no sidecar was written.
-    expect(fake.calls.map(opOf)).toEqual(["list_tables"]);
-    expect(existsSync(join(root, ".infino"))).toBe(false);
-  });
-
-  it("records ready vectors but no embedder for a client-vector column", async () => {
-    hostedMode();
-    const fake = fakeFetch([[TABLE], CLIENT_VECTOR_SCHEMA, COUNTS]);
-    const { manifest } = await openIndexAsync(root, { fetch: fake.fetch });
-    expect(manifest.vectors).toBe("ready");
-    expect(manifest.embedder).toBeUndefined();
-  });
-
-  it("records no vectors for a keyword-only table", async () => {
-    hostedMode();
-    const fake = fakeFetch([[TABLE], KEYWORD_SCHEMA, []]);
-    const { manifest } = await openIndexAsync(root, { fetch: fake.fetch });
-    expect(manifest.vectors).toBe("none");
-    expect(manifest.chunks).toBe(0);
-    expect(manifest.files).toBe(0);
-    expect(manifest.languages).toEqual({});
-  });
-
-  it("trusts a hosted sidecar manifest and skips the schema round trip", async () => {
-    hostedMode();
+  it("does not take the platform manifest for the local one (an index dir from before the split)", () => {
     const dir = join(root, ".infino");
-    const recorded: Manifest = {
-      version: INDEX_FORMAT_VERSION,
-      table: TABLE,
-      origin: "hosted",
-      vectors: "none",
-      analyzer: "ascii_lower",
-      files: 1,
-      chunks: 2,
-      languages: { ts: 2 },
-      indexedAt: new Date().toISOString(),
-      indexMs: 12,
-    };
-    writeManifest(dir, recorded);
-    const fake = fakeFetch([[TABLE]]);
-    const handle = await openIndexAsync(root, { fetch: fake.fetch });
-    expect(handle.manifest).toEqual(recorded);
-    expect(handle.manifest.analyzer).toBe("ascii_lower"); // the sidecar's, not the platform default
-    expect(fake.calls.map(opOf)).toEqual(["list_tables"]);
-  });
-
-  it("does not trust a LOCAL sidecar manifest for a hosted target, and leaves it in place", async () => {
-    hostedMode();
-    const dir = join(root, ".infino");
-    const local: Manifest = {
-      version: INDEX_FORMAT_VERSION,
-      table: TABLE,
-      vectors: "ready",
-      analyzer: "ascii_lower",
-      embedder: { provider: "local", model: "Xenova/all-MiniLM-L6-v2", dim: 384 },
-      files: 9,
-      chunks: 90,
-      languages: { ts: 90 },
-      indexedAt: new Date().toISOString(),
-      indexMs: 12,
-    };
-    writeManifest(dir, local);
-    const fake = fakeFetch([[TABLE], KEYWORD_SCHEMA, COUNTS]);
-    const handle = await openIndexAsync(root, { fetch: fake.fetch });
-    expect(handle.manifest.origin).toBe("hosted");
-    expect(handle.manifest.vectors).toBe("none");
-    expect(handle.manifest.analyzer).toBe("standard");
-    // The local index's own record survives; the synthesized one lives in memory.
-    expect(JSON.parse(readFileSync(join(dir, "codecontext.json"), "utf8"))).toEqual(local);
-  });
-
-  it("falls through to the local opener when no hosted target is configured", async () => {
-    await expect(openIndexAsync(root)).rejects.toThrow(new RegExp(`no index found under ${root}`));
+    // A pre-split build of the platform table wrote its manifest under the
+    // local name; it describes no local catalog and must read as absent.
+    writeFileSync(
+      join(dir, MANIFEST_NAME).replace(dir, (() => {
+        // ensure the dir exists first
+        writeManifest(dir, emptyManifest());
+        return dir;
+      })()),
+      JSON.stringify({ ...emptyManifest(), origin: "hosted" }),
+    );
+    expect(readManifest(dir)).toBeUndefined();
+    expect(() => openIndex(root)).toThrow(NoIndexError);
   });
 });
 
-describe("openHostedHandle memo", () => {
-  it("lists tables until the table is seen, then never again, and synthesizes once", async () => {
-    hostedMode();
-    const fake = fakeFetch([["nope"], [TABLE], PLATFORM_EMBEDDED_SCHEMA, COUNTS]);
-    const db = hostedDbFor(hostedTarget()!, { fetch: fake.fetch });
-    const memo = newHostedMemo();
-    const dir = join(root, ".infino");
-
-    expect(await openHostedHandle(db, root, dir, memo)).toBeNull();
-    expect(memo.ready).toBe(false);
-
-    const first = await openHostedHandle(db, root, dir, memo);
-    expect(first?.manifest.vectors).toBe("ready");
-    expect(memo.ready).toBe(true);
-    expect(fake.calls.map(opOf)).toEqual(["list_tables", "list_tables", "schema", "query_sql"]);
-
-    // A hosted sidecar was written by the synthesis, so the next call reads it
-    // and makes no request at all.
-    const second = await openHostedHandle(db, root, dir, memo);
-    expect(second?.manifest).toEqual(first?.manifest);
-    expect(fake.calls).toHaveLength(4);
-
-    // Without a sidecar the memoized synthesis serves, still with no request.
-    rmSync(dir, { recursive: true, force: true });
-    mkdirSync(dir);
-    const third = await openHostedHandle(db, root, dir, memo);
-    expect(third?.manifest).toEqual(first?.manifest);
-    expect(fake.calls).toHaveLength(4);
-  });
-});
-
-describe("the sync openers in hosted mode", () => {
-  it("refuse to open a local catalog while --db is set", () => {
-    hostedMode();
-    expect(() => openIndex(root)).toThrow(new RegExp(`--db is set \\(${URL.replace(/[.]/g, "\\.")}\\)`));
-    expect(() => openForIndexing(root)).toThrow(/--db is set/);
-    expect(existsSync(join(root, ".infino"))).toBe(false);
-  });
-
-  it("openForIndexingAsync yields the hosted client and the sidecar, no connection, no request", async () => {
-    hostedMode();
-    const fake = fakeFetch([]);
-    const target = await openForIndexingAsync(root, { fetch: fake.fetch });
-    expect(target.hosted).toBeDefined();
-    expect(target.db).toBeUndefined();
-    expect(target.target).toBe(URL);
+describe("openForIndexing", () => {
+  it("yields the local connection alone without a database", () => {
+    const target = openForIndexing(root);
+    expect(target.db).toBeDefined();
+    expect(target.hosted).toBeUndefined();
     expect(target.dir).toBe(join(root, ".infino"));
+    expect(target.target).toBe(target.dir);
+  });
+
+  it("yields the local connection AND the platform client with a database, making no request", () => {
+    withPlatform();
+    const fake = fakeFetch([]);
+    const target = openForIndexing(root, { fetch: fake.fetch });
+    expect(target.db).toBeDefined();
+    expect(target.hosted).toBeDefined();
+    expect(target.target).toBe(join(root, ".infino"));
+    expect(platformLabel(target.hosted!)).toBe(URL);
     expect(fake.calls).toHaveLength(0);
   });
 });
 
-describe("localDb", () => {
-  it("names a hosted target when a local-only path reaches it", () => {
-    expect(() => localDb({ target: URL })).toThrow(new RegExp(`${URL.replace(/[.]/g, "\\.")} is a hosted target`));
+// --- the platform table's readiness ------------------------------------------------------
+
+describe("platformTableReady", () => {
+  it("lists tables until the table is seen, then never again", async () => {
+    withPlatform();
+    const fake = fakeFetch([["nope"], [TABLE, "other"]]);
+    const db = hostedDbFor(hostedTarget()!, { fetch: fake.fetch });
+    const memo = newHostedMemo();
+
+    expect(await platformTableReady(db, memo)).toBe(false);
+    expect(memo.ready).toBe(false);
+    expect(await platformTableReady(db, memo)).toBe(true);
+    expect(memo.ready).toBe(true);
+    expect(await platformTableReady(db, memo)).toBe(true);
+    expect(fake.calls.map(opOf)).toEqual(["list_tables", "list_tables"]);
+    for (const call of fake.calls) {
+      expect(call.url).toContain("/cx");
+      expect(call.headers.authorization).toBe(`Bearer ${KEY}`);
+    }
+  });
+
+  it("tunes the client from the settings and labels it without the key", () => {
+    withPlatform({ dbTimeoutMs: "1500" });
+    const db = hostedDbFor(hostedTarget()!);
+    expect(platformLabel(db)).toBe(URL);
+    expect(platformLabel(db)).not.toContain(KEY);
+  });
+});
+
+// --- the two manifests --------------------------------------------------------------------
+
+describe("the two manifests", () => {
+  it("live in separate files and each reader rejects the other's origin", () => {
+    const dir = join(root, ".infino");
+    const local: Manifest = { ...emptyManifest(), files: 2, chunks: 5, analyzer: "ascii_lower" };
+    const platform: Manifest = { ...emptyManifest(), files: 2, chunks: 5, analyzer: "standard", embedder: { provider: "platform", model: "server-side" } };
+    writeManifest(dir, local);
+    writePlatformManifest(dir, platform);
+    expect(existsSync(join(dir, MANIFEST_NAME))).toBe(true);
+    expect(existsSync(join(dir, PLATFORM_MANIFEST_NAME))).toBe(true);
+
+    expect(readManifest(dir)).toEqual(local);
+    expect(readManifest(dir)!.origin).toBeUndefined();
+    const read = readPlatformManifest(dir)!;
+    expect(read.origin).toBe("hosted"); // forced by the writer
+    expect(read.analyzer).toBe("standard");
+    expect(read.embedder).toEqual({ provider: "platform", model: "server-side" });
+    expect(read.version).toBe(INDEX_FORMAT_VERSION);
+  });
+
+  it("reads the platform manifest as absent when there is none, or when the file describes a local index", () => {
+    const dir = join(root, ".infino");
+    expect(readPlatformManifest(dir)).toBeUndefined();
+    writeManifest(dir, emptyManifest());
+    expect(readPlatformManifest(dir)).toBeUndefined();
+    writeFileSync(join(dir, PLATFORM_MANIFEST_NAME), JSON.stringify(emptyManifest()));
+    expect(readPlatformManifest(dir)).toBeUndefined();
   });
 });

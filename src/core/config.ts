@@ -8,22 +8,22 @@ import { join, resolve } from "node:path";
 import { parseHostedUrl, DEFAULT_TIMEOUT_MS, DEFAULT_COLD_START_SECS, type HostedTarget } from "./hosted.js";
 import { HOSTED_DEFAULT_ANALYZER, isAnalyzer, type Analyzer } from "./analyzer.js";
 
-/** Directory name of the on-disk index, created in the repo root. In hosted
- * mode the same directory is the local SIDECAR: the manifest, the file state,
- * the usage ledger and build spills live here while the chunks table itself
- * lives on the platform. */
+/** Directory name of the on-disk index, created in the repo root: the local
+ * catalog, the two manifests, the file state, the usage ledger and build
+ * spills. */
 export const INDEX_DIR_NAME = ".infino";
 
-// --- hosted mode -----------------------------------------------------------------
+// --- the platform database -----------------------------------------------------------
 //
-// A hosted target moves the chunks table from the in-process engine to an
-// Infino platform database reached over HTTPS. Its settings are command-line
-// flags: the CLI parses them once into a HostedSettings (hostedSettingsFromFlags)
-// and installs it with configureHosted(); every layer below reads that object
-// through the accessor functions. Nothing here reads the environment except
-// the API key, the one value that must never be an argument - argv is visible
-// to every process on the machine - so it comes from a file named by
-// --api-key-file, or from INFINO_API_KEY.
+// A platform database (--db <url>) holds the same repository's chunks table
+// beside the local index, reached over HTTPS: every build and sync writes
+// both, and the `subagent` and `explore` tools read it. Its settings are
+// command-line flags: the CLI parses them once into a HostedSettings
+// (hostedSettingsFromFlags) and installs it with configureHosted(); every
+// layer below reads that object through the accessor functions. Nothing here
+// reads the environment except the API key, the one value that must never be
+// an argument - argv is visible to every process on the machine - so it comes
+// from a file named by --api-key-file, or from INFINO_API_KEY.
 
 /** The environment variable holding the bearer key when --api-key-file is not
  * given. The engine's remote binding, the ask harness and the platform all
@@ -50,20 +50,17 @@ export const DEFAULT_SUBAGENT_MAX_WALL_SECS = 120;
 /** Spellings that turn a boolean env flag off (`CX_AUTO_INDEX=0`, ...). */
 const OFF_VALUES = ["0", "false", "no"];
 
-/** Who embeds a hosted table: `platform` (the table's embedding field is filled
- * and queried server-side; no model runs on this machine) or `local` (the
- * in-process model, whose vectors are shipped). A hosted target defaults to
+/** Who fills the platform table's vectors: `platform` (its embedding column
+ * is filled and queried server-side with the platform's own model) or `local`
+ * (the in-process model's vectors, shipped with the rows). The default is
  * `platform` - point at a database and the whole system works with nothing
- * else set - and a local index can only be `local`. */
+ * else set. The local index always embeds locally; this never applies to it. */
 export type EmbedProvider = "local" | "platform";
 
-/** The default provider for a hosted target. */
+/** The default provider for the platform table. */
 export const DEFAULT_HOSTED_EMBED_PROVIDER: EmbedProvider = "platform";
 
 export interface SubagentSettings {
-  /** Whether the MCP server registers the tool. Off unless asked: every tool
-   * in the list is prompt text on every turn. */
-  enabled: boolean;
   /** Turn cap for one loop (the platform lowers a value above its own cap). */
   maxTurns: number;
   /** Wall clock for one loop, in seconds (likewise capped server-side). */
@@ -87,7 +84,8 @@ export interface ExploreSettings {
  * retrieval's wall; the flag raises or lowers it. */
 export const DEFAULT_EXPLORE_MAX_WALL_SECS = 300;
 
-/** Everything hosted mode is configured with, resolved and validated once. */
+/** Everything the platform database is configured with, resolved and
+ * validated once. */
 export interface HostedSettings {
   target: HostedTarget;
   embedProvider: EmbedProvider;
@@ -96,17 +94,17 @@ export interface HostedSettings {
   /** How long retryable "not ready yet" answers are re-issued before giving
    * up, in seconds. */
   coldStartSecs: number;
-  /** The FTS analyzer `cx index --db` creates the content index with. */
+  /** The FTS analyzer the platform table's content index is created with. */
   analyzer: Analyzer;
   subagent: SubagentSettings;
 }
 
-/** The hosted flags as commander parses them: camelCase of `--db`,
+/** The platform flags as commander parses them: camelCase of `--db`,
  * `--api-key-file`, `--embed-provider`, `--db-timeout-ms`, `--cold-start-secs`,
- * `--analyzer`, `--subagent`, `--subagent-max-turns`, `--subagent-max-wall-secs`,
+ * `--analyzer`, `--subagent-max-turns`, `--subagent-max-wall-secs`,
  * `--subagent-k`, `--explore-max-turns`, `--explore-max-wall-secs`. Every value
- * is the raw string (or the bare boolean); validation is here, in one place,
- * so a bad value is an error at startup and not on the first call. */
+ * is the raw string; validation is here, in one place, so a bad value is an
+ * error at startup and not on the first call. */
 export interface HostedFlags {
   db?: string;
   apiKeyFile?: string;
@@ -114,7 +112,6 @@ export interface HostedFlags {
   dbTimeoutMs?: string;
   coldStartSecs?: string;
   analyzer?: string;
-  subagent?: boolean;
   subagentMaxTurns?: string;
   subagentMaxWallSecs?: string;
   subagentK?: string;
@@ -129,7 +126,6 @@ const HOSTED_ONLY_FLAGS: Array<[keyof HostedFlags, string]> = [
   ["dbTimeoutMs", "--db-timeout-ms"],
   ["coldStartSecs", "--cold-start-secs"],
   ["analyzer", "--analyzer"],
-  ["subagent", "--subagent"],
   ["subagentMaxTurns", "--subagent-max-turns"],
   ["subagentMaxWallSecs", "--subagent-max-wall-secs"],
   ["subagentK", "--subagent-k"],
@@ -153,21 +149,21 @@ function optionalPositiveIntFlag(flag: string, raw: string | undefined): number 
   return positiveIntFlag(flag, raw, 0);
 }
 
-/** Resolve the hosted settings from the command line, or null when --db was
- * not given (local mode). Reads the key from --api-key-file, else from
- * INFINO_API_KEY in `env`; a hosted target with neither is refused here rather
- * than failing on the first request. Any other hosted flag without --db is a
- * usage error rather than a silently ignored option. */
+/** Resolve the platform settings from the command line, or null when --db was
+ * not given (no platform database: the local index alone). Reads the key from
+ * --api-key-file, else from INFINO_API_KEY in `env`; a database with neither
+ * is refused here rather than failing on the first request. Any other platform
+ * flag without --db is a usage error rather than a silently ignored option. */
 export function hostedSettingsFromFlags(flags: HostedFlags, env: NodeJS.ProcessEnv = process.env): HostedSettings | null {
   if (flags.db === undefined || flags.db === "") {
-    const stray = HOSTED_ONLY_FLAGS.find(([key]) => flags[key] !== undefined && flags[key] !== false);
-    if (stray) throw new Error(`${stray[1]} needs --db <url>: it configures the hosted database`);
+    const stray = HOSTED_ONLY_FLAGS.find(([key]) => flags[key] !== undefined);
+    if (stray) throw new Error(`${stray[1]} needs --db <url>: it configures the platform database`);
     return null;
   }
   const { baseUrl, database } = parseHostedUrl(flags.db);
   const apiKey = flags.apiKeyFile !== undefined ? readFileSync(flags.apiKeyFile, "utf8").trim() : (env[API_KEY_ENV] ?? "");
   if (apiKey.length === 0) {
-    throw new Error(`--db needs a key: pass --api-key-file <path> or set ${API_KEY_ENV} - the hosted engine is bearer-only`);
+    throw new Error(`--db needs a key: pass --api-key-file <path> or set ${API_KEY_ENV} - the platform is bearer-only`);
   }
   const providerRaw = (flags.embedProvider ?? DEFAULT_HOSTED_EMBED_PROVIDER).toLowerCase();
   if (providerRaw !== "local" && providerRaw !== "platform") {
@@ -182,7 +178,6 @@ export function hostedSettingsFromFlags(flags: HostedFlags, env: NodeJS.ProcessE
     coldStartSecs: positiveIntFlag("--cold-start-secs", flags.coldStartSecs, DEFAULT_DB_COLD_START_SECS),
     analyzer,
     subagent: {
-      enabled: flags.subagent === true,
       maxTurns: positiveIntFlag("--subagent-max-turns", flags.subagentMaxTurns, DEFAULT_SUBAGENT_MAX_TURNS),
       maxWallSecs: positiveIntFlag("--subagent-max-wall-secs", flags.subagentMaxWallSecs, DEFAULT_SUBAGENT_MAX_WALL_SECS),
       k: positiveIntFlag("--subagent-k", flags.subagentK, DEFAULT_SUBAGENT_K),
@@ -196,8 +191,13 @@ export function hostedSettingsFromFlags(flags: HostedFlags, env: NodeJS.ProcessE
   };
 }
 
-/** The process-wide hosted settings: installed once by the CLI at startup
- * (null = local mode), read by every layer through the accessors below. */
+/** The process-wide platform settings: installed once by the CLI at startup
+ * (null when no --db was given), read by every layer through the accessors
+ * below. There is no "hosted mode": the local index is always the one `find`,
+ * `search` and `sql` read, and these settings name the platform database
+ * that holds the same repository's chunks table for the `subagent` and
+ * `explore` tools. Every build and every sync writes both, so the two are one
+ * index in two places. */
 let hosted: HostedSettings | null = null;
 
 export function configureHosted(settings: HostedSettings | null): void {
@@ -208,29 +208,31 @@ export function hostedSettings(): HostedSettings | null {
   return hosted;
 }
 
-/** Whether a hosted target is configured. */
+/** Whether a platform database is configured (--db). */
 export function isHosted(): boolean {
   return hosted !== null;
 }
 
-/** The hosted target, or null in local mode. The key travels only inside the
- * returned object; callers log `hostedLabel(target)`, never the target. */
+/** The platform target, or null when none is configured. The key travels only
+ * inside the returned object; callers log `hostedLabel(target)`, never the
+ * target. */
 export function hostedTarget(): HostedTarget | null {
   return hosted?.target ?? null;
 }
 
-/** The embedding provider: the hosted setting, or `local` for a local index
- * (the in-process engine has no server-side model). */
+/** Who fills the platform table's embedding column: the --embed-provider
+ * setting, `platform` by default. The local index always embeds with the
+ * local model; this never applies to it. */
 export function embedProvider(): EmbedProvider {
-  return hosted?.embedProvider ?? "local";
+  return hosted?.embedProvider ?? DEFAULT_HOSTED_EMBED_PROVIDER;
 }
 
-/** The loggable name of a hosted target: `https://host/<database>`, no key. */
+/** The loggable name of a platform database: `https://host/<database>`, no key. */
 export function hostedLabel(target: { baseUrl: string; database: string }): string {
   return `${target.baseUrl.replace(/\/+$/, "")}/${target.database}`;
 }
 
-/** The hosted client's tuning, in the shape HostedOptions takes. */
+/** The platform client's tuning, in the shape HostedOptions takes. */
 export function hostedClientOptions(): { timeoutMs: number; coldStartSecs: number } {
   return {
     timeoutMs: hosted?.timeoutMs ?? DEFAULT_DB_TIMEOUT_MS,
@@ -238,16 +240,18 @@ export function hostedClientOptions(): { timeoutMs: number; coldStartSecs: numbe
   };
 }
 
-/** The analyzer a hosted load creates the `content` index with: the --analyzer
- * flag, else HOSTED_DEFAULT_ANALYZER. Sent to the platform explicitly and
- * recorded in the manifest, so queries mirror the right one. */
+/** The analyzer the platform table's `content` index is created with: the
+ * --analyzer flag, else HOSTED_DEFAULT_ANALYZER. Sent to the platform
+ * explicitly and recorded in the platform manifest. */
 export function hostedAnalyzer(): Analyzer {
   return hosted?.analyzer ?? HOSTED_DEFAULT_ANALYZER;
 }
 
-/** Whether the hosted `subagent` tool is registered (--subagent). */
+/** Whether the platform tools (`subagent`, `explore`) are registered: they
+ * are whenever a platform database is configured, since that is what it is
+ * for. */
 export function subagentEnabled(): boolean {
-  return hosted?.subagent.enabled ?? false;
+  return hosted !== null;
 }
 
 export function subagentMaxTurns(): number {
@@ -274,18 +278,19 @@ export function exploreMaxWallSecs(): number {
 }
 
 /** Whether a first query on an unindexed repo builds the index (CX_AUTO_INDEX,
- * default on). Always off for a hosted target: a first query must never drop
- * and recreate a table other people share. */
+ * default on). A build writes both the local index and, when a platform
+ * database is configured, its chunks table: the two are one index in two
+ * places and are never allowed to differ. */
 export function autoIndexEnabled(): boolean {
-  return !isHosted() && !OFF_VALUES.includes((process.env.CX_AUTO_INDEX ?? "").toLowerCase());
+  return !OFF_VALUES.includes((process.env.CX_AUTO_INDEX ?? "").toLowerCase());
 }
 
 /** Whether queries re-sync the index against the working tree (CX_AUTO_SYNC,
- * default on). Always off for a hosted target, for the same reason as
- * autoIndexEnabled: the shared table is loaded explicitly, never as a side
- * effect of a query. */
+ * default on). A sync applies the same diff to the local index and to the
+ * platform table when one is configured - deletes and appends to both at
+ * once - so the two stay in step. */
 export function autoSyncEnabled(): boolean {
-  return !isHosted() && !OFF_VALUES.includes((process.env.CX_AUTO_SYNC ?? "").toLowerCase());
+  return !OFF_VALUES.includes((process.env.CX_AUTO_SYNC ?? "").toLowerCase());
 }
 
 /** The one table every tool reads. Stable across index stages: the staged
@@ -294,8 +299,14 @@ export function autoSyncEnabled(): boolean {
 export const TABLE = "chunks";
 
 /** Manifest file inside the index dir - the product's own record of what the
- * index holds (the engine ignores foreign files in its catalog root). */
+ * local index holds (the engine ignores foreign files in its catalog root). */
 export const MANIFEST_NAME = "codecontext.json";
+
+/** The platform table's manifest, beside the local one in the same index
+ * dir: what the chunks table on the configured database holds, as loaded
+ * from this machine. Two files because the two tables share nothing but the
+ * directory - a local rebuild must not read as a platform reload. */
+export const PLATFORM_MANIFEST_NAME = "platform.json";
 
 /** Resolve the repo root a command operates on. */
 export function resolveRoot(path?: string): string {
