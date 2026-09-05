@@ -12,8 +12,24 @@
 // never in what the model sees.
 
 import * as arrow from "apache-arrow";
+import { Agent, fetch as undiciFetch } from "undici";
 
 // --- constants ------------------------------------------------------------------
+
+/** The HTTP agent every platform call goes through. Node's global fetch runs
+ * on undici with its own fixed timers - 300 s for the response headers, 300 s
+ * of body silence - underneath whatever signal the caller passes, so a call
+ * with a longer budget (an exploration queued at the platform's gate can
+ * legitimately take longer than that before its headers arrive) would fail as
+ * "fetch failed" before the platform answers. Those timers are off here (0
+ * disables them): the client's own per-call deadline, `AbortSignal.timeout`
+ * in `call`, is the one that applies. */
+const PLATFORM_AGENT = new Agent({ headersTimeout: 0, bodyTimeout: 0 });
+
+/** undici's fetch, bound to that agent, in the shape the client is typed
+ * against. Tests inject their own fetch instead. */
+const platformFetch: typeof fetch = ((input: string | URL | Request, init?: RequestInit) =>
+  undiciFetch(input as never, { ...(init as never as object), dispatcher: PLATFORM_AGENT } as never) as never as Promise<Response>) as typeof fetch;
 
 /** Per-call wall clock before a request is abandoned, when the caller sets
  * none: a cold read against a large table can take tens of seconds; a minute
@@ -283,7 +299,7 @@ export class HostedDb {
       throw new Error("hosted target needs an API key (apiKey / INFINO_API_KEY)");
     }
     this.target = { ...target, baseUrl: target.baseUrl.replace(/\/+$/, "") };
-    this.fetchImpl = opts.fetch ?? fetch;
+    this.fetchImpl = opts.fetch ?? platformFetch;
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.coldStartMs = (opts.coldStartSecs ?? DEFAULT_COLD_START_SECS) * MS_PER_SEC;
     this.onCall = opts.onCall;
