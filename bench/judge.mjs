@@ -190,6 +190,10 @@ async function judge(pair) {
     // The tools the judge called to verify, in order (cx:find, cx:sql, Grep,
     // Read, ...): whether a verdict on an index-grain count was measured.
     tools: acc.toolCalls,
+    // Calls whose result was an error - a tool outside the judge's list that
+    // the model asked for anyway, or a query the index refused - so a name in
+    // `tools` that never ran is told apart from one that did.
+    toolErrors: acc.toolDetails.filter((d) => d.isError).map((d) => d.name),
     winner: v ? toSide(v.winner) : null,
     confidence: v?.confidence ?? null,
     unsupportedBaseline: v ? (swap ? v.unsupported_b : v.unsupported_a) : null,
