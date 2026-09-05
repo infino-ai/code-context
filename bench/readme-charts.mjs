@@ -172,7 +172,7 @@ const written = [
     file: "tokens-per-pass.svg",
   }),
   barChart({
-    title: "Tool calls per pass - the main agent's round trips",
+    title: "Tool calls per pass - calls inside subagents included",
     subtitle: passSubtitle,
     items: passes.map((p) => ({ label: p.label, value: p.calls, color: p.color })),
     format: (v) => `${Math.round(v)}`,
