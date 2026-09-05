@@ -1,7 +1,5 @@
 <div align="center">
 
-![code-context: let your coding agent search, not crawl](docs/banner.png)
-
 [![CI](https://github.com/infino-ai/code-context/actions/workflows/ci.yml/badge.svg)](https://github.com/infino-ai/code-context/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/@infino-ai/code-context?label=%40infino-ai%2Fcode-context&logo=npm)](https://www.npmjs.com/package/@infino-ai/code-context)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
@@ -25,6 +23,8 @@ spawns. Two tools, and Claude decides when to call them:
   run the investigation in parallel, with deep context from the index. What
   comes back is one grounded answer with the facts it rests on, cited
   `path:line`.
+
+![Infino Subagent: find locally, explore in the cloud, one index in both places](docs/subagent/architecture.svg)
 
 The models are small on purpose. A small model reading the right code beats
 a large one deciding where to look next in a 256,000-line repository, at a

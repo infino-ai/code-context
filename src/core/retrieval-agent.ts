@@ -140,9 +140,9 @@ export interface RetrievalAgentResult {
 /** What the loop cost on the platform, for the usage ledger and receipt:
  * never part of the tool result. The platform reports one number per call,
  * `model_tokens` - the prompt and completion tokens of every model call the
- * loop made, together, the count its Model Spend meter billed the call on -
- * and nothing about which models or how many calls: its costs are its own,
- * and this is what lets a bill be checked against the responses. */
+ * loop made, together, the count the call is billed on - and nothing about
+ * which models or how many calls. This is what lets a bill be checked
+ * against the responses. */
 export interface RetrievalAgentSpend {
   modelTokens: number;
 }

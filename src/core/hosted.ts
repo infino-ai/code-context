@@ -61,8 +61,7 @@ const HTTP_OVERWHELMED = 529;
 /** The platform is at capacity - its model pool or the provider's quota has
  * no room for this call right now - and says so at once rather than holding
  * the call until it burns its own wall cap. Retryable, with backoff, for as
- * long as the call's own budget allows (the owner's decision after the
- * fifty-wide fan-out: surface the 429, let the client back off and retry). */
+ * long as the call's own budget allows. */
 const HTTP_TOO_MANY_REQUESTS = 429;
 /** A write lost a race (retryable when it carries `Retry-After`) or a name
  * already exists (terminal, no `Retry-After`). */

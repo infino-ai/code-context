@@ -133,7 +133,7 @@ stack.
 
 ## Architecture
 
-![How code-context fits together](architecture.png)
+![Infino Subagent: find locally, explore in the cloud, one index in both places](subagent/architecture.svg)
 
 - **Chunking:** tree-sitter (WASM, no native compiles) cuts at definition
   boundaries for TypeScript/JS, Python, Rust, Go, Java, C/C++, Ruby, C#, PHP;
