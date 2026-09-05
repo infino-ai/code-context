@@ -36,7 +36,8 @@
   },
   "main": "dist/cli.js",
   "files": [
-    "dist"
+    "dist",
+    "hooks"
   ],
   "engines": {
     "node": ">=20"
@@ -46,6 +47,7 @@
   },
   "scripts": {
     "build": "tsc",
+    "prepare": "npm run build",
     "watch": "tsc --watch",
     "test": "vitest run",
     "prepack": "npm run build"

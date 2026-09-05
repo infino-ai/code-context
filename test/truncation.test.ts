@@ -11,8 +11,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { connect, type Connection } from "@infino-ai/infino";
 import { indexRepo, syncRepo } from "../src/core/indexer.js";
 import { readManifest, type Manifest } from "../src/core/manifest.js";
-import { search, partialIndex } from "../src/core/searcher.js";
-import type { IndexHandle } from "../src/core/context.js";
+import { partialIndex } from "../src/core/searcher.js";
 import type { Embedder } from "../src/core/embedder.js";
 
 const fakeEmbedder: Embedder = {
@@ -29,7 +28,6 @@ let db: Connection;
 const cap = (maxFiles: number) => ({ maxFiles, maxFileBytes: 1024 * 1024 });
 const writeFile = (n: number) =>
   writeFileSync(join(root, "src", `f${n}.ts`), `export const value${n} = "token${n}";\n`);
-const handleFrom = (m: Manifest): IndexHandle => ({ root, dir, db, manifest: m });
 
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "cx-trunc-"));
@@ -71,10 +69,10 @@ describe("truncation end to end", () => {
     expect(m.truncatedFiles).toBe(2);
     expect(m.maxFiles).toBe(1);
 
-    const r = await search(handleFrom(m), fakeEmbedder, "token", 5);
-    expect(r.partial).toBeDefined();
-    expect(r.partial!.filesSkipped).toBe(2);
-    expect(r.partial!.fileCap).toBe(1);
+    const p = partialIndex(m);
+    expect(p).toBeDefined();
+    expect(p!.filesSkipped).toBe(2);
+    expect(p!.fileCap).toBe(1);
   });
 
   it("omits truncation fields and the marker when the whole tree fits", async () => {
@@ -85,7 +83,7 @@ describe("truncation end to end", () => {
     const m = readManifest(dir)!;
     expect(m.truncatedFiles).toBeUndefined();
     expect(m.maxFiles).toBeUndefined();
-    expect((await search(handleFrom(m), fakeEmbedder, "token", 5)).partial).toBeUndefined();
+    expect(partialIndex(m)).toBeUndefined();
   });
 
   it("starts tracking truncation once a growing repo crosses the cap", async () => {
@@ -140,6 +138,6 @@ describe("truncation end to end", () => {
     const m = readManifest(dir)!;
     expect(m.truncatedFiles).toBe(1);
     expect(m.maxFiles).toBe(1);
-    expect((await search(handleFrom(m), fakeEmbedder, "token", 5)).partial!.filesSkipped).toBe(1);
+    expect(partialIndex(m)!.filesSkipped).toBe(1);
   });
 });

@@ -31,6 +31,12 @@ export interface Manifest {
   version: number;
   /** Table name the index lives in (always `chunks` today). */
   table: string;
+  /** Absolute repo root this index was built from. Optional: manifests written
+   * before it existed omit it. It matters when the index does NOT sit in the
+   * repo (a custom CX_INDEX_DIR), where nothing else on disk ties the index
+   * back to its tree - tools that reason about repo-relative paths (the
+   * enforcement hook) would otherwise have to guess from a cwd. */
+  root?: string;
   vectors: VectorState;
   embedder?: EmbedderInfo;
   files: number;

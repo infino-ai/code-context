@@ -3,10 +3,10 @@
 ### What is code-context?
 
 Local code search for AI coding agents: a CLI (`cx`) and an MCP server over a
-ranked index that lives in plain files inside your repo. It fuses keyword
-(BM25) and semantic search in one pass and exposes read-only SQL over the
-index, so an agent answers questions about the codebase without reading it
-file by file.
+ranked index that lives in plain files inside your repo, queried through one
+door - read-only SQL whose table-valued search functions fuse keyword (BM25)
+and semantic ranking in one pass - so an agent answers questions about the
+codebase without reading it file by file.
 
 ### When should an agent use it instead of grep?
 
@@ -15,6 +15,29 @@ saves. Use it for understanding how a subsystem works, finding code by
 meaning when you do not know the identifier, and ranking or aggregating
 across the whole repo. For jumping to one known symbol or literal string, a
 plain grep is already cheap and there is no need for an index.
+
+### How do I make an agent actually use the index instead of grep?
+
+Install the enforcement hooks. The Claude Code plugin ships them; on any other
+client - `npx`, `claude mcp add-json`, Cursor, Windsurf - `cx install` writes
+them, and there it is the only form that survives a client restart (use one or
+the other, not both). It copies the hook to `~/.claude/hooks/cx-deny-grep.mjs`
+and merges `SessionStart` + `PreToolUse` entries into
+`~/.claude/settings.json` - idempotent, reversed by `cx install --uninstall`,
+and pointed at another file with `--settings <file>`. The entries embed the
+absolute path of the `node` that ran the install, because a client's process
+often has no `node` on `PATH` and a hook that cannot find node fails silently.
+
+With the hooks in place, once a repo's index fully covers it (vectors ready,
+nothing over the file cap) the Grep tool and standalone `grep`/`rg`/`git grep`
+are denied with a redirect to the `sql` search functions. Until the index is
+fully built grep is untouched - enforcement never pushes an agent onto an
+index that cannot answer yet. The deny is scoped, too: grep as a pipe filter
+on other command output always passes, and a target the index cannot cover
+(gitignored, over the byte cap, a dot-path, outside the repo) passes
+silently. Prefix a command with
+`CX_GREP_FALLBACK=1` to turn a deny into an approval prompt when an index
+search genuinely came up short; `CX_NO_ENFORCE=1` disables enforcement.
 
 ### Does my code leave the machine?
 
@@ -32,11 +55,11 @@ reports that honestly rather than failing.
 
 ### Do I have to index before I can search?
 
-No. The first `search` or `sql` on a repo that has never been indexed builds
-the index inline and answers on that same call - keyword search is live in
-seconds, vectors backfill behind it. Call `reindex` first if you'd rather
-kick the build off explicitly, or set `CX_AUTO_INDEX=0` to make an unindexed
-query return a "index it first" error instead of building.
+No. The MCP server builds the index as it starts, so it is typically live
+before the first query - and a `sql` query that beats the build still
+triggers it inline and answers on the same call. Keyword search is live in
+seconds, vectors backfill behind it. Set `CX_AUTO_INDEX=0` to disable both
+and make an unindexed query return an "index it first" error instead.
 
 ### Can one server handle more than one repo?
 
@@ -63,20 +86,20 @@ no-op. The MCP server also auto-syncs in the background as queries arrive.
 
 Indexing caps how many files it takes (`CX_MAX_FILES`, default 20,000); files
 past the cap are left out. When that happens the index is marked partial:
-every `search` and `sql` result carries a `partial` note with how many files
-were skipped and the cap in effect, so an agent treats a missing match as
-"maybe not indexed" rather than "not in the repo." `cx status` shows the same,
-and `cx search` prints a warning. Raise `CX_MAX_FILES` (CLI: `--max-files`)
-and re-index for full coverage.
+every `sql` result carries a `partial` note with how many files were skipped
+and the cap in effect, so an agent treats a missing match as "maybe not
+indexed" rather than "not in the repo." `cx status` shows the same. Raise
+`CX_MAX_FILES` (CLI: `--max-files`) and re-index for full coverage.
 
 ### What tools does the MCP server expose?
 
-Three, by design: `search` (hybrid keyword + semantic retrieval, one ranked
-pass, hits carry chunk content with `path:line` ranges), `sql` (read-only
-`SELECT`/`WITH` over the index, with the ranked search functions usable as
-table-valued relations so search composes with `GROUP BY`), and `reindex`
-(incremental sync). Every additional near-duplicate retrieval tool worsens an
-agent's tool selection, so the surface is kept deliberately small.
+Two, by design: `sql` (read-only `SELECT`/`WITH` over the index, with the
+ranked search functions - `hybrid_search`, `bm25_search`, `vector_search` -
+usable as table-valued relations, so one query finds code by meaning or exact
+term AND composes with `GROUP BY` for counts and rankings; rows carry chunk
+content with `path:line` ranges) and `reindex` (incremental sync). Every
+additional near-duplicate retrieval tool worsens an agent's tool selection,
+so retrieval lives inside SQL rather than beside it.
 
 ### How is SQL over code useful?
 
