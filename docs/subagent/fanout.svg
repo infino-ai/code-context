@@ -6,7 +6,7 @@
 <text x='20' y='105' fill='#24292f' font-size='13'>Sonnet + its Explore subagents, 72 spawned ($22.62) - 50 of 50 answered</text>
 <rect x='470' y='89' width='170' height='24' rx='4' fill='#d29922'/>
 <text x='650' y='106' fill='#24292f' font-size='13' font-weight='600'>1218 s</text>
-<text x='20' y='149' fill='#24292f' font-size='13'>Infino Subagent, 50 explorations (12 capped at 300 s) - 38 of 50 answered</text>
+<text x='20' y='149' fill='#24292f' font-size='13'>Infino Subagent, 50 explorations - 38 of 50 answered</text>
 <rect x='470' y='133' width='53' height='24' rx='4' fill='#2f81f7'/>
 <text x='533' y='150' fill='#24292f' font-size='13' font-weight='600'>379 s</text>
 </svg>

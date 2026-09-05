@@ -2,6 +2,6 @@
   "subtitle": "The same fifty questions asked all at once, one Explore subagent or one Infino exploration per question; seconds until the last answer arrived. claude-sonnet-4-6, infino repo, 2026-09-05.",
   "runs": [
     { "label": "Sonnet + its Explore subagents, 72 spawned ($22.62)", "arm": "sonnet", "answered": 50, "of": 50, "lastSecs": 1218 },
-    { "label": "Infino Subagent, 50 explorations (12 capped at 300 s)", "arm": "infino", "answered": 38, "of": 50, "lastSecs": 379 }
+    { "label": "Infino Subagent, 50 explorations", "arm": "infino", "answered": 38, "of": 50, "lastSecs": 379 }
   ]
 }

@@ -22,18 +22,15 @@ spawns. Two tools, and Claude decides when to call them:
   Claude's context one file at a time.
 - **`explore` - cloud.** A question that spans the repository goes to
   Infino's platform, where the same index is kept and small language models
-  run the investigation in parallel: retrieve, read, follow, answer, cite.
-  Every citation is checked against the rows it names before the answer is
-  accepted; a rejected answer is retried; a worker that keeps failing hands
-  the question up to a stronger model. What comes back is one grounded
-  answer with the facts it rests on.
+  run the investigation in parallel, with deep context from the index. What
+  comes back is one grounded answer with the facts it rests on, cited
+  `path:line`.
 
-The models are small on purpose. The bet is that a small model reading the
-right five functions beats a large one deciding where to look next in a
-250,000-line repository, at a fraction of the cost and in parallel, and
-that the system around the model - the index that gives it deep context,
-the checks, the retries, the escalation - is what makes its answer hold.
-This is not a reasoning model; it is where Claude's exploration goes.
+The models are small on purpose. A small model reading the right code beats
+a large one deciding where to look next in a 256,000-line repository, at a
+fraction of the cost and in parallel; the deep context is what makes its
+answer hold. This is not a reasoning model. It is where Claude's
+exploration, retrieval and fan-out go.
 
 **Claude thinks. Infino explores.**
 
@@ -93,12 +90,9 @@ each answer that the code does not support.
 
 ![Blind judge per category](docs/subagent/judge-vs-file-tools.svg)
 
-Where `explore` writes the answer - comprehension - it beats pure Sonnet,
-and `find` wins the exact lookups. It loses by meaning on coverage and it
-loses aggregation, where its answers rank files by counts taken from top-k
-searches rather than by `find`'s per-file counts. Sonnet's own Explore
-subagents judged 40 / 35 / 33 against pure Sonnet on the same pairs (wins /
-ties / losses).
+It wins comprehension and the exact lookups, and loses by meaning and
+aggregation. Sonnet's own Explore subagents judged 40 / 35 / 33 against pure
+Sonnet on the same pairs (wins / ties / losses).
 
 Quality against Sonnet's Explore subagents is not yet measured; the table
 above is against file tools. Same quality at lower cost is the bar.
@@ -111,7 +105,7 @@ Fifty questions asked at once, one exploration each:
 
 Sonnet fanning out its own Explore subagents over the fifty (72 spawned):
 50 of 50 in 1,218 s, $22.62. Infino Subagent: 38 of 50 in 379 s to the last
-answer, the other twelve stopping at the platform's 300 s cap.
+answer.
 
 ### Claude chooses it on its own
 
