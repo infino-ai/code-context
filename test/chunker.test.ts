@@ -95,6 +95,32 @@ describe("chunkFile", () => {
     expect(chunks[1].startLine).toBe(51);
   });
 
+  it("ends the last chunk at the file's last line, not one past it", async () => {
+    // Nearly every file ends with "\n". The empty string split() leaves behind
+    // that final newline is not a line, so MAX(end_line) must equal `wc -l`
+    // through every span builder: fixed windows, tree-sitter, markdown.
+    const fn = (i: number) => `export function f${i}() {\n${"  // body\n".repeat(15)}  return ${i};\n}\n`;
+    const cases: Array<{ path: string; content: string; lines: number }> = [
+      { path: "notes.txt", content: "a\nb\nc\n", lines: 3 },
+      { path: "notes.txt", content: "a\r\nb\r\nc\r\n", lines: 3 },
+      { path: "notes.txt", content: "a\nb\nc", lines: 3 }, // no trailing newline: nothing to drop
+      { path: "notes.txt", content: "a\n\n\n", lines: 3 }, // blank last lines are still lines
+      { path: "notes.txt", content: Array.from({ length: 150 }, (_, i) => `line ${i}`).join("\n") + "\n", lines: 150 },
+      { path: "mod.ts", content: "export function a() {\n  return 1;\n}\n\nexport function b() {\n  return 2;\n}\n", lines: 7 },
+      { path: "mod.ts", content: Array.from({ length: 6 }, (_, i) => fn(i)).join(""), lines: 6 * 18 },
+      { path: "doc.md", content: "# Title\ntext\n## Second\nmore\n", lines: 4 },
+    ];
+    for (const { path, content, lines } of cases) {
+      const chunks = await chunkFile(path, content);
+      expect(chunks[0].startLine).toBe(1);
+      // No gaps between consecutive chunks (fixed windows overlap, so <=).
+      for (let i = 1; i < chunks.length; i++) {
+        expect(chunks[i].startLine).toBeLessThanOrEqual(chunks[i - 1].endLine + 1);
+      }
+      expect(Math.max(...chunks.map((c) => c.endLine))).toBe(lines);
+    }
+  });
+
   it("carries the path and language on every chunk", async () => {
     const chunks = await chunkFile("src/x.py", "def f():\n    return 1\n");
     expect(chunks[0]).toMatchObject({ path: "src/x.py", lang: "py", startLine: 1 });
