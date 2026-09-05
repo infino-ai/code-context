@@ -8,7 +8,7 @@
 
 # Save 75% on your Anthropic bill. Same accuracy as Sonnet at 4x the performance.
 
-**Infino subagents. Offload retrieval tasks from frontier models at the same response quality.**
+**Infino Subagent for Claude Code. Install the plugin and start saving tokens today.**
 
 Claude Code keeps the reasoning. Infino Subagent takes the exploration off
 it: the retrieval, the fan-out, the fifty "go look at this" jobs a hard task
