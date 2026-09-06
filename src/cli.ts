@@ -60,7 +60,7 @@ program
       "Keyword search seconds after `cx index`; semantic and hybrid search when vectors\n" +
       "finish backfilling; SQL with relevance-ranked aggregation over the whole repo.\n" +
       "With --db the same index is also kept on an infino-platform database, where the\n" +
-      "subagent and explore tools run.",
+      "ask and explore tools run.",
   )
   .version("0.5.0")
   .addHelpText(
@@ -78,7 +78,7 @@ Examples:
   cx index --db https://api.platform.infino.ws/my-repo --api-key-file ~/.infino/key
                                       index the repo locally AND load it into the platform database
   cx mcp --db https://api.platform.infino.ws/my-repo --api-key-file ~/.infino/key
-                                      serve find/search/sql over the local index, plus subagent and
+                                      serve find/search/sql over the local index, plus ask and
                                       explore over the platform copy; every sync updates both`,
   );
 
@@ -158,12 +158,12 @@ program
 hostedOptions(
   program
     .command("mcp")
-    .description("serve the MCP tools (find / search / sql) over stdio; with --db, also subagent and explore over the platform table")
+    .description("serve the MCP tools (find / search / sql) over stdio; with --db, also ask and explore over the platform table")
     .option("-C, --path <dir>", "repo root (default: current directory)"),
 )
-  .option("--subagent-max-turns <n>", `turn cap for one subagent call (default ${DEFAULT_SUBAGENT_MAX_TURNS})`)
-  .option("--subagent-max-wall-secs <n>", `wall-clock cap for one subagent call, in seconds (default ${DEFAULT_SUBAGENT_MAX_WALL_SECS})`)
-  .option("--subagent-k <n>", `facts one subagent call asks for and returns (default ${DEFAULT_SUBAGENT_K}, search's k)`)
+  .option("--subagent-max-turns <n>", `turn cap for one ask call (default ${DEFAULT_SUBAGENT_MAX_TURNS})`)
+  .option("--subagent-max-wall-secs <n>", `wall-clock cap for one ask call, in seconds (default ${DEFAULT_SUBAGENT_MAX_WALL_SECS})`)
+  .option("--subagent-k <n>", `facts one ask call asks for and returns (default ${DEFAULT_SUBAGENT_K}, search's k)`)
   .option("--explore-max-turns <n>", "turn cap for one explore call (default: the platform's explore budget)")
   .option("--explore-max-wall-secs <n>", `wall-clock cap for one explore call, in seconds (default ${DEFAULT_EXPLORE_MAX_WALL_SECS})`)
   .action(async (opts: { path?: string } & HostedFlags) => {

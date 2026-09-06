@@ -9,7 +9,7 @@
 //   search   - find code: exact terms AND meaning in one ranked pass
 //   sql      - the power door: relevance-ranked aggregation over the search
 //              table functions (bm25_search / hybrid_search + GROUP BY)
-//   subagent - with --db: a question handed to the platform's retrieval
+//   ask - with --db: a question handed to the platform's retrieval
 //              loop, answered with the rows it retrieved
 //   explore  - with --db: a question about a mechanism, answered in writing
 //              by the platform's loop with the facts and chain behind it
@@ -91,7 +91,7 @@ export async function serveMcp(rootPath?: string): Promise<void> {
 
   // The platform database (--db <url>), when one is configured: the default
   // root's chunks table also lives there, written by every build and sync
-  // beside the local index and read by the `subagent` and `explore` tools.
+  // beside the local index and read by the `ask` and `explore` tools.
   // Resolved once here - a bad URL or a missing key fails the server at
   // startup, not on the first tool call. The key stays inside the target;
   // only `hostedLabel` ever reaches a log line.
@@ -280,12 +280,12 @@ export async function serveMcp(rootPath?: string): Promise<void> {
     );
   };
 
-  // The platform tools (`subagent`, `explore`) are registered whenever a
+  // The platform tools (`ask`, `explore`) are registered whenever a
   // platform database is configured. Their routing lines join the
   // instructions only then: the instructions are prompt text on every turn,
   // and a line for a tool that is not there would cost tokens and steer
   // toward nothing.
-  const subagent = hosted !== null;
+  const platformTools = hosted !== null;
 
   const server = new McpServer(
     { name: "code-context", version: "0.1.2" },
@@ -296,9 +296,9 @@ export async function serveMcp(rootPath?: string): Promise<void> {
         "- search - how does X work, where is Y handled, code by meaning.\n" +
         "- sql - counts, rankings, and aggregates across the repo, including ranking files by how " +
         "much of them is about a topic (rank by hybrid_search, not bm25, when the topic is a concept).\n" +
-        (subagent
-          ? "- subagent - a question or task in plain language; returns the rows it retrieved (facts with path:line and the code), not an answer: compose from them. Spawn several in parallel for independent questions. How often a string occurs, per file, is find's byFile.\n" +
-            "- explore - a question about a mechanism that spans files (how X works end to end, what calls what); it reads and follows what it finds and returns a written answer grounded in the facts it lists, with the chain of queries. Take the answer and cite its facts. Slower than subagent: use it when one retrieval will not do.\n"
+        (platformTools
+          ? "- ask - a question or task in plain language; returns the rows it retrieved (facts with path:line and the code), not an answer: compose from them. Spawn several in parallel for independent questions. How often a string occurs, per file, is find's byFile.\n" +
+            "- explore - a question about a mechanism that spans files (how X works end to end, what calls what); it reads and follows what it finds and returns a written answer grounded in the facts it lists, with the chain of queries. Take the answer and cite its facts. Slower than ask: use it when one retrieval will not do.\n"
           : "") +
         "Hits carry the code: when a hit answers the question, answer from it and cite path:line " +
         "without re-reading the file or re-checking with grep; Read a file only for a hit marked " +
@@ -524,14 +524,14 @@ export async function serveMcp(rootPath?: string): Promise<void> {
     },
   );
 
-  if (subagent) {
+  if (platformTools) {
     server.registerTool(
-      "subagent",
+      "ask",
       {
-        title: "Retrieval subagent over the repository index",
+        title: "Ask the repository index: one retrieval, the facts back",
         description:
-          "A read-only retrieval subagent over the repository index. Give it a question or task in " +
-          "plain language; it searches and ranks across the index itself and returns the facts it " +
+          "Ask the repository index a question or task in plain language: a read-only retrieval " +
+          "subagent searches and ranks across the index itself and returns the facts it " +
           "retrieved - the top rows with exact path, start_line, end_line and the code, in the shape of " +
           "search hits, plus aggregate rows (counts, rankings) and the SQL whose rows answer the " +
           "question - never a summary. Use it " +
@@ -565,7 +565,7 @@ export async function serveMcp(rootPath?: string): Promise<void> {
         // readiness: without a chunks table the platform would spend the whole
         // cold-start budget on "no table described yet" before saying
         // anything useful.
-        const missing = noPlatform("subagent", ctx);
+        const missing = noPlatform("ask", ctx);
         if (missing) return missing;
         let ensured: EnsureResult;
         try {
@@ -575,7 +575,7 @@ export async function serveMcp(rootPath?: string): Promise<void> {
         }
         if ("needsIndex" in ensured) return noIndex(ctx);
         if (!ensured.autoIndexed) maybeAutoSync(ctx); // a fresh build is already current
-        const notReady = await platformNotReady("subagent", ctx);
+        const notReady = await platformNotReady("ask", ctx);
         if (notReady) return notReady;
         try {
           const t0 = performance.now();
@@ -598,7 +598,7 @@ export async function serveMcp(rootPath?: string): Promise<void> {
             ...(usage ? { usage } : {}),
           });
         } catch (err) {
-          return fail(`subagent failed: ${(err as Error).message}${busyHint(err)}`);
+          return fail(`ask failed: ${(err as Error).message}${busyHint(err)}`);
         }
       },
     );
@@ -614,7 +614,7 @@ export async function serveMcp(rootPath?: string): Promise<void> {
           "its written answer, grounded in the facts it lists (hits: the rows it ended on, with exact " +
           "path, start_line, end_line and the code) and the chain of queries it ran. Take the answer " +
           "and cite path:line from its hits; it does not need re-reading or re-checking. Slower and " +
-          "dearer than subagent: use subagent for one retrieval, explore when one retrieval will not " +
+          "dearer than ask: use ask for one retrieval, explore when one retrieval will not " +
           "do. For every occurrence of an exact string use find; for a file you already know, Read " +
           "it. The result includes a 'usage' field, a one-line receipt of what the call cost.",
         inputSchema: {

@@ -130,7 +130,7 @@ describe("sql receipt", () => {
   });
 });
 
-describe("subagent receipt", () => {
+describe("ask receipt", () => {
   const answered: RetrievalAgentResult = {
     question: "which files?",
     sql: "SELECT path, COUNT(*) AS n FROM token_match('chunks','content','compaction') GROUP BY path",
@@ -144,7 +144,7 @@ describe("subagent receipt", () => {
 
   it("counts the statement, hits and rows as what was returned, records the places, and the loop's spend", () => {
     const entry = subagentEntry(answered, spend);
-    expect(entry.tool).toBe("subagent");
+    expect(entry.tool).toBe("ask");
     expect(entry.query).toBe("which files?");
     expect(entry.returnedTokens).toBe(estTokens(JSON.stringify({ sql: answered.sql, hits: answered.hits, rows: answered.rows })));
     expect(entry.hits).toEqual([{ path: "src/a.ts", startLine: 10, endLine: 30 }]);
@@ -179,7 +179,7 @@ describe("subagent receipt", () => {
     try {
       recordUsage(dir, subagentEntry(answered, spend));
       const [entry] = readUsage(dir);
-      expect(entry.tool).toBe("subagent");
+      expect(entry.tool).toBe("ask");
       expect(entry.agentTurns).toBe(4);
       expect(entry.agentModelTokens).toBe(12_555);
       expect(entry.hits).toEqual([{ path: "src/a.ts", startLine: 10, endLine: 30 }]);
@@ -226,7 +226,7 @@ describe("explore receipt", () => {
     expect(JSON.stringify(entry)).not.toContain("Tombstones are written");
   });
 
-  it("prints the same receipt shape as a subagent call", () => {
+  it("prints the same receipt shape as an ask call", () => {
     const line = formatReceipt(exploreEntry(explored, spend));
     expect(line).toMatch(/^returned ~\d+ tokens \| 1 hit \/ 0 rows \| 6 turns \| 40\.9k model tokens$/);
   });

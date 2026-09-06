@@ -17,7 +17,7 @@ export const INDEX_DIR_NAME = ".infino";
 //
 // A platform database (--db <url>) holds the same repository's chunks table
 // beside the local index, reached over HTTPS: every build and sync writes
-// both, and the `subagent` and `explore` tools read it. Its settings are
+// both, and the `ask` and `explore` tools read it. Its settings are
 // command-line flags: the CLI parses them once into a HostedSettings
 // (hostedSettingsFromFlags) and installs it with configureHosted(); every
 // layer below reads that object through the accessor functions. Nothing here
@@ -38,13 +38,13 @@ export const DEFAULT_DB_TIMEOUT_MS = DEFAULT_TIMEOUT_MS;
 /** Default cold-start budget: likewise the client's own default. */
 export const DEFAULT_DB_COLD_START_SECS = DEFAULT_COLD_START_SECS;
 
-/** Default turn cap for `subagent`: a few search turns and a statement.
+/** Default turn cap for `ask`: a few search turns and a statement.
  * Measured against 8: half the inner tokens per call and a much shorter tail
  * for the same rate of empty results - the outer agent, not the inner loop,
  * decides how far to go. */
 export const DEFAULT_SUBAGENT_MAX_TURNS = 4;
 
-/** Default wall clock for `subagent`, in seconds. */
+/** Default wall clock for `ask`, in seconds. */
 export const DEFAULT_SUBAGENT_MAX_WALL_SECS = 120;
 
 /** Spellings that turn a boolean env flag off (`CX_AUTO_INDEX=0`, ...). */
@@ -67,7 +67,7 @@ export interface SubagentSettings {
   maxWallSecs: number;
   /** Facts asked for and kept per call (the platform caps a value above its own). */
   k: number;
-  /** The `explore` tool's budget, registered beside `subagent`. */
+  /** The `explore` tool's budget, registered beside `ask`. */
   explore: ExploreSettings;
 }
 
@@ -199,7 +199,7 @@ export function hostedSettingsFromFlags(flags: HostedFlags, env: NodeJS.ProcessE
  * (null when no --db was given), read by every layer through the accessors
  * below. There is no "hosted mode": the local index is always the one `find`,
  * `search` and `sql` read, and these settings name the platform database
- * that holds the same repository's chunks table for the `subagent` and
+ * that holds the same repository's chunks table for the `ask` and
  * `explore` tools. Every build and every sync writes both, so the two are one
  * index in two places. */
 let hosted: HostedSettings | null = null;
@@ -261,7 +261,7 @@ export function subagentMaxWallSecs(): number {
   return hosted?.subagent.maxWallSecs ?? DEFAULT_SUBAGENT_MAX_WALL_SECS;
 }
 
-/** Facts one subagent call asks for and keeps (--subagent-k). */
+/** Facts one ask call asks for and keeps (--subagent-k). */
 export function subagentK(): number {
   return hosted?.subagent.k ?? DEFAULT_SUBAGENT_K;
 }
@@ -348,8 +348,8 @@ export const EMBED_MAX_CHARS = Number(process.env.CX_EMBED_MAX_CHARS ?? 8000);
  * CLI `-k`) and via CX_SEARCH_K for config/CI-level defaults. */
 export const DEFAULT_SEARCH_K = Number(process.env.CX_SEARCH_K ?? 10);
 
-/** Default number of facts one `subagent` call asks for and returns: as many
- * as a search returns, so a subagent result costs the outer agent what a
+/** Default number of facts one `ask` call asks for and returns: as many
+ * as a search returns, so an ask result costs the outer agent what a
  * search does. The platform retrieves and ranks more than this before
  * answering; `hitsTotal` says what was cut. */
 export const DEFAULT_SUBAGENT_K = DEFAULT_SEARCH_K;

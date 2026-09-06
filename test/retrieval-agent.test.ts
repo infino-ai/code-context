@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: Copyright The Infino Authors
 //
-// The subagent tool's logic, without an MCP transport: how a sub_agent
+// The ask tool's logic, without an MCP transport: how a sub_agent
 // response - the facts, the statement, the coverage - becomes the tool
 // result (hits and aggregate rows; never anything the model wrote), the
 // no-facts reporting, and what runRetrievalAgent sends. No network.

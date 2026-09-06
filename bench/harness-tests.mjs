@@ -117,14 +117,14 @@ test("combo and hosted share the built-in tools; hosted configures the server by
     assert.equal(server.env.CX_DB_URL, undefined);
     assert.equal(server.env.INFINO_API_KEY, undefined);
     assert.equal(server.env.CX_EMBED_PROVIDER, undefined);
-    // --db brings subagent and explore; the control lane hides both
-    assert.deepEqual(hosted.disallowedTools, ["mcp__code-context__subagent", "mcp__code-context__explore"]);
+    // --db brings ask and explore; the control lane hides both
+    assert.deepEqual(hosted.disallowedTools, ["mcp__code-context__ask", "mcp__code-context__explore"]);
     assert.deepEqual(combo.mcpServers["code-context"].args.slice(1), ["mcp"]);
     assert.equal(combo.disallowedTools, undefined);
   }, { CX_BENCH_EMBED_PROVIDER: undefined });
 });
 
-test("CX_BENCH_EMBED_PROVIDER passes through as --embed-provider; hosted-agent keeps subagent and hides explore", () => {
+test("CX_BENCH_EMBED_PROVIDER passes through as --embed-provider; hosted-agent keeps ask and hides explore", () => {
   withHostedEnv(() => {
     const opts = laneOptions("hosted-agent", "/r", "/r/.infino");
     assert.deepEqual(opts.mcpServers["code-context"].args.slice(1), ["mcp", "--db", FAKE_URL, "--api-key-file", FAKE_KEY_FILE, "--embed-provider", "local"]);
@@ -132,7 +132,7 @@ test("CX_BENCH_EMBED_PROVIDER passes through as --embed-provider; hosted-agent k
   }, { CX_BENCH_EMBED_PROVIDER: "local" });
 });
 
-test("agent-only keeps Read and subagent and hides the three retrieval tools and explore", () => {
+test("agent-only keeps Read and ask and hides the three retrieval tools and explore", () => {
   withHostedEnv(() => {
     const opts = laneOptions("agent-only", "/r", "/r/.infino");
     assert.deepEqual(opts.tools, ["Read"]);
@@ -141,7 +141,7 @@ test("agent-only keeps Read and subagent and hides the three retrieval tools and
   });
 });
 
-test("find-subagent keeps the stock tools, find and subagent, and hides search, sql and explore", () => {
+test("find-subagent keeps the stock tools, find and ask, and hides search, sql and explore", () => {
   withHostedEnv(() => {
     const opts = laneOptions("find-subagent", "/r", "/r/.infino");
     assert.deepEqual(opts.tools, ["Glob", "Grep", "Read", "LS", "Bash"]);
@@ -163,11 +163,11 @@ test("hosted-full hides nothing: all five code-context tools stay in the model's
   });
 });
 
-test("find-explore is find-subagent with explore in subagent's place", () => {
+test("find-explore is find-subagent with explore in ask's place", () => {
   withHostedEnv(() => {
     const opts = laneOptions("find-explore", "/r", "/r/.infino");
     assert.deepEqual(opts.tools, ["Glob", "Grep", "Read", "LS", "Bash"]);
-    assert.deepEqual(opts.disallowedTools, ["mcp__code-context__search", "mcp__code-context__sql", "mcp__code-context__subagent"]);
+    assert.deepEqual(opts.disallowedTools, ["mcp__code-context__search", "mcp__code-context__sql", "mcp__code-context__ask"]);
     assert.equal(opts.agents, undefined);
     assert.equal(opts.mcpServers["code-context"].args.includes("--db"), true);
   });
@@ -277,7 +277,7 @@ test("parseCxResult reads took_ms, the usage receipt and the platform's queries,
   assert.deepEqual(parseCxResult("search failed: no index"), { tookMs: null, usage: null, queries: [] });
   assert.deepEqual(parseCxResult(JSON.stringify({ rows: [] })), { tookMs: null, usage: null, queries: [] });
   assert.deepEqual(parseCxResult(null), { tookMs: null, usage: null, queries: [] });
-  // a subagent result names the statement its rows came from
+  // an ask result names the statement its rows came from
   assert.deepEqual(parseCxResult(JSON.stringify({ sql: "SELECT path FROM chunks LIMIT 1", hits: [], took_ms: 1 })).queries, ["SELECT path FROM chunks LIMIT 1"]);
   // an explore result carries its chain; the last statement is not listed twice
   const explore = { answer: "...", sql: "SELECT 2", chain: ["SELECT 1", "SELECT 2", "", 7], hits: [] };
@@ -320,7 +320,7 @@ test("foldToolMessage keeps the statements a platform tool ran, and recordedQuer
   const acc = newToolAccounting();
   foldToolMessage(acc, assistantCall("e1", "mcp__code-context__explore", { question: "how does compaction pick files?" }));
   foldToolMessage(acc, assistantCall("g1", "Grep", { pattern: "compact" }));
-  foldToolMessage(acc, assistantCall("s1", "mcp__code-context__subagent", { question: "count compaction tests" }));
+  foldToolMessage(acc, assistantCall("s1", "mcp__code-context__ask", { question: "count compaction tests" }));
   foldToolMessage(acc, userResult("e1", JSON.stringify({ answer: "...", chain: ["SELECT 1", "SELECT 2"], sql: "SELECT 2", hits: [], took_ms: 3 })));
   foldToolMessage(acc, userResult("s1", JSON.stringify({ sql: "SELECT COUNT(*) FROM chunks", rows: [{ count: 4 }], took_ms: 1 })));
   assert.deepEqual(acc.toolDetails[0].queries, ["SELECT 2", "SELECT 1"]);
@@ -330,7 +330,7 @@ test("foldToolMessage keeps the statements a platform tool ran, and recordedQuer
     'explore {"question":"how does compaction pick files?"}',
     "  ran: SELECT 2",
     "  ran: SELECT 1",
-    'subagent {"question":"count compaction tests"}',
+    'ask {"question":"count compaction tests"}',
     "  ran: SELECT COUNT(*) FROM chunks",
   ]);
   // rows written before inputs were kept have nothing to list

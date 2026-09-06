@@ -45,22 +45,22 @@ error, not a silent fall-through to the files lane. Every lane shares the same
 hermetic base and differs only in the toolset. `find`, `search` and `sql`
 read the local index in every lane; the platform lanes start the server with
 `--db`, which keeps the same index on a platform database too and registers
-the `subagent` and `explore` tools that run there.
+the `ask` and `explore` tools that run there.
 
 | lane           | kind   | built-in tools            | MCP server | server command line, after `cx mcp` (every MCP lane also gets `CX_ROOT`, `CX_INDEX_DIR`, `CX_AUTO_SYNC=0` in its env) | needs in your env                        |
 | -------------- | ------ | ------------------------- | ---------- | ---------------------------------------------------------------------------------------------------------------------- | ---------------------------------------- |
 | `files`        | local  | Glob, Grep, Read, LS, Bash | no         | -                                                                                                                      | -                                        |
 | `cx`           | local  | Read                      | yes        | -                                                                                                                      | -                                        |
 | `combo`        | local  | Glob, Grep, Read, LS, Bash | yes        | -                                                                                                                      | -                                        |
-| `hosted`       | hosted | Glob, Grep, Read, LS, Bash | yes        | `--db $CX_BENCH_DB_URL --api-key-file $CX_BENCH_KEY_FILE --embed-provider platform` (`CX_BENCH_EMBED_PROVIDER` overrides the provider), with `subagent` and `explore` removed from the model's context (the SDK's `disallowedTools`): the three local tools alone, a control | `CX_BENCH_DB_URL`, `CX_BENCH_KEY_FILE`  |
-| `hosted-agent` | hosted | Glob, Grep, Read, LS, Bash | yes        | as `hosted` with `subagent` kept (`explore` hidden)                                                                    | `CX_BENCH_DB_URL`, `CX_BENCH_KEY_FILE`  |
+| `hosted`       | hosted | Glob, Grep, Read, LS, Bash | yes        | `--db $CX_BENCH_DB_URL --api-key-file $CX_BENCH_KEY_FILE --embed-provider platform` (`CX_BENCH_EMBED_PROVIDER` overrides the provider), with `ask` and `explore` removed from the model's context (the SDK's `disallowedTools`): the three local tools alone, a control | `CX_BENCH_DB_URL`, `CX_BENCH_KEY_FILE`  |
+| `hosted-agent` | hosted | Glob, Grep, Read, LS, Bash | yes        | as `hosted` with `ask` kept (`explore` hidden)                                                                    | `CX_BENCH_DB_URL`, `CX_BENCH_KEY_FILE`  |
 | `agent-only`   | hosted | Read                      | yes        | as `hosted-agent`, with `find`, `search` and `sql` removed too                                                         | `CX_BENCH_DB_URL`, `CX_BENCH_KEY_FILE`  |
 
 | `stock-explore`    | local  | Glob, Grep, Read, LS, Bash, Agent | no  | - (the built-in Explore subagent)                                                                             | -                                        |
 | `index-explore`    | local  | Glob, Grep, Read, LS, Bash, Agent | yes | `Explore` overridden: `find`, `search`, `sql`, Read, Haiku inside                                             | -                                        |
 | `platform-explore` | hosted | Glob, Grep, Read, LS, Bash, Agent | yes | `--db ...`, `Explore` overridden: `explore` (the platform's explore mode), Read, Haiku relaying                 | `CX_BENCH_DB_URL`, `CX_BENCH_KEY_FILE`  |
-| `find-subagent`    | hosted | Glob, Grep, Read, LS, Bash        | yes | `--db ...`, with `search`, `sql` and `explore` removed from the model's context: `find` and `subagent` remain   | `CX_BENCH_DB_URL`, `CX_BENCH_KEY_FILE`  |
-| `find-explore`     | hosted | Glob, Grep, Read, LS, Bash        | yes | `find-subagent` with `explore` in `subagent`'s place: the main agent asks the platform's explore mode directly   | `CX_BENCH_DB_URL`, `CX_BENCH_KEY_FILE`  |
+| `find-subagent`    | hosted | Glob, Grep, Read, LS, Bash        | yes | `--db ...`, with `search`, `sql` and `explore` removed from the model's context: `find` and `ask` remain   | `CX_BENCH_DB_URL`, `CX_BENCH_KEY_FILE`  |
+| `find-explore`     | hosted | Glob, Grep, Read, LS, Bash        | yes | `find-subagent` with `explore` in `ask`'s place: the main agent asks the platform's explore mode directly   | `CX_BENCH_DB_URL`, `CX_BENCH_KEY_FILE`  |
 
 The agent lanes pass `CX_BENCH_AGENT_MAX_TURNS`, when set, through as the
 server's `--subagent-max-turns`, to measure the agent under a tighter turn cap,
@@ -77,7 +77,7 @@ inside them), so delegation is read off the rows.
 against a platform database (`CX_BENCH_DB_URL` is `https://host/<database>`,
 the shape the engine's own URI parser accepts) and the two tools that brings
 hidden - a control for the lanes that use them; `hosted-agent` keeps the
-`subagent` tool, a question or task handed to the platform's own agent loop,
+`ask` tool, a question or task handed to the platform's own agent loop,
 which returns the rows it retrieved, and measures whether the model picks it;
 `agent-only` leaves it as the only retrieval tool and measures its answers
 and cost in isolation; `find-subagent` pairs it with `find` alone.
@@ -210,7 +210,7 @@ is part of the instrument.
 
 1. **The engine version is a tool attribute.** `find`, `search` and `sql` run
    the `@infino-ai/infino` Node binding this checkout links, in every lane;
-   `subagent` and `explore` run whatever the platform runs. A gap in hit
+   `ask` and `explore` run whatever the platform runs. A gap in hit
    ranking between the two kinds of tool can be the engine version, not the
    tool; say which binding version the run used.
 2. **The platform's metering headers are cost, not work.** Report the

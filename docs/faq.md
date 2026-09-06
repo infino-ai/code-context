@@ -23,7 +23,7 @@ Not unless you ask it to. By default there are no accounts, no API keys, and
 no server: the embedding model is a small local model downloaded once from
 the public model hub, and after that everything runs offline. The one opt-in
 is `--db` (next question), which also keeps the index in a database you own
-on infino-platform, so the platform's `subagent` and `explore` tools can run
+on infino-platform, so the platform's `ask` and `explore` tools can run
 over it.
 
 ### Can the index also live on infino-platform?
@@ -34,7 +34,7 @@ then loads the same chunks into that database; every sync after it (the
 explicit `cx index`, or the MCP server's auto-sync as queries arrive) applies
 the same diff to both, so the two never drift. `find`, `search` and `sql`
 keep reading the local index. `cx mcp --db ...` adds two tools that run on the
-platform copy: `subagent`, which hands a question or task to the platform's
+platform copy: `ask`, which hands a question or task to the platform's
 retrieval agent and returns the rows it retrieved - exact `path:line` places
 with the code, plus counts and rankings - for the coding agent to compose
 from, never a written summary; and `explore`, which takes a question about a

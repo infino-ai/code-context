@@ -4,7 +4,7 @@
 // The platform REST client: code-context talks to an Infino platform database
 // over its `/v1/<op>/<database>` data plane to keep the repository's chunks
 // table there beside the local index (every build and sync writes both) and
-// to run the `subagent` and `explore` tools against it. This file owns the
+// to run the `ask` and `explore` tools against it. This file owns the
 // wire: request shapes (field names as the platform's request structs spell
 // them), auth, the cold-start retry loop, error decoding, and the Arrow IPC
 // encoding an append carries. Nothing here knows about chunks or tools - the

@@ -13,7 +13,7 @@
 // that reproduces at no grain is not. Each answer comes with the queries its
 // run made through code-context, as the result row recorded them (the sql
 // statement with its embed map, the find literal, the search query, and the
-// statements the platform ran for a subagent or explore call), so a count
+// statements the platform ran for an ask or explore call), so a count
 // built on a ranked search is reproduced by rerunning that query rather than
 // one the judge writes itself. Every verdict records the rule it was judged
 // under (`rule`), so verdicts from before the index tools were given to the

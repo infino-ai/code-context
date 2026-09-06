@@ -40,7 +40,9 @@ export const receiptEnabled = (): boolean =>
  * it doesn't duplicate the repo. */
 export interface UsageEntry {
   ts: string;
-  tool: "find" | "search" | "sql" | "subagent" | "explore";
+  /** The tool as the model saw it. `subagent` is the name `ask` had before
+   * and appears in older ledgers only; nothing writes it now. */
+  tool: "find" | "search" | "sql" | "ask" | "explore" | "subagent";
   query: string;
   returnedTokens: number;
   /** search only: whole-file size of the distinct files the hits came from. */
@@ -55,20 +57,20 @@ export interface UsageEntry {
   rows?: number;
   /** sql only: a truncated preview of the returned rows (the answer itself). */
   rowsPreview?: string;
-  /** subagent and explore: what the platform's agent spent on the question -
+  /** ask and explore: what the platform's agent spent on the question -
    * its turns, and the model tokens the platform metered for the call (prompt
    * and completion together, every model call of the loop; the platform bills
    * this number and reports no more of its costs). The receipt shows them, the
    * tool result does not. */
   agentTurns?: number;
   agentModelTokens?: number;
-  /** subagent only: whether the platform ranked the facts against the question. */
+  /** ask only: whether the platform ranked the facts against the question. */
   agentRanked?: boolean;
   /** explore only: whether the exploration came back with a written answer
    * (false when it ended on a cap or escalated and returned only what it had
    * read), so a run's empty explorations can be counted from the ledger. */
   agentAnswered?: boolean;
-  /** subagent and explore: what the platform call behind this entry cost on
+  /** ask and explore: what the platform call behind this entry cost on
    * the wire - the round trip of the answering request and the read/write
    * tokens the platform metered (from its response headers, when present).
    * Lives in the ledger, never in the tool result. */
@@ -135,14 +137,14 @@ export function sqlEntry(query: string, rows: Array<Record<string, unknown>>): U
   };
 }
 
-/** A subagent call returns facts - the statement, the hits and the aggregate
+/** An ask call returns facts - the statement, the hits and the aggregate
  * rows - so what it cost the outer agent is those serialized; the hits are
  * recorded as places like a search's, and the loop's own spend (turns,
  * tokens) is the platform's meter and rides beside them in the ledger. */
 export function subagentEntry(result: RetrievalAgentResult, spend: RetrievalAgentSpend): UsageEntry {
   return {
     ts: new Date().toISOString(),
-    tool: "subagent",
+    tool: "ask",
     query: result.question,
     returnedTokens: estTokens(jsonify({ sql: result.sql, hits: result.hits, rows: result.rows })),
     hits: result.hits.map((h) => ({ path: h.path, startLine: h.startLine, endLine: h.endLine })),
@@ -155,7 +157,7 @@ export function subagentEntry(result: RetrievalAgentResult, spend: RetrievalAgen
 
 /** An explore call returns the written answer, the chain and the last
  * query's facts: what it cost the outer agent is all of those serialized;
- * the places and the loop's spend are recorded as for a subagent call. */
+ * the places and the loop's spend are recorded as for an ask call. */
 export function exploreEntry(result: ExploreResult, spend: RetrievalAgentSpend): UsageEntry {
   const entry = subagentEntry(result, spend);
   entry.tool = "explore";
@@ -202,7 +204,7 @@ export function formatReceipt(entry: UsageEntry, session?: SessionUsage): string
     // The repo-wide count, not just the lines returned: a cut result still
     // tells the reader how many matches exist.
     parts.push(`returned ~${fmtTokens(entry.returnedTokens)} tokens | ${plural(entry.matches ?? hits.length, "match", "matches")} / ${plural(files, "file", "files")}`);
-  } else if (entry.tool === "subagent" || entry.tool === "explore") {
+  } else if (entry.tool === "ask" || entry.tool === "subagent" || entry.tool === "explore") {
     // What came back, then the inner agent's spend beside it: the platform
     // bills the model tokens, so the caller sees what one question cost there.
     const hits = entry.hits ?? [];

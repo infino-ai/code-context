@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: Copyright The Infino Authors
 //
-// The `subagent` tool, registered when a platform database is configured: one
+// The `ask` tool, registered when a platform database is configured: one
 // question or task handed to the platform's retrieval loop over the index's
 // platform copy (`POST /v1/sub_agent/{database}`), which answers
 // with FACTS - the first k rows of the query that validated, and that query
@@ -18,7 +18,7 @@ import type { HostedDb, RowRecord } from "./hosted.js";
 import { DEFAULT_SEARCH_K } from "./config.js";
 
 /** Place-naming rows kept in one result: as many as a search returns by
- * default, so a subagent result costs the outer agent what a search does.
+ * default, so an ask result costs the outer agent what a search does.
  * Measured at 50: a result averaged 10.9k tokens, which is where the lane's
  * token bill went. The platform retrieves and ranks more than this before
  * answering; `hitsTotal` says what was cut. */
@@ -30,7 +30,7 @@ export const MAX_HITS = DEFAULT_SEARCH_K;
 export const MAX_ROWS = 50;
 
 /** Characters kept of a hit's content: search's own cap on a chunk, so a
- * subagent hit reads exactly like a search hit. */
+ * ask hit reads exactly like a search hit. */
 export const HIT_CONTENT_CHARS = 4000;
 
 /** The platform's `terminate` value for a loop whose query validated
@@ -117,7 +117,7 @@ export interface RetrievalAgentCoverage {
   ranked?: boolean;
 }
 
-/** What the `subagent` tool returns to the outer agent: the facts. */
+/** What the `ask` tool returns to the outer agent: the facts. */
 export interface RetrievalAgentResult {
   question: string;
   /** The query whose rows are the facts, verbatim (SQL, or a `find(...)`), when one validated. */
@@ -247,7 +247,7 @@ function coverageOf(response: unknown): RetrievalAgentCoverage | undefined {
 export function retrievalAgentRunFrom(question: string, response: unknown, maxHits: number = MAX_HITS): RetrievalAgentRun {
   const body = asRecord(response);
   if (typeof body.terminate !== "string") {
-    throw new Error("subagent: the platform's response is not an agent result (no `terminate` field)");
+    throw new Error("ask: the platform's response is not an agent result (no `terminate` field)");
   }
   const terminate = body.terminate;
   const statement = typeof body.statement === "string" && body.statement.length > 0 ? body.statement : undefined;

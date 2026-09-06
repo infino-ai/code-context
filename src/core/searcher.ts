@@ -16,7 +16,7 @@
 //            vector functions.
 //
 // Every door runs against the LOCAL index (the in-process engine on the
-// handle). The platform table the `subagent` and `explore` tools read is the
+// handle). The platform table the `ask` and `explore` tools read is the
 // same index in another place; these doors never reach for it. What a
 // platform call cost goes to the usage ledger (hostedTelemetry), not into a
 // result.
@@ -83,7 +83,7 @@ export function jsonify(value: unknown, pretty = false): string {
   );
 }
 
-/** The ledger's record of what the platform call behind a `subagent` or
+/** The ledger's record of what the platform call behind an `ask` or
  * `explore` result cost: the round trip of the answering request and the
  * tokens the platform metered. Read right after the call, while the client's
  * last call is that one. Undefined when there is no platform client, so

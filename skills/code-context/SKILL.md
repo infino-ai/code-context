@@ -113,10 +113,10 @@ GROUP BY path ORDER BY lines DESC LIMIT 15
   infino-platform database; the build and every sync write both, so nothing
   about the lifecycle changes for you.
 
-## subagent and explore (when present)
+## ask and explore (when present)
 
 When the server was started with `--db` two more tools are registered, both
-running on the platform copy of the index. `subagent` hands a question or
+running on the platform copy of the index. `ask` hands a question or
 task in plain language to the platform's
 retrieval agent and returns the facts it retrieved, never a summary: `hits`
 (`path`, `startLine`-`endLine`, `content` - the shape of a `search` hit),
@@ -134,7 +134,7 @@ how X works end to end, what calls what - and returns `answer` (its
 written answer, grounded in the facts it lists), `chain` (the queries it
 ran, in order), and those facts in the same `hits` / `rows` / `sql` shape.
 It reads and follows what it finds, so it is slower and dearer than
-`subagent`: use `subagent` for one retrieval, `explore` when one retrieval
+`ask`: use `ask` for one retrieval, `explore` when one retrieval
 will not do. Take the answer and cite `path:line` from its hits; it does
 not need re-reading or re-checking.
 
@@ -156,7 +156,7 @@ different repository than the one the server started in.
 ## Cost awareness
 
 - `find`/`search`/`sql` calls are cheap: milliseconds against the local
-  index. `subagent` and `explore` are a platform round trip plus the
+  index. `ask` and `explore` are a platform round trip plus the
   platform's own retrieval loop, and are metered there.
 - The first index of a repo and the vector backfill are the expensive part
   (CPU for the local embedding model, proportional to repo size). Avoid

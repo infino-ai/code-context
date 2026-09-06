@@ -57,7 +57,7 @@ HTTPS, and a database that is not yet ready is retried for a bounded time
 never wait on it - they read the local index - but a sync is not done until
 both sides have the diff, and a platform failure is reported and retried by
 the next sync rather than papered over. What you get in exchange is the
-`subagent` and `explore` tools, which run on the platform and return facts
+`ask` and `explore` tools, which run on the platform and return facts
 and grounded answers instead of the coding agent crawling the repo itself.
 
 ### It is built for largely append-and-edit source trees

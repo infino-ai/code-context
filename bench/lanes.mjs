@@ -28,7 +28,7 @@ const STOCK_TOOLS = ["Glob", "Grep", "Read", "LS", "Bash"];
 const CX_TOOL_PREFIX = "mcp__code-context__";
 const CX_SHORT_PREFIX = "cx:";
 /** The three retrieval tools, hidden from the model in the agent-only lane
- * so that every retrieval has to go through `subagent`. */
+ * so that every retrieval has to go through `ask`. */
 const CX_RETRIEVAL_TOOLS = ["find", "search", "sql"];
 /** The built-in tool that spawns subagents, and the built-in read-only
  * exploration subagent the explore lanes override: a programmatic agent
@@ -94,10 +94,10 @@ export const DEFAULT_HOSTED_EMBED_PROVIDER = "platform";
 export const BENCH_DB_URL = "CX_BENCH_DB_URL";
 export const BENCH_KEY_FILE = "CX_BENCH_KEY_FILE";
 export const BENCH_EMBED_PROVIDER = "CX_BENCH_EMBED_PROVIDER";
-/** Optional turn cap for subagent in the agent lanes, passed through as
+/** Optional turn cap for ask in the agent lanes, passed through as
  * the server's --subagent-max-turns; unset leaves the server's default. */
 export const BENCH_AGENT_MAX_TURNS = "CX_BENCH_AGENT_MAX_TURNS";
-/** Optional facts-per-call for subagent in the agent lanes, passed through as
+/** Optional facts-per-call for ask in the agent lanes, passed through as
  * the server's --subagent-k; unset leaves the server's default. */
 export const BENCH_AGENT_K = "CX_BENCH_AGENT_K";
 
@@ -131,7 +131,7 @@ export function cxServer(serverEnv, args = []) {
 /** The server flags that name the platform database: the same for the MCP
  * server of a platform lane and for the `cx index` of load-hosted.mjs, so the
  * table is loaded the way the lane's tools expect it. With --db the server
- * registers the subagent and explore tools; find, search and sql read the
+ * registers the ask and explore tools; find, search and sql read the
  * local index either way. The key travels as the path of its file; nothing
  * here reads it. */
 export function hostedFlags(env = process.env) {
@@ -156,7 +156,7 @@ export function agentFlags(env = process.env) {
 
 /** The lane table. Each lane is the identical hermetic base plus:
  *   kind      "local" (the server has the local index alone) or "hosted" (the
- *             server also has the platform database, where the subagent and
+ *             server also has the platform database, where the ask and
  *             explore tools run) - recorded on every row as laneKind
  *   tools     the built-in tools the agent gets
  *   mcp       whether the code-context server is attached
@@ -171,11 +171,11 @@ export function agentFlags(env = process.env) {
  *   combo      - both, which is what installing the MCP server actually
  *                produces in a real client
  *   hosted     - combo with the platform database configured, and the
- *                subagent and explore tools it brings hidden: the three
+ *                ask and explore tools it brings hidden: the three
  *                local tools alone, as a control for the lanes below
- *   hosted-agent - combo plus the subagent tool (the platform's own agent
+ *   hosted-agent - combo plus the ask tool (the platform's own agent
  *                  loop); explore hidden
- *   agent-only - Read plus subagent alone: find, search and sql are
+ *   agent-only - Read plus ask alone: find, search and sql are
  *                hidden, so every retrieval goes through the platform's agent.
  *                Measures that agent's answers and cost in isolation - not how
  *                often a model would choose it (hosted-agent measures that).
@@ -186,12 +186,13 @@ export function agentFlags(env = process.env) {
  *   platform-explore - the same with the platform database, with Explore
  *                      overridden to run on the explore tool alone (the
  *                      platform's explore mode: reads, follows, answers)
- *   find-subagent    - the owner's surface: stock tools, find, and subagent,
- *                      with search, sql and explore hidden. Exact-text
- *                      questions have find; everything that spans the repo
- *                      has the platform's agent, which returns the rows it
- *                      retrieved
- *   find-explore     - find-subagent with explore in subagent's place: the
+ *   find-subagent    - stock tools, find, and ask (the tool was named
+ *                      subagent when the lane was; the lane keeps its name
+ *                      so its rows stay comparable), with search, sql and
+ *                      explore hidden. Exact-text questions have find;
+ *                      everything that spans the repo has the platform's
+ *                      agent, which returns the rows it retrieved
+ *   find-explore     - find-subagent with explore in ask's place: the
  *                      main agent asks the platform's explore mode directly
  *                      and gets a written answer beside the facts
  *   hosted-full      - everything at once: the stock tools plus all five
@@ -212,7 +213,7 @@ export const LANES = {
     mcp: true,
     env: mcpEnvBase,
     args: hostedFlags,
-    disallowedTools: ["subagent", "explore"].map((tool) => `${CX_TOOL_PREFIX}${tool}`),
+    disallowedTools: ["ask", "explore"].map((tool) => `${CX_TOOL_PREFIX}${tool}`),
     requires: HOSTED_REQUIRES,
   },
   "hosted-agent": {
@@ -274,7 +275,7 @@ export const LANES = {
     mcp: true,
     env: mcpEnvBase,
     args: (env) => [...hostedFlags(env), ...agentFlags(env)],
-    disallowedTools: ["search", "sql", "subagent"].map((tool) => `${CX_TOOL_PREFIX}${tool}`),
+    disallowedTools: ["search", "sql", "ask"].map((tool) => `${CX_TOOL_PREFIX}${tool}`),
     requires: HOSTED_REQUIRES,
   },
 };
@@ -355,7 +356,7 @@ export function toolResultText(block, toolUseResult) {
 /** The per-call telemetry of one code-context result: the server-side
  * took_ms and the one-line usage receipt, both fields of the JSON the tool
  * returns, and the queries the platform ran for the call - `sql`, the
- * statement whose rows a subagent result holds, and `chain`, every query an
+ * statement whose rows an ask result holds, and `chain`, every query an
  * exploration ran - so a judge can rerun what the answer was built on. A
  * result that is not JSON (an error message) yields nulls and no queries;
  * the call is still counted. */
@@ -398,7 +399,7 @@ export function keepInput(input) {
 
 /** The queries a run made through code-context, one line each, in the order
  * it made them: the call's input (the sql statement with its embed map, the
- * find literal, the search query, the question put to subagent or explore)
+ * find literal, the search query, the question put to ask or explore)
  * and, indented under a platform call, each statement the platform ran for
  * it. Rows written before inputs were kept yield nothing. */
 export function recordedQueries(toolDetails) {
