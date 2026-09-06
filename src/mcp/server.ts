@@ -468,11 +468,12 @@ export async function serveMcp(rootPath?: string): Promise<void> {
         `when you know the term that appears in the source; vector_search('${TABLE}','embedding', ` +
         "{{q}}, k) is meaning alone. The {{name}} placeholders are filled server-side from the embed " +
         "map, so they cost you nothing but the name. Rank files by a named topic, filtered on the " +
-        "same pass: SELECT path, SUM(end_line - start_line + 1) AS matched_lines, COUNT(*) AS chunks FROM " +
-        `bm25_search('${TABLE}','content','<term>', 300) WHERE path LIKE 'src/%' GROUP BY path ORDER BY ` +
-        "matched_lines DESC LIMIT 15 - every row holds the term, so a reader can check it. Rank by a " +
-        `paraphrased concept: the same shape over hybrid_search('${TABLE}','content','<terms>','embedding', ` +
-        "{{q}}, 300), with embed {\"q\":\"<the topic>\"}. " +
+        "same pass, with your own word in place of the example's: SELECT path, SUM(end_line - start_line + 1) " +
+        `AS matched_lines, COUNT(*) AS chunks FROM bm25_search('${TABLE}','content','compaction', 300) WHERE ` +
+        "path LIKE 'src/%' GROUP BY path ORDER BY matched_lines DESC LIMIT 15 - every row holds the word, so " +
+        "a reader can check it. Rank by a paraphrased concept, again with your own words in both places: " +
+        `the same shape over hybrid_search('${TABLE}','content','merge small superfiles','embedding', {{q}}, 300), ` +
+        "with embed {\"q\":\"how small superfiles are merged into larger ones\"}. " +
         "What such a total means: a search relation holds only the top k chunks of that query, so a " +
         "SUM or COUNT over it is the lines or chunks that matched within the top k - a share of the " +
         "file about the topic - and never the file's length or the repository's count; report it as " +
