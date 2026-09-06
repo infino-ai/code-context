@@ -24,6 +24,8 @@ import {
   toolResultText,
   parseCxResult,
   cxTookMs,
+  keepInput,
+  recordedQueries,
 } from "./lanes.mjs";
 import { warmHosted, splitDbUrl, DEFAULT_RETRY_AFTER_SECS } from "./warm-hosted.mjs";
 import { indexArgs, runIndexBuild, hostOf } from "./load-hosted.mjs";
@@ -254,7 +256,7 @@ test("dbHost is the host only, and null for local lanes", () => {
 // --- tool-result parsing ----------------------------------------------------
 
 const cxResult = { hits: [], took_ms: 12.5, usage: "returned ~300 tokens | 2 chunks / 2 files | invoked 1x this session (~300 tokens total)" };
-const assistantCall = (id, name) => ({ type: "assistant", message: { content: [{ type: "tool_use", id, name, input: {} }] } });
+const assistantCall = (id, name, input = {}) => ({ type: "assistant", message: { content: [{ type: "tool_use", id, name, input }] } });
 const userResult = (id, content, toolUseResult, isError = false) => ({
   type: "user",
   message: { content: [{ type: "tool_result", tool_use_id: id, content, ...(isError ? { is_error: true } : {}) }] },
@@ -270,30 +272,70 @@ test("toolResultText prefers the structured MCP output and falls back to the blo
   assert.equal(toolResultText({}, undefined), null);
 });
 
-test("parseCxResult reads took_ms and the usage receipt and tolerates non-JSON", () => {
-  assert.deepEqual(parseCxResult(JSON.stringify(cxResult)), { tookMs: 12.5, usage: cxResult.usage });
-  assert.deepEqual(parseCxResult("search failed: no index"), { tookMs: null, usage: null });
-  assert.deepEqual(parseCxResult(JSON.stringify({ rows: [] })), { tookMs: null, usage: null });
-  assert.deepEqual(parseCxResult(null), { tookMs: null, usage: null });
+test("parseCxResult reads took_ms, the usage receipt and the platform's queries, and tolerates non-JSON", () => {
+  assert.deepEqual(parseCxResult(JSON.stringify(cxResult)), { tookMs: 12.5, usage: cxResult.usage, queries: [] });
+  assert.deepEqual(parseCxResult("search failed: no index"), { tookMs: null, usage: null, queries: [] });
+  assert.deepEqual(parseCxResult(JSON.stringify({ rows: [] })), { tookMs: null, usage: null, queries: [] });
+  assert.deepEqual(parseCxResult(null), { tookMs: null, usage: null, queries: [] });
+  // a subagent result names the statement its rows came from
+  assert.deepEqual(parseCxResult(JSON.stringify({ sql: "SELECT path FROM chunks LIMIT 1", hits: [], took_ms: 1 })).queries, ["SELECT path FROM chunks LIMIT 1"]);
+  // an explore result carries its chain; the last statement is not listed twice
+  const explore = { answer: "...", sql: "SELECT 2", chain: ["SELECT 1", "SELECT 2", "", 7], hits: [] };
+  assert.deepEqual(parseCxResult(JSON.stringify(explore)).queries, ["SELECT 2", "SELECT 1"]);
 });
 
-test("foldToolMessage joins tool_use to tool_result by id and records cx telemetry only", () => {
+test("keepInput keeps the input object and cuts only over-long string fields", () => {
+  const embed = { q: "how compaction picks files" };
+  assert.deepEqual(keepInput({ query: "SELECT 1", embed }), { query: "SELECT 1", embed });
+  const long = "x".repeat(5000);
+  const kept = keepInput({ command: long, n: 3 });
+  assert.equal(kept.n, 3);
+  assert.equal(kept.command.length, 4000 + "... (5000 chars)".length);
+  assert.ok(kept.command.endsWith("... (5000 chars)"));
+  assert.equal(keepInput(undefined), undefined);
+  assert.equal(keepInput("text"), "text");
+});
+
+test("foldToolMessage joins tool_use to tool_result by id, keeps every input and records cx telemetry only", () => {
   const acc = newToolAccounting();
-  foldToolMessage(acc, assistantCall("t1", "mcp__code-context__search"));
-  foldToolMessage(acc, assistantCall("t2", "Read"));
-  foldToolMessage(acc, assistantCall("t3", "mcp__code-context__sql"));
+  const sqlInput = { query: "SELECT path, COUNT(*) AS chunks FROM hybrid_search('chunks','content','compaction','embedding', {{q}}, 300) GROUP BY path", embed: { q: "compaction" } };
+  foldToolMessage(acc, assistantCall("t1", "mcp__code-context__search", { query: "where files are merged" }));
+  foldToolMessage(acc, assistantCall("t2", "Read", { file_path: "/r/src/lib.rs" }));
+  foldToolMessage(acc, assistantCall("t3", "mcp__code-context__sql", sqlInput));
   // t1 arrives with the structured output; t3 with only the block text; t2 is a built-in
   foldToolMessage(acc, userResult("t1", "ignored", { content: [{ type: "text", text: JSON.stringify(cxResult) }] }));
   foldToolMessage(acc, userResult("t2", "file contents"));
   foldToolMessage(acc, userResult("t3", JSON.stringify({ rows: [], took_ms: 7.5, usage: "returned ~10 tokens | 0 rows" })));
   assert.deepEqual(acc.toolCalls, ["cx:search", "Read", "cx:sql"]);
   assert.deepEqual(acc.toolDetails, [
-    { name: "cx:search", tookMs: 12.5, usage: cxResult.usage },
-    { name: "Read", tookMs: null, usage: null },
-    { name: "cx:sql", tookMs: 7.5, usage: "returned ~10 tokens | 0 rows" },
+    { name: "cx:search", input: { query: "where files are merged" }, tookMs: 12.5, usage: cxResult.usage },
+    { name: "Read", input: { file_path: "/r/src/lib.rs" }, tookMs: null, usage: null },
+    { name: "cx:sql", input: sqlInput, tookMs: 7.5, usage: "returned ~10 tokens | 0 rows" },
   ]);
   assert.equal(cxTookMs(acc.toolDetails), 20);
   assert.equal(acc.pending.size, 0);
+});
+
+test("foldToolMessage keeps the statements a platform tool ran, and recordedQueries lists them under the call", () => {
+  const acc = newToolAccounting();
+  foldToolMessage(acc, assistantCall("e1", "mcp__code-context__explore", { question: "how does compaction pick files?" }));
+  foldToolMessage(acc, assistantCall("g1", "Grep", { pattern: "compact" }));
+  foldToolMessage(acc, assistantCall("s1", "mcp__code-context__subagent", { question: "count compaction tests" }));
+  foldToolMessage(acc, userResult("e1", JSON.stringify({ answer: "...", chain: ["SELECT 1", "SELECT 2"], sql: "SELECT 2", hits: [], took_ms: 3 })));
+  foldToolMessage(acc, userResult("s1", JSON.stringify({ sql: "SELECT COUNT(*) FROM chunks", rows: [{ count: 4 }], took_ms: 1 })));
+  assert.deepEqual(acc.toolDetails[0].queries, ["SELECT 2", "SELECT 1"]);
+  assert.equal(acc.toolDetails[1].queries, undefined);
+  assert.deepEqual(acc.toolDetails[2].queries, ["SELECT COUNT(*) FROM chunks"]);
+  assert.deepEqual(recordedQueries(acc.toolDetails), [
+    'explore {"question":"how does compaction pick files?"}',
+    "  ran: SELECT 2",
+    "  ran: SELECT 1",
+    'subagent {"question":"count compaction tests"}',
+    "  ran: SELECT COUNT(*) FROM chunks",
+  ]);
+  // rows written before inputs were kept have nothing to list
+  assert.deepEqual(recordedQueries([{ name: "cx:sql", tookMs: 1, usage: null }]), []);
+  assert.deepEqual(recordedQueries(undefined), []);
 });
 
 test("foldToolMessage marks errored results and ignores results with no matching call", () => {
@@ -303,7 +345,7 @@ test("foldToolMessage marks errored results and ignores results with no matching
   foldToolMessage(acc, userResult("orphan", "x"));
   foldToolMessage(acc, { type: "user", message: { content: "a plain prompt echo" } });
   foldToolMessage(acc, { type: "result", result: "done" });
-  assert.deepEqual(acc.toolDetails, [{ name: "cx:find", tookMs: null, usage: null, isError: true }]);
+  assert.deepEqual(acc.toolDetails, [{ name: "cx:find", input: {}, tookMs: null, usage: null, isError: true }]);
   assert.equal(cxTookMs(acc.toolDetails), 0);
 });
 

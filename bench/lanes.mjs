@@ -354,19 +354,61 @@ export function toolResultText(block, toolUseResult) {
 
 /** The per-call telemetry of one code-context result: the server-side
  * took_ms and the one-line usage receipt, both fields of the JSON the tool
- * returns. A result that is not JSON (an error message) yields nulls; the
- * call is still counted. */
+ * returns, and the queries the platform ran for the call - `sql`, the
+ * statement whose rows a subagent result holds, and `chain`, every query an
+ * exploration ran - so a judge can rerun what the answer was built on. A
+ * result that is not JSON (an error message) yields nulls and no queries;
+ * the call is still counted. */
 export function parseCxResult(text) {
-  if (typeof text !== "string") return { tookMs: null, usage: null };
+  const none = { tookMs: null, usage: null, queries: [] };
+  if (typeof text !== "string") return none;
   try {
     const v = JSON.parse(text);
+    const queries = [];
+    if (typeof v?.sql === "string" && v.sql.length > 0) queries.push(v.sql);
+    if (Array.isArray(v?.chain)) {
+      for (const q of v.chain) if (typeof q === "string" && q.length > 0 && !queries.includes(q)) queries.push(q);
+    }
     return {
       tookMs: typeof v?.took_ms === "number" ? v.took_ms : null,
       usage: typeof v?.usage === "string" ? v.usage : null,
+      queries,
     };
   } catch {
-    return { tookMs: null, usage: null };
+    return none;
   }
+}
+
+/** The most characters of one string field of a tool's input that a result
+ * row keeps: long enough for any statement, short enough that a shell
+ * heredoc or a pasted file does not become the row. */
+const INPUT_CHARS_KEPT = 4000;
+
+/** A tool call's input as the row keeps it: the object as given, each string
+ * field cut at INPUT_CHARS_KEPT with its full length noted. Anything that is
+ * not an object (the SDK gives one) is kept as is. */
+export function keepInput(input) {
+  if (input === null || typeof input !== "object" || Array.isArray(input)) return input;
+  const kept = {};
+  for (const [k, v] of Object.entries(input)) {
+    kept[k] = typeof v === "string" && v.length > INPUT_CHARS_KEPT ? `${v.slice(0, INPUT_CHARS_KEPT)}... (${v.length} chars)` : v;
+  }
+  return kept;
+}
+
+/** The queries a run made through code-context, one line each, in the order
+ * it made them: the call's input (the sql statement with its embed map, the
+ * find literal, the search query, the question put to subagent or explore)
+ * and, indented under a platform call, each statement the platform ran for
+ * it. Rows written before inputs were kept yield nothing. */
+export function recordedQueries(toolDetails) {
+  const lines = [];
+  for (const d of toolDetails ?? []) {
+    if (!isCxTool(d.name) || d.input === undefined) continue;
+    lines.push(`${d.name.slice(CX_SHORT_PREFIX.length)} ${JSON.stringify(d.input)}`);
+    for (const q of d.queries ?? []) lines.push(`  ran: ${q}`);
+  }
+  return lines;
 }
 
 /** Fold one SDK message into the per-run tool accounting. Assistant messages
@@ -383,7 +425,9 @@ export function foldToolMessage(acc, m) {
       if (b.type === "tool_use") {
         const name = shortToolName(b.name);
         acc.toolCalls.push(name);
-        const detail = { name, tookMs: null, usage: null, ...(inSubagent ? { inSubagent: true } : {}) };
+        // The input is kept for every call, so the queries an answer was
+        // built on can be rerun by whoever grades it.
+        const detail = { name, input: keepInput(b.input), tookMs: null, usage: null, ...(inSubagent ? { inSubagent: true } : {}) };
         acc.toolDetails.push(detail);
         if (b.id) acc.pending.set(b.id, detail);
         if (inSubagent) acc.subagentCalls++;
@@ -404,6 +448,7 @@ export function foldToolMessage(acc, m) {
       const parsed = parseCxResult(toolResultText(b, m.tool_use_result));
       detail.tookMs = parsed.tookMs;
       detail.usage = parsed.usage;
+      if (parsed.queries.length) detail.queries = parsed.queries;
     }
   }
 }

@@ -10,9 +10,15 @@
 // same local index the lanes ran on, CX_INDEX_DIR or <repo>/.infino) for the
 // hit and chunk counts an answer built on the index reports. A count that
 // reproduces at its stated grain is supported whichever tool that takes; one
-// that reproduces at no grain is not. Every verdict records the rule it was
-// judged under (`rule`), so verdicts from before the index tools were given
-// to the judge (no `rule`) never tally with these.
+// that reproduces at no grain is not. Each answer comes with the queries its
+// run made through code-context, as the result row recorded them (the sql
+// statement with its embed map, the find literal, the search query, and the
+// statements the platform ran for a subagent or explore call), so a count
+// built on a ranked search is reproduced by rerunning that query rather than
+// one the judge writes itself. Every verdict records the rule it was judged
+// under (`rule`), so verdicts from before the index tools were given to the
+// judge (no `rule`), and those before the queries were handed to it
+// ("grain"), never tally with these.
 //
 // Usage: node judge.mjs <repoDir> <baseline> <candidate> [results=questions.jsonl] [cats] [lane=combo]
 //   baseline / candidate  build labels as recorded on the rows (`build`), or a
@@ -28,7 +34,7 @@
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { query } from "@anthropic-ai/claude-agent-sdk";
-import { RESULTS, record, laneDef, cxServer, mcpEnvBase, foldToolMessage, newToolAccounting } from "./lanes.mjs";
+import { RESULTS, record, laneDef, cxServer, mcpEnvBase, foldToolMessage, newToolAccounting, recordedQueries } from "./lanes.mjs";
 
 const [repoArg, baselineArg, candidateArg, resultsArg, catsArg, laneArg] = process.argv.slice(2);
 if (!repoArg || !baselineArg || !candidateArg) {
@@ -40,10 +46,11 @@ const repoDir = resolve(repoArg);
 // ran on, by the same rule run-questions.mjs uses to find it.
 const indexDir = process.env.CX_INDEX_DIR ?? join(repoDir, ".infino");
 /** The verification rule these verdicts are judged under, recorded on each:
- * "grain" - every claim checked at the grain the answer states, with the
- * checkout's tools or the index's. Verdicts without a rule predate it (the
- * judge then had the checkout's tools alone). */
-const JUDGE_RULE = "grain";
+ * "grain+queries" - every claim checked at the grain the answer states, with
+ * the checkout's tools or the index's, and the run's recorded queries handed
+ * to the judge to rerun. "grain" verdicts had the tools but not the queries;
+ * verdicts without a rule predate both (the checkout's tools alone). */
+const JUDGE_RULE = "grain+queries";
 const resultsFile = resultsArg ? resolve(resultsArg) : join(RESULTS, "questions.jsonl");
 const cats = catsArg ? new Set(catsArg.split(",")) : null;
 // One lane for both builds, or `baselineLane,candidateLane`.
@@ -114,14 +121,30 @@ const system =
   `with the tool that measures the claim at the grain the answer states. Read, Grep and Glob on the ` +
   `checkout measure code, lines and occurrences. The code-context tools measure the repository's own ` +
   `index, which some answers report from: find gives every line containing a literal with its per-file ` +
-  `line counts (byFile); sql gives chunk counts and rankings, e.g. SELECT path, COUNT(*) AS chunks FROM ` +
-  `bm25_search('chunks','content','<terms>', k) GROUP BY path ORDER BY chunks DESC. A count is supported ` +
-  `when it reproduces at its stated grain (lines, occurrences, hits, chunks), whichever tool that takes; ` +
-  `a count that reproduces at no grain, a ranking its own measure does not give, an attribution the code ` +
-  `contradicts, or a name the code does not have is unsupported. Judge correctness and how well each ` +
-  `claim is supported; do not reward length or formatting. Finish with a single JSON object and nothing ` +
+  `line counts (byFile); sql gives chunk counts and rankings over a search relation, e.g. SELECT path, ` +
+  `COUNT(*) AS chunks FROM bm25_search('chunks','content','<terms>', k) GROUP BY path ORDER BY chunks DESC, ` +
+  `or the same over hybrid_search('chunks','content','<terms>','embedding', {{q}}, k) with an embed map ` +
+  `{"q":"<topic>"} passed beside the statement. Under each answer are the queries its run made through ` +
+  `these tools, in order, with the statements the platform ran for it marked "ran:". Reproduce a count ` +
+  `built on the index by rerunning the recorded query as written, embed map included, before writing ` +
+  `your own: a ranked search's total is a property of that query, so it reproduces only from that query. ` +
+  `A count is supported when it reproduces at its stated grain (lines, occurrences, hits, chunks, the ` +
+  `top-k of a named query), whichever tool that takes; a count that reproduces at no grain, a ranked ` +
+  `query's total presented as a property of the repository with no measure named, a ranking its own ` +
+  `measure does not give, an attribution the code contradicts, or a name the code does not have is ` +
+  `unsupported. An answer whose queries were not recorded is verified with your own queries, as before. ` +
+  `Judge correctness and how well each claim is supported; do not reward length or formatting. ` +
+  `Finish with a single JSON object and nothing ` +
   `after it: {"winner":"A"|"B"|"tie","confidence":<0..1>,"unsupported_a":<int>,"unsupported_b":<int>,"reason":"<one sentence>"} ` +
   `where unsupported_* counts the claims in that answer the repository does not support.`;
+
+/** The queries one answer's run made, as the judge is handed them; a row
+ * written before inputs were kept says so, and the judge falls back to its
+ * own queries for that side. */
+function queriesBlock(run) {
+  const lines = recordedQueries(run.toolDetails);
+  return lines.length ? lines.join("\n") : "(this run's queries were not recorded; verify with your own)";
+}
 
 function parseVerdict(text) {
   const start = text.lastIndexOf("{");
@@ -139,7 +162,8 @@ async function judge(pair) {
   const A = swap ? pair.cand : pair.base;
   const B = swap ? pair.base : pair.cand;
   const prompt =
-    `Question:\n${pair.question}\n\n=== Answer A ===\n${A.answer}\n\n=== Answer B ===\n${B.answer}\n\n` +
+    `Question:\n${pair.question}\n\n=== Answer A ===\n${A.answer}\n\n--- Queries behind Answer A ---\n${queriesBlock(A)}\n\n` +
+    `=== Answer B ===\n${B.answer}\n\n--- Queries behind Answer B ---\n${queriesBlock(B)}\n\n` +
     `Verify the claims against the repository, then give the JSON verdict.`;
   const t0 = performance.now();
   const acc = newToolAccounting();
@@ -190,10 +214,17 @@ async function judge(pair) {
     // The tools the judge called to verify, in order (cx:find, cx:sql, Grep,
     // Read, ...): whether a verdict on an index-grain count was measured.
     tools: acc.toolCalls,
+    // The judge's own calls with their inputs - the queries it wrote to
+    // reproduce a count are then on the record beside the verdict.
+    toolDetails: acc.toolDetails,
     // Calls whose result was an error - a tool outside the judge's list that
     // the model asked for anyway, or a query the index refused - so a name in
     // `tools` that never ran is told apart from one that did.
     toolErrors: acc.toolDetails.filter((d) => d.isError).map((d) => d.name),
+    // How many recorded queries each side came with; zero on one side means
+    // that answer was verified with the judge's own queries alone.
+    queriesBaseline: recordedQueries(pair.base.toolDetails).length,
+    queriesCandidate: recordedQueries(pair.cand.toolDetails).length,
     winner: v ? toSide(v.winner) : null,
     confidence: v?.confidence ?? null,
     unsupportedBaseline: v ? (swap ? v.unsupported_b : v.unsupported_a) : null,
