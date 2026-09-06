@@ -294,7 +294,8 @@ export async function serveMcp(rootPath?: string): Promise<void> {
         "code-context is a local index of this repository. Which tool for which question:\n" +
         "- find - every line containing an exact string, where you would grep.\n" +
         "- search - how does X work, where is Y handled, code by meaning.\n" +
-        "- sql - counts, rankings, and aggregates across the repo.\n" +
+        "- sql - counts, rankings, and aggregates across the repo, including ranking files by how " +
+        "much of them is about a topic (rank by hybrid_search, not bm25, when the topic is a concept).\n" +
         (subagent
           ? "- subagent - a question or task in plain language; returns the rows it retrieved (facts with path:line and the code), not an answer: compose from them. Spawn several in parallel for independent questions. How often a string occurs, per file, is find's byFile.\n" +
             "- explore - a question about a mechanism that spans files (how X works end to end, what calls what); it reads and follows what it finds and returns a written answer grounded in the facts it lists, with the chain of queries. Take the answer and cite its facts. Slower than subagent: use it when one retrieval will not do.\n"
@@ -452,12 +453,17 @@ export async function serveMcp(rootPath?: string): Promise<void> {
         "Read-only SQL, one SELECT or WITH, over " +
         `${TABLE}(path, start_line, end_line, lang, symbol, content[, embedding]) - lang is the ` +
         "file extension, e.g. 'rs' - for counts, rankings, and GROUP BY across the whole repo. " +
-        "Search functions are table-valued: " +
-        `bm25_search('${TABLE}','content','terms', k) needs no embedding; ` +
-        `hybrid_search('${TABLE}','content','terms','embedding', {{q}}, k) and ` +
-        `vector_search('${TABLE}','embedding', {{q}}, k) take a {{name}} placeholder filled from ` +
-        "the embed map. Canonical: SELECT path, SUM(end_line - start_line + 1) AS lines FROM " +
-        `bm25_search('${TABLE}','content','<terms>', 300) GROUP BY path ORDER BY lines DESC LIMIT 15. ` +
+        "Search functions are table-valued, and which one you rank by decides what the counts mean: " +
+        `hybrid_search('${TABLE}','content','terms','embedding', {{q}}, k) fuses exact terms with ` +
+        "meaning, so use it whenever the topic is a concept rather than a literal string - " +
+        "'code about X', 'files that do Y' - because the words in the question are rarely the words " +
+        `in the code; bm25_search('${TABLE}','content','terms', k) is keyword only, for when you ` +
+        `know the term that appears in the source; vector_search('${TABLE}','embedding', {{q}}, k) ` +
+        "is meaning alone. The {{name}} placeholders are filled server-side from the embed map, so " +
+        "they cost you nothing but the name. Rank a topic: SELECT path, SUM(end_line - start_line + 1) " +
+        `AS lines FROM hybrid_search('${TABLE}','content','<terms>','embedding', {{q}}, 300) ` +
+        "GROUP BY path ORDER BY lines DESC LIMIT 15, with embed {\"q\":\"<the topic>\"}. Count a known " +
+        `term: the same shape over bm25_search('${TABLE}','content','<term>', 300). ` +
         "The result includes a 'usage' field, a one-line receipt of tokens returned and rows.",
       inputSchema: {
         query: z
