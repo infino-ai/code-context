@@ -453,15 +453,18 @@ export async function serveMcp(rootPath?: string): Promise<void> {
         "Read-only SQL, one SELECT or WITH, over " +
         `${TABLE}(path, start_line, end_line, lang, symbol, content[, embedding]) - lang is the ` +
         "file extension, e.g. 'rs' - for counts, rankings, and GROUP BY across the whole repo. " +
-        "Search functions are table-valued, and which one you rank by decides what the counts mean: " +
-        `hybrid_search('${TABLE}','content','terms','embedding', {{q}}, k) fuses exact terms with ` +
-        "meaning, so use it whenever the topic is a concept rather than a literal string - " +
-        "'code about X', 'files that do Y' - because the words in the question are rarely the words " +
-        `in the code; bm25_search('${TABLE}','content','terms', k) is keyword only, for when you ` +
-        `know the term that appears in the source; vector_search('${TABLE}','embedding', {{q}}, k) ` +
-        "is meaning alone. The {{name}} placeholders are filled server-side from the embed map, so " +
-        "they cost you nothing but the name. Rank a topic: SELECT path, SUM(end_line - start_line + 1) " +
-        `AS lines FROM hybrid_search('${TABLE}','content','<terms>','embedding', {{q}}, 300) ` +
+        "The search functions are table-valued: a ranked search is a relation, so WHERE, GROUP BY, " +
+        "ORDER BY and joins compose with it in one pass, and one query replaces the several round " +
+        "trips of searching, then filtering, then counting. Which function you rank by decides what " +
+        `the counts mean: hybrid_search('${TABLE}','content','terms','embedding', {{q}}, k) fuses ` +
+        "exact terms with meaning, so use it whenever the topic is a concept rather than a literal " +
+        "string - 'code about X', 'files that do Y' - because the words in the question are rarely " +
+        `the words in the code; bm25_search('${TABLE}','content','terms', k) is keyword only, for ` +
+        `when you know the term that appears in the source; vector_search('${TABLE}','embedding', ` +
+        "{{q}}, k) is meaning alone. The {{name}} placeholders are filled server-side from the embed " +
+        "map, so they cost you nothing but the name. Rank a topic, filtered on the same pass: " +
+        "SELECT path, SUM(end_line - start_line + 1) AS lines, COUNT(*) AS chunks FROM " +
+        `hybrid_search('${TABLE}','content','<terms>','embedding', {{q}}, 300) WHERE path LIKE 'src/%' ` +
         "GROUP BY path ORDER BY lines DESC LIMIT 15, with embed {\"q\":\"<the topic>\"}. Count a known " +
         `term: the same shape over bm25_search('${TABLE}','content','<term>', 300). ` +
         "The result includes a 'usage' field, a one-line receipt of tokens returned and rows.",
