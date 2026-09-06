@@ -43,9 +43,10 @@ recall; on a well-known open-source repo the baseline can shortcut from memory.
 The lane table lives in `lanes.mjs` (`LANES`); an unknown lane name is an
 error, not a silent fall-through to the files lane. Every lane shares the same
 hermetic base and differs only in the toolset. `find`, `search` and `sql`
-read the local index in every lane; the platform lanes start the server with
-`--db`, which keeps the same index on a platform database too and registers
-the `ask` and `explore` tools that run there.
+read the local index in every lane with the code-context server; the platform
+lanes start the server with `--db`, which keeps the same index on a platform
+database too and registers the `ask` and `explore` tools that run there. The
+`snowflake` lane attaches a different server in its place (below).
 
 | lane           | kind   | built-in tools            | MCP server | server command line, after `cx mcp` (every MCP lane also gets `CX_ROOT`, `CX_INDEX_DIR`, `CX_AUTO_SYNC=0` in its env) | needs in your env                        |
 | -------------- | ------ | ------------------------- | ---------- | ---------------------------------------------------------------------------------------------------------------------- | ---------------------------------------- |
@@ -61,6 +62,7 @@ the `ask` and `explore` tools that run there.
 | `platform-explore` | hosted | Glob, Grep, Read, LS, Bash, Agent | yes | `--db ...`, `Explore` overridden: `explore` (the platform's explore mode), Read, Haiku relaying                 | `CX_BENCH_DB_URL`, `CX_BENCH_KEY_FILE`  |
 | `find-subagent`    | hosted | Glob, Grep, Read, LS, Bash        | yes | `--db ...`, with `search`, `sql` and `explore` removed from the model's context: `find` and `ask` remain   | `CX_BENCH_DB_URL`, `CX_BENCH_KEY_FILE`  |
 | `find-explore`     | hosted | Glob, Grep, Read, LS, Bash        | yes | `find-subagent` with `explore` in `ask`'s place: the main agent asks the platform's explore mode directly   | `CX_BENCH_DB_URL`, `CX_BENCH_KEY_FILE`  |
+| `snowflake`        | snowflake | Glob, Grep, Read, LS, Bash     | yes (`snowflake`, not code-context) | `node snowflake-mcp.mjs`, configured by env: `SF_ACCOUNT`, `SF_USER`, `SF_TOKEN_FILE` from `CX_BENCH_SF_ACCOUNT`, `CX_BENCH_SF_USER`, `CX_BENCH_SF_TOKEN_FILE`, and `SF_ROLE`, `SF_WAREHOUSE`, `SF_DATABASE`, `SF_SCHEMA`, `SF_TABLE` from the matching `CX_BENCH_SF_*` when set | `CX_BENCH_SF_ACCOUNT`, `CX_BENCH_SF_USER`, `CX_BENCH_SF_TOKEN_FILE` |
 
 The agent lanes pass `CX_BENCH_AGENT_MAX_TURNS`, when set, through as the
 server's `--subagent-max-turns`, to measure the agent under a tighter turn cap,
@@ -89,6 +91,33 @@ prints the key, and results record `dbHost` (the host) and nothing else of the
 URL. The index is built before a run (below) so no question pays for a build;
 with `--db` one `cx index` writes the local index and the platform table
 together - they are one index in two places.
+
+`snowflake` puts a warehouse in the index's place: the same agent with the
+stock tools, and instead of the code-context server the Snowflake MCP server
+(`snowflake-mcp.mjs`), whose tools run keyword search (Snowflake's `SEARCH`
+predicate) and SQL over a `CHUNKS` table holding the repository's chunks -
+the rows the local index holds (`path`, `start_line`, `end_line`, `lang`,
+`symbol`, `content`). There is no semantic ranking in this lane: the server
+uses no Cortex function. The server is configured through its environment,
+filled from the harness's `CX_BENCH_SF_*` variables: `CX_BENCH_SF_ACCOUNT`,
+`CX_BENCH_SF_USER` and `CX_BENCH_SF_TOKEN_FILE` (the file holding a
+programmatic access token) are required, and the lane fails before the first
+paid model call without them; `CX_BENCH_SF_ROLE`, `CX_BENCH_SF_WAREHOUSE`,
+`CX_BENCH_SF_DATABASE`, `CX_BENCH_SF_SCHEMA` and `CX_BENCH_SF_TABLE` are
+passed only when set, so the client's defaults hold otherwise. The token
+reaches the server as the path of its file, never as a value; the harness
+never reads it. Rows record the lane's calls as `sf:<tool>` in `toolCalls` and
+the sum of their `took_ms` as `sfTookMs`. Load the table first with
+`node load-snowflake.mjs <repo>` - it reads the same `CX_BENCH_SF_*` variables
+(or the `SF_*` names directly) and fills the table from the repo's local index
+(`CX_INDEX_DIR`, else `<repo>/.infino`), so both arms search the same chunks -
+then run the lane beside the others:
+
+```bash
+export CX_BENCH_SF_ACCOUNT=<account> CX_BENCH_SF_USER=<user> CX_BENCH_SF_TOKEN_FILE=~/.snowflake/token
+node load-snowflake.mjs /path/to/repo
+node run-questions.mjs /path/to/repo combo,snowflake
+```
 
 Getting the index in place, on both sides:
 
@@ -135,14 +164,15 @@ Lane design notes (they matter for fairness):
 ## What a result row carries
 
 Every row in `.work/results/questions.jsonl` has the question (`q`, `cat`,
-`repo`), the lane (`lane`, `laneKind` = `local`|`hosted`, `dbHost` = the
-platform host for a platform lane, else `null`), the build (`build`, `cli`,
+`repo`), the lane (`lane`, `laneKind` = `local`|`hosted`|`snowflake`, `dbHost`
+= the platform host for a platform lane, else `null`), the build (`build`, `cli`,
 `model`), the run totals (`tokens`, `usage`, `costUsd`, `wallMs`, `calls`,
 `answer` - the whole answer; rows before 2026-09-05 hold its first 1,500
 characters - `error`, `ts`) and the tool trace:
 
 - `toolCalls` - the tool names in call order, code-context tools as
-  `cx:find` / `cx:search` / `cx:sql` (unchanged; every reader keys on it).
+  `cx:find` / `cx:search` / `cx:sql` (unchanged; every reader keys on it) and
+  the Snowflake lane's as `sf:<tool>`.
 - `toolDetails` - one object per call, same order: `{ name, tookMs, usage }`
   plus `isError: true` when the tool returned an error. `tookMs` is the
   server-side `took_ms` the code-context result carries (engine work plus
@@ -155,6 +185,8 @@ characters - `error`, `ts`) and the tool trace:
   result has the same shape in all of them. The platform tools' telemetry
   (round trip, platform tokens) is not in the tool result the model sees - it
   goes to the server's usage ledger - so it is not on the row either.
+  `sfTookMs` is the same sum over the Snowflake lane's calls, whose results
+  carry `took_ms` and `usage` the same way; it is 0 in every other lane.
 
 The harness reads the SDK's user-role messages for this: a `tool_result`
 block answers each `tool_use` by id, and for an MCP tool the message also
@@ -220,8 +252,10 @@ is part of the instrument.
 ## Tests
 
 `harness-tests.mjs` covers the lane table, the SDK tool-result parsing, the
-warm-up loop and the build record, with fetch and spawn injected (no model,
-no network, no engine). It uses Node's built-in runner, since it imports
+warm-up loop, the build record, and the Snowflake arm's plumbing (the lane's
+env mapping, the REST client's settings, the server's statement shapes and
+its read-only guard), with fetch and spawn injected (no model, no network, no
+engine, no Snowflake). It uses Node's built-in runner, since it imports
 `lanes.mjs` (which needs the agent SDK from `bench/node_modules`) and the
 root `npm test` runs without bench's dependencies:
 

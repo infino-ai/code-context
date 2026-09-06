@@ -27,6 +27,16 @@ const STOCK_TOOLS = ["Glob", "Grep", "Read", "LS", "Bash"];
  * short `cx:<tool>` form so they stay readable and comparable across builds. */
 const CX_TOOL_PREFIX = "mcp__code-context__";
 const CX_SHORT_PREFIX = "cx:";
+/** The prefix the SDK puts on the Snowflake server's tools, and the short
+ * `sf:<tool>` form results record for them, beside `cx:` for code-context. */
+const SF_TOOL_PREFIX = "mcp__snowflake__";
+const SF_SHORT_PREFIX = "sf:";
+/** Every (SDK prefix, short prefix) pair a result row shortens; a built-in
+ * tool's name carries no prefix and is kept as is. */
+const TOOL_PREFIXES = [
+  [CX_TOOL_PREFIX, CX_SHORT_PREFIX],
+  [SF_TOOL_PREFIX, SF_SHORT_PREFIX],
+];
 /** The three retrieval tools, hidden from the model in the agent-only lane
  * so that every retrieval has to go through `ask`. */
 const CX_RETRIEVAL_TOOLS = ["find", "search", "sql"];
@@ -104,6 +114,32 @@ export const BENCH_AGENT_K = "CX_BENCH_AGENT_K";
 /** The env a platform lane needs before it can run. */
 const HOSTED_REQUIRES = [BENCH_DB_URL, BENCH_KEY_FILE];
 
+/** The harness's own env for the Snowflake lane, each name mapped onto the
+ * variable of the same meaning that the Snowflake server and its REST client
+ * read. The account, the user and the FILE holding the programmatic access
+ * token are required; role, warehouse, database, schema and table are passed
+ * only when set, so the client's defaults hold otherwise. As with the
+ * platform key, the token travels as the path of its file: nothing here
+ * reads it. */
+export const BENCH_SF_ACCOUNT = "CX_BENCH_SF_ACCOUNT";
+export const BENCH_SF_USER = "CX_BENCH_SF_USER";
+export const BENCH_SF_TOKEN_FILE = "CX_BENCH_SF_TOKEN_FILE";
+const SF_SERVER_ENV = {
+  [BENCH_SF_ACCOUNT]: "SF_ACCOUNT",
+  [BENCH_SF_USER]: "SF_USER",
+  CX_BENCH_SF_ROLE: "SF_ROLE",
+  CX_BENCH_SF_WAREHOUSE: "SF_WAREHOUSE",
+  CX_BENCH_SF_DATABASE: "SF_DATABASE",
+  CX_BENCH_SF_SCHEMA: "SF_SCHEMA",
+  CX_BENCH_SF_TABLE: "SF_TABLE",
+  [BENCH_SF_TOKEN_FILE]: "SF_TOKEN_FILE",
+};
+/** The env the Snowflake lane needs before it can run. */
+const SNOWFLAKE_REQUIRES = [BENCH_SF_ACCOUNT, BENCH_SF_USER, BENCH_SF_TOKEN_FILE];
+/** The Snowflake MCP server: a sibling of this file, started with node the
+ * way the code-context server is. */
+const SNOWFLAKE_MCP = join(BENCH, "snowflake-mcp.mjs");
+
 /** Server env that is common to every MCP lane. Auto-sync is off in every
  * lane: the index is built before the run (load-hosted.mjs, which with --db
  * writes the local index and the platform table in one build) and a re-sync
@@ -124,6 +160,36 @@ export function cxServer(serverEnv, args = []) {
       // and startup blocks until connected - no race on the first call
       alwaysLoad: true,
       env: { ...process.env, ...serverEnv },
+    },
+  };
+}
+
+/** The SF_* variables the Snowflake REST client reads, filled from the
+ * harness's CX_BENCH_SF_* variables in the given env: only the ones that are
+ * set, so the client's default holds for the rest. One mapping for the lane's
+ * server and for the loader, so the same exported CX_BENCH_SF_* line
+ * configures both. The token reaches either as the path of its file
+ * (SF_TOKEN_FILE), never as a value. */
+export function snowflakeServerEnv(env = process.env) {
+  const serverEnv = {};
+  for (const [bench, sf] of Object.entries(SF_SERVER_ENV)) if (env[bench]) serverEnv[sf] = env[bench];
+  return serverEnv;
+}
+
+/** The Snowflake MCP server as the SDK starts it, in the code-context
+ * server's place: bench/snowflake-mcp.mjs under the name "snowflake", so its
+ * tools reach the model as mcp__snowflake__<tool>. It is configured through
+ * its environment - the SF_* names its REST client reads - laid over the
+ * given env by snowflakeServerEnv. */
+export function snowflakeServer(env = process.env) {
+  return {
+    snowflake: {
+      command: "node",
+      args: [SNOWFLAKE_MCP],
+      // as for the code-context server: in the turn-1 prompt, and startup
+      // blocks until connected
+      alwaysLoad: true,
+      env: { ...env, ...snowflakeServerEnv(env) },
     },
   };
 }
@@ -155,12 +221,16 @@ export function agentFlags(env = process.env) {
 }
 
 /** The lane table. Each lane is the identical hermetic base plus:
- *   kind      "local" (the server has the local index alone) or "hosted" (the
+ *   kind      "local" (the server has the local index alone), "hosted" (the
  *             server also has the platform database, where the ask and
- *             explore tools run) - recorded on every row as laneKind
+ *             explore tools run) or "snowflake" (the Snowflake server in the
+ *             code-context server's place) - recorded on every row as laneKind
  *   tools     the built-in tools the agent gets
- *   mcp       whether the code-context server is attached
- *   env       server env for the MCP lanes (repoDir, indexDir) => object
+ *   mcp       whether an MCP server is attached
+ *   server    the MCP servers to attach (repoDir, indexDir, env) => object,
+ *             for a lane whose server is not code-context; absent, the lane
+ *             gets the code-context server built from env and args
+ *   env       server env for the code-context lanes (repoDir, indexDir) => object
  *   args      extra flags for the server command line (env) => string[]
  *   disallowedTools  MCP tool names the SDK removes from the model's context
  *   agents    subagent definitions by name; a built-in name (Explore) is overridden
@@ -202,7 +272,13 @@ export function agentFlags(env = process.env) {
  *                      what does the model reach for, and does more choice
  *                      help or confuse? (The `find`/`explore` lanes hide
  *                      `search` and `sql`, which are the local instruments
- *                      for questions by meaning and for counts.) */
+ *                      for questions by meaning and for counts.)
+ *   snowflake        - the stock tools plus the Snowflake server in the
+ *                      index's place: the same outer model with Snowflake as
+ *                      the index - keyword search and SQL over the chunks
+ *                      table, no semantic ranking on this account. Measures
+ *                      what a warehouse gives the same agent, next to the
+ *                      lanes above */
 export const LANES = {
   files: { kind: "local", tools: STOCK_TOOLS, mcp: false, requires: [] },
   cx: { kind: "local", tools: ["Read"], mcp: true, env: mcpEnvBase, requires: [] },
@@ -278,6 +354,13 @@ export const LANES = {
     disallowedTools: ["search", "sql", "ask"].map((tool) => `${CX_TOOL_PREFIX}${tool}`),
     requires: HOSTED_REQUIRES,
   },
+  snowflake: {
+    kind: "snowflake",
+    tools: STOCK_TOOLS,
+    mcp: true,
+    server: (_repoDir, _indexDir, env) => snowflakeServer(env),
+    requires: SNOWFLAKE_REQUIRES,
+  },
 };
 
 /** The lane definition for a name; an unknown name is a usage error, not a
@@ -309,8 +392,17 @@ export function dbHost(lane, env = process.env) {
   }
 }
 
+/** The MCP servers a lane attaches, from its own definition: the lane's
+ * `server` when it names one, else the code-context server with the lane's
+ * env and flags. */
+function laneServers(def, repoDir, indexDir, env = process.env) {
+  if (def.server) return def.server(repoDir, indexDir, env);
+  return cxServer(def.env(repoDir, indexDir), def.args?.(env) ?? []);
+}
+
 /** Lane options: identical hermetic base; only the toolset and, for a hosted
- * lane, the server's command line differ. */
+ * lane, the server's command line differ (and for the Snowflake lane, the
+ * server itself). */
 export function laneOptions(lane, repoDir, indexDir) {
   const def = laneDef(lane);
   checkLaneEnv(lane);
@@ -328,12 +420,22 @@ export function laneOptions(lane, repoDir, indexDir) {
     // permission denial the model would see), which is what makes a forced
     // lane a fair measurement: the hidden tools cost no prompt text either.
     ...(def.disallowedTools ? { disallowedTools: def.disallowedTools } : {}),
-    mcpServers: cxServer(def.env(repoDir, indexDir), def.args?.(process.env) ?? []),
+    mcpServers: laneServers(def, repoDir, indexDir),
   };
 }
 
-export const shortToolName = (name) => name.replace(CX_TOOL_PREFIX, CX_SHORT_PREFIX);
+/** A tool name as the row records it: an MCP tool's SDK prefix shortened
+ * (mcp__code-context__sql -> cx:sql, mcp__snowflake__sql -> sf:sql), a
+ * built-in's name unchanged. */
+export function shortToolName(name) {
+  for (const [long, short] of TOOL_PREFIXES) if (name.startsWith(long)) return `${short}${name.slice(long.length)}`;
+  return name;
+}
 export const isCxTool = (shortName) => shortName.startsWith(CX_SHORT_PREFIX);
+export const isSfTool = (shortName) => shortName.startsWith(SF_SHORT_PREFIX);
+/** A tool of either MCP server: the ones whose result carries the took_ms
+ * and usage telemetry, and whose input is a query the answer was built on. */
+export const isMcpTool = (shortName) => isCxTool(shortName) || isSfTool(shortName);
 
 /** The text a tool returned, from the structured `tool_use_result` the SDK
  * attaches to the user message when it has one (for an MCP tool that is the
@@ -357,9 +459,10 @@ export function toolResultText(block, toolUseResult) {
  * took_ms and the one-line usage receipt, both fields of the JSON the tool
  * returns, and the queries the platform ran for the call - `sql`, the
  * statement whose rows an ask result holds, and `chain`, every query an
- * exploration ran - so a judge can rerun what the answer was built on. A
- * result that is not JSON (an error message) yields nulls and no queries;
- * the call is still counted. */
+ * exploration ran - so a judge can rerun what the answer was built on. The
+ * Snowflake server's results carry took_ms and usage the same way, so the
+ * same parse serves its tools. A result that is not JSON (an error message)
+ * yields nulls and no queries; the call is still counted. */
 export function parseCxResult(text) {
   const none = { tookMs: null, usage: null, queries: [] };
   if (typeof text !== "string") return none;
@@ -397,16 +500,20 @@ export function keepInput(input) {
   return kept;
 }
 
-/** The queries a run made through code-context, one line each, in the order
+/** The queries a run made through an MCP server, one line each, in the order
  * it made them: the call's input (the sql statement with its embed map, the
  * find literal, the search query, the question put to ask or explore)
  * and, indented under a platform call, each statement the platform ran for
- * it. Rows written before inputs were kept yield nothing. */
+ * it. A code-context call is listed by its bare tool name; a Snowflake call
+ * keeps its `sf:` prefix, so a reader (the judge, which reruns the
+ * code-context queries on the index) can tell `sf:sql` from `sql`. Rows
+ * written before inputs were kept yield nothing. */
 export function recordedQueries(toolDetails) {
   const lines = [];
   for (const d of toolDetails ?? []) {
-    if (!isCxTool(d.name) || d.input === undefined) continue;
-    lines.push(`${d.name.slice(CX_SHORT_PREFIX.length)} ${JSON.stringify(d.input)}`);
+    if (!isMcpTool(d.name) || d.input === undefined) continue;
+    const label = isCxTool(d.name) ? d.name.slice(CX_SHORT_PREFIX.length) : d.name;
+    lines.push(`${label} ${JSON.stringify(d.input)}`);
     for (const q of d.queries ?? []) lines.push(`  ran: ${q}`);
   }
   return lines;
@@ -445,7 +552,7 @@ export function foldToolMessage(acc, m) {
       if (!detail) continue;
       acc.pending.delete(b.tool_use_id);
       if (b.is_error) detail.isError = true;
-      if (!isCxTool(detail.name)) continue;
+      if (!isMcpTool(detail.name)) continue;
       const parsed = parseCxResult(toolResultText(b, m.tool_use_result));
       detail.tookMs = parsed.tookMs;
       detail.usage = parsed.usage;
@@ -456,10 +563,14 @@ export function foldToolMessage(acc, m) {
 
 export const newToolAccounting = () => ({ toolCalls: [], toolDetails: [], pending: new Map(), subagentCalls: 0, subagents: [] });
 
-/** Sum of the server-side took_ms over the code-context calls of a run - the
- * engine work inside the question's wall clock. */
-export const cxTookMs = (toolDetails) =>
-  Math.round(toolDetails.reduce((n, d) => n + (isCxTool(d.name) && d.tookMs ? d.tookMs : 0), 0));
+/** Sum of the server-side took_ms over the calls of one server's tools in a
+ * run - that server's work inside the question's wall clock. */
+const tookMsOf = (toolDetails, isTool) => Math.round(toolDetails.reduce((n, d) => n + (isTool(d.name) && d.tookMs ? d.tookMs : 0), 0));
+/** The code-context calls' share - the engine work - unchanged in meaning for
+ * every lane that has the server. */
+export const cxTookMs = (toolDetails) => tookMsOf(toolDetails, isCxTool);
+/** The Snowflake calls' share: the warehouse's work, 0 in every other lane. */
+export const sfTookMs = (toolDetails) => tookMsOf(toolDetails, isSfTool);
 
 /** Run one agent conversation; returns the measured record. */
 export async function runLane({ lane, prompt, system, repoDir, indexDir, maxTurns = 50 }) {
@@ -517,6 +628,7 @@ export async function runLane({ lane, prompt, system, repoDir, indexDir, maxTurn
     toolCalls,
     toolDetails,
     cxTookMs: cxTookMs(toolDetails),
+    sfTookMs: sfTookMs(toolDetails),
     calls: toolCalls.length,
     // Calls made inside subagents (a subset of `calls`) and the subagent
     // types the main agent spawned, in order - the delegation signal.

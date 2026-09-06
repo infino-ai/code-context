@@ -2,14 +2,20 @@
 // SPDX-FileCopyrightText: Copyright The Infino Authors
 //
 // Tests for the harness's own logic - the lane table, the SDK tool-result
-// parsing, the hosted warm-up loop and the build record - with no model, no
-// network and no engine: fetch and spawn are injected. Node's built-in runner
-// rather than vitest on purpose: these import lanes.mjs, which needs the
-// agent SDK from bench/node_modules, and the root `npm test` (vitest, which
-// would pick up any *.test.* file under bench/) runs without bench's deps.
+// parsing, the hosted warm-up loop, the build record, and the Snowflake arm's
+// plumbing (the lane's env mapping, the REST client's settings, the server's
+// statement shapes and read-only guard) - with no model, no network, no engine
+// and no Snowflake: fetch and spawn are injected, statements are inspected as
+// text. Node's built-in runner rather than vitest on purpose: these import
+// lanes.mjs, which needs the agent SDK from bench/node_modules, and the root
+// `npm test` (vitest, which would pick up any *.test.* file under bench/) runs
+// without bench's deps.
 //   cd bench && npm install && node --test harness-tests.mjs
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   LANES,
   laneDef,
@@ -19,28 +25,46 @@ import {
   checkLaneEnv,
   dbHost,
   hostedFlags,
+  snowflakeServer,
+  snowflakeServerEnv,
   foldToolMessage,
   newToolAccounting,
   toolResultText,
   parseCxResult,
+  shortToolName,
+  isCxTool,
+  isSfTool,
   cxTookMs,
+  sfTookMs,
   keepInput,
   recordedQueries,
 } from "./lanes.mjs";
 import { warmHosted, splitDbUrl, DEFAULT_RETRY_AFTER_SECS } from "./warm-hosted.mjs";
 import { indexArgs, runIndexBuild, hostOf } from "./load-hosted.mjs";
+import { snowflakeSettings, CHUNK_COLUMNS } from "./snowflake-rest.mjs";
+import { readOnlyError, findSql, searchSql, splitTerms, tableName } from "./snowflake-mcp.mjs";
 
 const FAKE_URL = "https://api.example.test/bench-db";
 const FAKE_KEY = "inf_secret_value_that_must_not_leak";
 const FAKE_KEY_FILE = "/keys/bench.key";
+/** The path the Snowflake lane hands its server as the token file. It does
+ * not exist, so anything that tried to read the token would throw. */
+const FAKE_SF_TOKEN_FILE = "/keys/sf.token";
+const FAKE_SF_ACCOUNT = "ACCT-ID";
+const FAKE_SF_USER = "BENCH";
+/** The Snowflake server's own variables, unset around a Snowflake-lane test
+ * so a developer's shell cannot configure the server behind the harness's
+ * back, and so what the lane does not pass can be asserted absent. */
+const SF_SERVER_VARS = ["SF_ACCOUNT", "SF_USER", "SF_ROLE", "SF_WAREHOUSE", "SF_DATABASE", "SF_SCHEMA", "SF_TABLE", "SF_TOKEN", "SF_TOKEN_FILE"];
+/** The harness's optional Snowflake variables, unset likewise. */
+const SF_BENCH_OPTIONAL = ["CX_BENCH_SF_ROLE", "CX_BENCH_SF_WAREHOUSE", "CX_BENCH_SF_DATABASE", "CX_BENCH_SF_SCHEMA", "CX_BENCH_SF_TABLE"];
+const unset = (names) => Object.fromEntries(names.map((k) => [k, undefined]));
 
-/** Run fn with the harness's hosted env set (and the server's own key
- * variable unset, so a developer's key cannot make a lane look configured),
- * restoring whatever was there before. */
-function withHostedEnv(fn, extra = {}) {
+/** Run fn with the given variables set (undefined unsets one), restoring
+ * whatever was there before. */
+function withEnv(set, fn) {
   const saved = {};
-  const set = { CX_BENCH_DB_URL: FAKE_URL, CX_BENCH_KEY_FILE: FAKE_KEY_FILE, INFINO_API_KEY: undefined, ...extra };
-  for (const k of [...Object.keys(set), "CX_BENCH_EMBED_PROVIDER", "CX_BENCH_AGENT_MAX_TURNS", "CX_BENCH_AGENT_K"]) saved[k] = process.env[k];
+  for (const k of Object.keys(set)) saved[k] = process.env[k];
   for (const [k, v] of Object.entries(set)) {
     if (v === undefined) delete process.env[k];
     else process.env[k] = v;
@@ -55,9 +79,31 @@ function withHostedEnv(fn, extra = {}) {
   }
 }
 
+/** Run fn with the harness's hosted env set (and the server's own key
+ * variable unset, so a developer's key cannot make a lane look configured). */
+function withHostedEnv(fn, extra = {}) {
+  return withEnv({ CX_BENCH_DB_URL: FAKE_URL, CX_BENCH_KEY_FILE: FAKE_KEY_FILE, INFINO_API_KEY: undefined, ...extra }, fn);
+}
+
+/** Run fn with the harness's Snowflake env set - the account, the user and
+ * the path of the token file - and every SF_* the server reads unset. */
+function withSnowflakeEnv(fn, extra = {}) {
+  return withEnv(
+    {
+      CX_BENCH_SF_ACCOUNT: FAKE_SF_ACCOUNT,
+      CX_BENCH_SF_USER: FAKE_SF_USER,
+      CX_BENCH_SF_TOKEN_FILE: FAKE_SF_TOKEN_FILE,
+      ...unset(SF_SERVER_VARS),
+      ...unset(SF_BENCH_OPTIONAL),
+      ...extra,
+    },
+    fn,
+  );
+}
+
 // --- lane table ---------------------------------------------------------------
 
-test("the lane table names exactly the twelve lanes and an unknown lane throws", () => {
+test("the lane table names exactly the thirteen lanes and an unknown lane throws", () => {
   assert.deepEqual(Object.keys(LANES).sort(), [
     "agent-only",
     "combo",
@@ -70,6 +116,7 @@ test("the lane table names exactly the twelve lanes and an unknown lane throws",
     "hosted-full",
     "index-explore",
     "platform-explore",
+    "snowflake",
     "stock-explore",
   ]);
   assert.throws(() => laneDef("cobmo"), /unknown lane "cobmo"/);
@@ -253,6 +300,82 @@ test("dbHost is the host only, and null for local lanes", () => {
   assert.equal(dbHost("hosted", { CX_BENCH_DB_URL: "not a url" }), null);
 });
 
+// --- snowflake lane -----------------------------------------------------------
+
+test("the snowflake lane attaches the Snowflake server alone, configured by SF_* env, with the token as a file path", () => {
+  assert.equal(laneDef("snowflake").kind, "snowflake");
+  withSnowflakeEnv(() => {
+    const opts = laneOptions("snowflake", "/r", "/r/.infino");
+    assert.deepEqual(opts.tools, ["Glob", "Grep", "Read", "LS", "Bash"]);
+    assert.equal(opts.disallowedTools, undefined);
+    assert.equal(opts.agents, undefined);
+    assert.equal(opts.strictMcpConfig, true);
+    // the Snowflake server in the code-context server's place, not beside it
+    assert.deepEqual(Object.keys(opts.mcpServers), ["snowflake"]);
+    const server = opts.mcpServers.snowflake;
+    assert.equal(server.command, "node");
+    assert.equal(server.args.length, 1);
+    assert.ok(server.args[0].endsWith("/bench/snowflake-mcp.mjs"), server.args[0]);
+    assert.equal(server.alwaysLoad, true);
+    assert.equal(server.env.SF_ACCOUNT, FAKE_SF_ACCOUNT);
+    assert.equal(server.env.SF_USER, FAKE_SF_USER);
+    // the token travels as the path of its file - a path nothing could have
+    // read, since it does not exist - and no token value is in the env
+    assert.equal(server.env.SF_TOKEN_FILE, FAKE_SF_TOKEN_FILE);
+    assert.equal(server.env.SF_TOKEN, undefined);
+    // the optional ones are not passed when unset, so the client's defaults hold
+    for (const name of ["SF_ROLE", "SF_WAREHOUSE", "SF_DATABASE", "SF_SCHEMA", "SF_TABLE"]) assert.equal(server.env[name], undefined);
+    assert.equal(dbHost("snowflake", { CX_BENCH_DB_URL: FAKE_URL }), null);
+  });
+});
+
+test("an optional CX_BENCH_SF_* passes through under its SF_* name; snowflakeServer is the one place the block is built", () => {
+  withSnowflakeEnv(() => {
+    const server = laneOptions("snowflake", "/r", "/r/.infino").mcpServers.snowflake;
+    assert.equal(server.env.SF_ROLE, "BENCH_ROLE");
+    assert.equal(server.env.SF_SCHEMA, "CX2");
+    assert.equal(server.env.SF_WAREHOUSE, undefined);
+    assert.deepEqual(laneOptions("snowflake", "/r", "/r/.infino").mcpServers, snowflakeServer(process.env));
+  }, { CX_BENCH_SF_ROLE: "BENCH_ROLE", CX_BENCH_SF_SCHEMA: "CX2" });
+  // from a given env, nothing of the process's leaks in
+  const given = { CX_BENCH_SF_ACCOUNT: "A", CX_BENCH_SF_USER: "U", CX_BENCH_SF_TOKEN_FILE: FAKE_SF_TOKEN_FILE, CX_BENCH_SF_TABLE: "T" };
+  const mapped = { SF_ACCOUNT: "A", SF_USER: "U", SF_TOKEN_FILE: FAKE_SF_TOKEN_FILE, SF_TABLE: "T" };
+  assert.deepEqual(snowflakeServer(given).snowflake.env, { ...given, ...mapped });
+  // the mapping alone is what the loader lays over its environment, so the
+  // same exported line configures the load and the run; an unset or empty
+  // optional is left to the client's default, and no SF_TOKEN is ever made
+  assert.deepEqual(snowflakeServerEnv(given), mapped);
+  assert.deepEqual(snowflakeServerEnv({ ...given, CX_BENCH_SF_ROLE: "" }), mapped);
+  assert.deepEqual(snowflakeServerEnv({}), {});
+  // (a token from SF_TOKEN here, since the fake token file cannot be read)
+  const loaderEnv = { CX_BENCH_SF_ACCOUNT: "A", CX_BENCH_SF_USER: "U", CX_BENCH_SF_TABLE: "T", SF_TOKEN: "t", SF_ACCOUNT: "shell-account" };
+  const settings = snowflakeSettings({ ...loaderEnv, ...snowflakeServerEnv(loaderEnv) });
+  assert.equal(settings.account, "A"); // the harness's variable wins over a shell's SF_*
+  assert.equal(settings.user, "U");
+  assert.equal(settings.table, "T");
+});
+
+test("the snowflake lane without its env fails fast, naming the variables", () => {
+  assert.throws(() => checkLaneEnv("snowflake", {}), /needs CX_BENCH_SF_ACCOUNT and CX_BENCH_SF_USER and CX_BENCH_SF_TOKEN_FILE/);
+  assert.throws(() => checkLaneEnv("snowflake", { CX_BENCH_SF_ACCOUNT: "A", CX_BENCH_SF_USER: "U" }), /needs CX_BENCH_SF_TOKEN_FILE .*it is not set/);
+  assert.doesNotThrow(() => checkLaneEnv("snowflake", { CX_BENCH_SF_ACCOUNT: "A", CX_BENCH_SF_USER: "U", CX_BENCH_SF_TOKEN_FILE: FAKE_SF_TOKEN_FILE }));
+  withSnowflakeEnv(() => assert.throws(() => laneOptions("snowflake", "/r", "/r/.infino"), /CX_BENCH_SF_TOKEN_FILE/), { CX_BENCH_SF_TOKEN_FILE: undefined });
+  // the platform's env does not stand in for it, and the server's own SF_* do not either
+  withHostedEnv(
+    () => assert.throws(() => laneOptions("snowflake", "/r", "/r/.infino"), /CX_BENCH_SF_ACCOUNT/),
+    { ...unset(["CX_BENCH_SF_ACCOUNT", "CX_BENCH_SF_USER", "CX_BENCH_SF_TOKEN_FILE"]), SF_ACCOUNT: "A", SF_USER: "U", SF_TOKEN_FILE: FAKE_SF_TOKEN_FILE },
+  );
+});
+
+test("shortToolName shortens both servers' prefixes and leaves built-ins alone", () => {
+  assert.equal(shortToolName("mcp__snowflake__sql"), "sf:sql");
+  assert.equal(shortToolName("mcp__code-context__sql"), "cx:sql");
+  assert.equal(shortToolName("Read"), "Read");
+  assert.equal(isSfTool("sf:sql"), true);
+  assert.equal(isSfTool("cx:sql"), false);
+  assert.equal(isCxTool("sf:sql"), false);
+});
+
 // --- tool-result parsing ----------------------------------------------------
 
 const cxResult = { hits: [], took_ms: 12.5, usage: "returned ~300 tokens | 2 chunks / 2 files | invoked 1x this session (~300 tokens total)" };
@@ -336,6 +459,100 @@ test("foldToolMessage keeps the statements a platform tool ran, and recordedQuer
   // rows written before inputs were kept have nothing to list
   assert.deepEqual(recordedQueries([{ name: "cx:sql", tookMs: 1, usage: null }]), []);
   assert.deepEqual(recordedQueries(undefined), []);
+});
+
+test("foldToolMessage records a Snowflake tool's telemetry, and recordedQueries lists its input under its sf: name", () => {
+  const acc = newToolAccounting();
+  // the server's sql tool takes its statement as `query`, like code-context's
+  const query = "SELECT path, COUNT(*) AS chunks FROM CHUNKS WHERE SEARCH(content, 'compaction') GROUP BY path ORDER BY chunks DESC";
+  foldToolMessage(acc, assistantCall("f1", "mcp__snowflake__sql", { query }));
+  foldToolMessage(acc, assistantCall("f2", "Grep", { pattern: "compaction" }));
+  foldToolMessage(acc, assistantCall("f3", "mcp__code-context__find", { literal: "compaction" }));
+  foldToolMessage(acc, userResult("f1", JSON.stringify({ rows: [], took_ms: 340, usage: "returned ~20 tokens | 0 rows" })));
+  foldToolMessage(acc, userResult("f2", "src/a.rs:1:compaction"));
+  foldToolMessage(acc, userResult("f3", JSON.stringify({ hits: [], took_ms: 4 })));
+  assert.deepEqual(acc.toolCalls, ["sf:sql", "Grep", "cx:find"]);
+  assert.deepEqual(acc.toolDetails[0], { name: "sf:sql", input: { query }, tookMs: 340, usage: "returned ~20 tokens | 0 rows" });
+  assert.deepEqual(acc.toolDetails[1], { name: "Grep", input: { pattern: "compaction" }, tookMs: null, usage: null });
+  // each server's share is its own: the warehouse's time is not counted as engine work
+  assert.equal(sfTookMs(acc.toolDetails), 340);
+  assert.equal(cxTookMs(acc.toolDetails), 4);
+  // the Snowflake query keeps its prefix so it is not mistaken for code-context's sql
+  assert.deepEqual(recordedQueries(acc.toolDetails), [`sf:sql ${JSON.stringify({ query })}`, 'find {"literal":"compaction"}']);
+});
+
+// --- snowflake client and server ------------------------------------------------
+
+/** '?' placeholders in a statement: what its bindings must number. */
+const placeholders = (statement) => (statement.match(/\?/g) ?? []).length;
+
+test("snowflakeSettings: the bench defaults, SF_* overrides, the token from its file over SF_TOKEN, and an error naming the variables only", () => {
+  const fromEnv = snowflakeSettings({ SF_TOKEN: " tok ", SF_ACCOUNT: "ACCT-ID", SF_USER: "BENCH" });
+  assert.equal(fromEnv.token, "tok");
+  assert.deepEqual(
+    [fromEnv.account, fromEnv.user, fromEnv.role, fromEnv.warehouse, fromEnv.database, fromEnv.schema, fromEnv.table],
+    ["ACCT-ID", "BENCH", "ACCOUNTADMIN", "COMPUTE_WH", "INFINO_BENCH", "CX", "CHUNKS"],
+  );
+  // the account and the user have no default: each is named when missing
+  assert.throws(() => snowflakeSettings({ SF_TOKEN: "t", SF_USER: "BENCH" }), /set SF_ACCOUNT/);
+  assert.throws(() => snowflakeSettings({ SF_TOKEN: "t", SF_ACCOUNT: "ACCT-ID" }), /set SF_USER/);
+  const over = snowflakeSettings({ SF_TOKEN: "t", SF_ACCOUNT: "ACCT", SF_USER: "U", SF_ROLE: "R", SF_WAREHOUSE: "W", SF_DATABASE: "D", SF_SCHEMA: "S", SF_TABLE: "T" });
+  assert.deepEqual([over.account, over.user, over.role, over.warehouse, over.database, over.schema, over.table], ["ACCT", "U", "R", "W", "D", "S", "T"]);
+  // the file wins over the variable, and is trimmed like it
+  const tokenFile = join(mkdtempSync(join(tmpdir(), "sf-token-")), "token");
+  writeFileSync(tokenFile, "from-file\n", { mode: 0o600 });
+  assert.equal(snowflakeSettings({ SF_TOKEN_FILE: tokenFile, SF_TOKEN: "from-env", SF_ACCOUNT: "ACCT-ID", SF_USER: "BENCH" }).token, "from-file");
+  // neither set, or set empty: the error names both variables and echoes nothing
+  for (const env of [{}, { SF_TOKEN: "" }, { SF_TOKEN: "   " }]) {
+    assert.throws(() => snowflakeSettings(env), (err) => /SF_TOKEN_FILE/.test(err.message) && /SF_TOKEN\b/.test(err.message));
+  }
+  assert.deepEqual(CHUNK_COLUMNS, ["path", "start_line", "end_line", "lang", "symbol", "content"]);
+});
+
+test("readOnlyError admits one SELECT or WITH and refuses everything else", () => {
+  for (const ok of ["SELECT 1", "  select path from t", "\nWITH m AS (SELECT 1) SELECT * FROM m", "with m as (select 1) select 1"]) {
+    assert.equal(readOnlyError(ok), null, ok);
+  }
+  assert.match(readOnlyError("DELETE FROM t"), /SELECT or WITH/);
+  assert.match(readOnlyError("DROP TABLE t"), /SELECT or WITH/);
+  assert.match(readOnlyError("SELECTX 1"), /SELECT or WITH/); // a word, not a prefix
+  assert.match(readOnlyError("-- note\nSELECT 1"), /SELECT or WITH/); // the first token decides
+  assert.match(readOnlyError("SELECT 1; DELETE FROM t"), /semicolon/);
+  assert.match(readOnlyError("WITH m AS (SELECT 1) SELECT * FROM m;"), /semicolon/);
+});
+
+test("findSql and searchSql bind positionally: one '?' per value the server passes", () => {
+  const table = tableName({ database: "D", schema: "S", table: "T" });
+  assert.equal(table, "D.S.T");
+  const find = findSql(table);
+  // the lines statement takes the string and the limit; the counts the string alone
+  assert.equal(placeholders(find.lines), 2);
+  assert.equal(placeholders(find.counts), 1);
+  assert.ok(find.lines.endsWith("ORDER BY c.path, line LIMIT ?"), find.lines);
+  for (const statement of [find.lines, find.counts]) {
+    assert.ok(statement.includes(`FROM ${table} c, LATERAL SPLIT_TO_TABLE(c.content, '\\n') s`), statement);
+    assert.ok(statement.includes("SELECT DISTINCT c.path, c.start_line + s.index - 1 AS line, s.value AS text"), statement);
+    assert.ok(statement.includes("WHERE CONTAINS(s.value, ?)"), statement);
+  }
+  assert.ok(find.counts.startsWith("SELECT path, COUNT(*) AS n FROM ("), find.counts);
+  // search: a CASE per term, then the whole query for SEARCH, then k
+  const terms = splitTerms("  compaction merge   superfiles ");
+  assert.deepEqual(terms, ["compaction", "merge", "superfiles"]);
+  assert.deepEqual(splitTerms("   "), []);
+  const search = searchSql(table, terms);
+  assert.equal(placeholders(search), terms.length + 2);
+  assert.ok(search.startsWith(`SELECT ${CHUNK_COLUMNS.join(", ")}, (`), search);
+  assert.equal((search.match(/CASE WHEN CONTAINS\(LOWER\(content\), LOWER\(\?\)\) THEN 1 ELSE 0 END/g) ?? []).length, terms.length);
+  assert.ok(search.includes(`FROM ${table} WHERE SEARCH(content, ?) ORDER BY matched_terms DESC, LENGTH(content) ASC, path, start_line LIMIT ?`), search);
+  assert.equal(placeholders(searchSql(table, ["one"])), 3);
+});
+
+test("tableName takes plain identifiers only, so a setting cannot carry SQL into a statement", () => {
+  assert.equal(tableName({ database: "INFINO_BENCH", schema: "CX", table: "CHUNKS" }), "INFINO_BENCH.CX.CHUNKS");
+  assert.equal(tableName({ database: "d_1", schema: "s$", table: "_t" }), "d_1.s$._t");
+  for (const bad of ["1x", "a-b", "a.b", "a b", "t;DROP TABLE x", "", '"q"']) {
+    assert.throws(() => tableName({ database: "D", schema: "S", table: bad }), /identifier/, bad);
+  }
 });
 
 test("foldToolMessage marks errored results and ignores results with no matching call", () => {
