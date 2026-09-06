@@ -6,7 +6,7 @@
 
 </div>
 
-# Infino Subagent for Claude Code. Save 75% on your Anthropic bill. 
+# Infino Subagent for Claude Code. Save 70% on your Anthropic bill. 
 
 **Farm out retrieval work to small language models. Same accuracy as Sonnet Explore at 4x the performance.**
 
