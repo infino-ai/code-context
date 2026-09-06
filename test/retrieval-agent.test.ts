@@ -58,6 +58,21 @@ function answered(overrides: Record<string, unknown> = {}) {
 const unanswered = (terminate: string, extra: Record<string, unknown> = {}) =>
   answered({ facts: [], statement: null, coverage: { rows_total: 0, rows_returned: 0, truncated: false }, terminate, ...extra });
 
+describe("an answer whose audit could not run", () => {
+  it("carries the platform's reason as `unaudited`, and nothing when the audit ran", () => {
+    const flagged = retrievalAgentRunFrom("q", answered({ unaudited: "the audit provider refused the call" })).result;
+    expect(flagged.unaudited).toBe("the audit provider refused the call");
+    expect(flagged.error).toBeUndefined();
+    const bare = retrievalAgentRunFrom("q", answered({ unaudited: true })).result;
+    expect(bare.unaudited).toBe("the platform did not say why");
+    const audited = retrievalAgentRunFrom("q", answered()).result;
+    expect(audited).not.toHaveProperty("unaudited");
+    // a false or empty value means the audit ran
+    expect(retrievalAgentRunFrom("q", answered({ unaudited: false })).result).not.toHaveProperty("unaudited");
+    expect(retrievalAgentRunFrom("q", answered({ unaudited: "" })).result).not.toHaveProperty("unaudited");
+  });
+});
+
 /** Facts that name places, with content - what a search-shaped statement returns. */
 const PLACE_FACTS = [
   { table: "chunks", row: chunkRow(0) },

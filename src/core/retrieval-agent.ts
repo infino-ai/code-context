@@ -137,6 +137,10 @@ export interface RetrievalAgentResult {
   /** Present when the loop found no query that answers: why, in the platform's
    * words (on `escalated`, the model's own account of the problem). */
   error?: string;
+  /** Present when the platform accepted the answer but its audit could not
+   * run - the platform's account of why. The answer stands unaudited, and the
+   * caller should weigh it knowing that. Absent when the audit ran. */
+  unaudited?: string;
 }
 
 /** What the loop cost on the platform, for the usage ledger and receipt:
@@ -260,8 +264,21 @@ export function retrievalAgentRunFrom(question: string, response: unknown, maxHi
     turns: numberField(body.turns),
   };
   if (terminate !== TERMINATE_ANSWERED) result.error = `${noAnswerMessage(terminate, body.error)} - ${NO_ANSWER_HINT}`;
+  const unaudited = unauditedOf(body);
+  if (unaudited) result.unaudited = unaudited;
   const spend: RetrievalAgentSpend = { modelTokens: numberField(body.model_tokens) };
   return { result, spend };
+}
+
+/** The platform's account of an audit that could not run, when the response
+ * carries one: its `unaudited` field as a reason, or a bare `true` when it
+ * gives none. Undefined means the audit ran, or the response predates the
+ * field. */
+function unauditedOf(body: Record<string, unknown>): string | undefined {
+  const value = body.unaudited;
+  if (typeof value === "string" && value.length > 0) return value;
+  if (value === true) return "the platform did not say why";
+  return undefined;
 }
 
 /** Why there are no facts: the platform's reason for the way the loop ended

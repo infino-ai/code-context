@@ -458,7 +458,10 @@ export async function serveMcp(rootPath?: string): Promise<void> {
         "The search functions are table-valued: a ranked search is a relation, so WHERE, GROUP BY, " +
         "ORDER BY and joins compose with it in one pass, and one query replaces the several round " +
         "trips of searching, then filtering, then counting. Which function you rank by decides what " +
-        `the counts mean: hybrid_search('${TABLE}','content','terms','embedding', {{q}}, k) fuses ` +
+        "the counts mean: when the topic is a word that appears in the code - a subsystem or " +
+        "identifier name such as compaction, WAL, manifest - rank with bm25_search, whose counts are " +
+        "literal occurrences a reader can check, and reach for hybrid_search only when the " +
+        `question's words are not the code's: hybrid_search('${TABLE}','content','terms','embedding', {{q}}, k) fuses ` +
         "exact terms with meaning, so use it whenever the topic is a concept rather than a literal " +
         "string - 'code about X', 'files that do Y' - because the words in the question are rarely " +
         `the words in the code; bm25_search('${TABLE}','content','terms', k) is keyword only, for ` +

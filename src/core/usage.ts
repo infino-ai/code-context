@@ -66,6 +66,9 @@ export interface UsageEntry {
   agentModelTokens?: number;
   /** ask only: whether the platform ranked the facts against the question. */
   agentRanked?: boolean;
+  /** ask and explore: the platform's account of an audit that could not run,
+   * when the answer stands unaudited; absent when the audit ran. */
+  agentUnaudited?: string;
   /** explore only: whether the exploration came back with a written answer
    * (false when it ended on a cap or escalated and returned only what it had
    * read), so a run's empty explorations can be counted from the ledger. */
@@ -152,6 +155,7 @@ export function subagentEntry(result: RetrievalAgentResult, spend: RetrievalAgen
     agentTurns: result.turns,
     agentModelTokens: spend.modelTokens,
     ...(result.coverage?.ranked ? { agentRanked: true } : {}),
+    ...(result.unaudited ? { agentUnaudited: result.unaudited } : {}),
   };
 }
 
