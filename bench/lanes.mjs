@@ -193,7 +193,15 @@ export function agentFlags(env = process.env) {
  *                      retrieved
  *   find-explore     - find-subagent with explore in subagent's place: the
  *                      main agent asks the platform's explore mode directly
- *                      and gets a written answer beside the facts */
+ *                      and gets a written answer beside the facts
+ *   hosted-full      - everything at once: the stock tools plus all five
+ *                      code-context tools, nothing hidden. The other hosted
+ *                      lanes each remove something to isolate it; this one
+ *                      asks the opposite question - given the whole surface,
+ *                      what does the model reach for, and does more choice
+ *                      help or confuse? (The `find`/`explore` lanes hide
+ *                      `search` and `sql`, which are the local instruments
+ *                      for questions by meaning and for counts.) */
 export const LANES = {
   files: { kind: "local", tools: STOCK_TOOLS, mcp: false, requires: [] },
   cx: { kind: "local", tools: ["Read"], mcp: true, env: mcpEnvBase, requires: [] },
@@ -214,6 +222,14 @@ export const LANES = {
     env: mcpEnvBase,
     args: (env) => [...hostedFlags(env), ...agentFlags(env)],
     disallowedTools: [`${CX_TOOL_PREFIX}explore`],
+    requires: HOSTED_REQUIRES,
+  },
+  "hosted-full": {
+    kind: "hosted",
+    tools: STOCK_TOOLS,
+    mcp: true,
+    env: mcpEnvBase,
+    args: (env) => [...hostedFlags(env), ...agentFlags(env)],
     requires: HOSTED_REQUIRES,
   },
   "agent-only": {

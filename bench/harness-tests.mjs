@@ -55,7 +55,7 @@ function withHostedEnv(fn, extra = {}) {
 
 // --- lane table ---------------------------------------------------------------
 
-test("the lane table names exactly the eleven lanes and an unknown lane throws", () => {
+test("the lane table names exactly the twelve lanes and an unknown lane throws", () => {
   assert.deepEqual(Object.keys(LANES).sort(), [
     "agent-only",
     "combo",
@@ -65,6 +65,7 @@ test("the lane table names exactly the eleven lanes and an unknown lane throws",
     "find-subagent",
     "hosted",
     "hosted-agent",
+    "hosted-full",
     "index-explore",
     "platform-explore",
     "stock-explore",
@@ -147,6 +148,16 @@ test("find-subagent keeps the stock tools, find and subagent, and hides search, 
     const args = opts.mcpServers["code-context"].args;
     assert.equal(args.includes("--db"), true);
     assert.equal(args.includes("--subagent"), false); // the tools come with --db, there is no switch
+  });
+});
+
+test("hosted-full hides nothing: all five code-context tools stay in the model's context", () => {
+  withHostedEnv(() => {
+    const opts = laneOptions("hosted-full", "/r", "/r/.infino");
+    assert.equal(opts.disallowedTools, undefined);
+    assert.deepEqual(opts.tools, ["Glob", "Grep", "Read", "LS", "Bash"]);
+    assert.equal(opts.mcpServers["code-context"].args.includes("--db"), true);
+    assert.equal(laneDef("hosted-full").kind, "hosted");
   });
 });
 
