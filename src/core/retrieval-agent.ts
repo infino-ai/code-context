@@ -51,8 +51,10 @@ const COL_SYMBOL = "symbol";
 const COL_LANG = "lang";
 
 /** The columns a search or find fact is asked to carry beside its text and
- * score: the ones that place it in the code, so every fact can be cited. */
-const FACT_PROJECTION = [COL_PATH, COL_START_LINE, COL_END_LINE];
+ * score: the ones that place it in the code, so every fact can be cited, and
+ * the definitions the row holds, so a citation can be checked against the
+ * definition it names rather than the row's whole span. */
+const FACT_PROJECTION = [COL_PATH, COL_START_LINE, COL_END_LINE, COL_SYMBOL];
 
 /** Why a loop ended without facts, in the outer agent's terms: each maps a
  * platform `terminate` value to the reason. */

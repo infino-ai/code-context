@@ -262,7 +262,7 @@ describe("explore mode", () => {
       },
     };
     const { result, spend } = await runExploreAgent(hosted, { question: "how do tombstones work?" }, { maxWallSecs: 300 });
-    expect(sent).toEqual([{ question: "how do tombstones work?", mode: "explore", k: MAX_HITS, projection: ["path", "start_line", "end_line"], max_wall_secs: 300 }]);
+    expect(sent).toEqual([{ question: "how do tombstones work?", mode: "explore", k: MAX_HITS, projection: ["path", "start_line", "end_line", "symbol"], max_wall_secs: 300 }]);
     expect(result.answer).toBe("Tombstones are written in ... and read in ...");
     expect(result.chain).toEqual(CHAIN);
     expect(result.sql).toBe(CHAIN[1]);
@@ -312,7 +312,7 @@ describe("runRetrievalAgent", () => {
       },
     };
     const { result, spend } = await runRetrievalAgent(hosted, { question: "which files?" }, { maxTurns: 4, maxWallSecs: 90 });
-    expect(sent).toEqual([{ question: "which files?", k: MAX_HITS, projection: ["path", "start_line", "end_line"], max_turns: 4, max_wall_secs: 90 }]);
+    expect(sent).toEqual([{ question: "which files?", k: MAX_HITS, projection: ["path", "start_line", "end_line", "symbol"], max_turns: 4, max_wall_secs: 90 }]);
     expect(result.question).toBe("which files?");
     expect(result.sql).toBe(STATEMENT);
     expect(result.rows).toEqual([
