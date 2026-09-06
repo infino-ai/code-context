@@ -1,48 +1,52 @@
-<svg xmlns='http://www.w3.org/2000/svg' width='900' height='420' viewBox='0 0 900 420' font-family='-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif'>
+<svg xmlns='http://www.w3.org/2000/svg' width='960' height='440' viewBox='0 0 960 440' font-family='-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif'>
 <defs>
   <marker id='arrow' viewBox='0 0 10 10' refX='9' refY='5' markerWidth='8' markerHeight='8' orient='auto-start-reverse'>
     <path d='M 0 0 L 10 5 L 0 10 z' fill='#57606a'/>
   </marker>
 </defs>
-<rect width='900' height='420' fill='#ffffff'/>
+<rect width='960' height='440' fill='#ffffff'/>
 
 <!-- Claude Code -->
-<rect x='30' y='150' width='190' height='120' rx='10' fill='#f6f8fa' stroke='#d0d7de'/>
-<text x='125' y='190' text-anchor='middle' font-size='18' font-weight='600' fill='#24292f'>Claude Code</text>
-<text x='125' y='214' text-anchor='middle' font-size='13' fill='#57606a'>keeps the reasoning,</text>
-<text x='125' y='232' text-anchor='middle' font-size='13' fill='#57606a'>decides when to delegate</text>
+<rect x='30' y='160' width='190' height='120' rx='10' fill='#f6f8fa' stroke='#d0d7de'/>
+<text x='125' y='200' text-anchor='middle' font-size='18' font-weight='600' fill='#24292f'>Claude Code</text>
+<text x='125' y='224' text-anchor='middle' font-size='13' fill='#57606a'>keeps the reasoning,</text>
+<text x='125' y='242' text-anchor='middle' font-size='13' fill='#57606a'>decides when to delegate</text>
 
-<!-- laptop: find -->
-<rect x='330' y='40' width='540' height='140' rx='10' fill='#ffffff' stroke='#2f81f7' stroke-width='1.5'/>
+<!-- your machine: find -->
+<rect x='330' y='40' width='600' height='150' rx='10' fill='#ffffff' stroke='#2f81f7' stroke-width='1.5'/>
 <text x='350' y='68' font-size='12' font-weight='600' fill='#2f81f7'>YOUR MACHINE</text>
-<text x='350' y='98' font-size='18' font-weight='600' fill='#24292f'>find</text>
-<text x='350' y='120' font-size='13' fill='#57606a'>exact lookups from a local index of the repository</text>
-<text x='350' y='138' font-size='13' fill='#57606a'>path:line hits in tens of milliseconds, offline, no grep-and-read loop</text>
-<rect x='700' y='90' width='150' height='70' rx='8' fill='#f6f8fa' stroke='#d0d7de'/>
-<text x='775' y='119' text-anchor='middle' font-size='13' font-weight='600' fill='#24292f'>local index</text>
-<text x='775' y='138' text-anchor='middle' font-size='12' fill='#57606a'>plain files in .infino/</text>
+<text x='350' y='100' font-size='18' font-weight='600' fill='#24292f'>find</text>
+<text x='350' y='124' font-size='13' fill='#57606a'>exact lookups from a local index</text>
+<text x='350' y='143' font-size='13' fill='#57606a'>path:line hits in tens of milliseconds, offline</text>
+<text x='350' y='162' font-size='13' fill='#57606a'>no grep-and-read loop in Claude's context</text>
+<rect x='710' y='80' width='200' height='70' rx='8' fill='#f6f8fa' stroke='#d0d7de'/>
+<text x='810' y='109' text-anchor='middle' font-size='13' font-weight='600' fill='#24292f'>local index</text>
+<text x='810' y='129' text-anchor='middle' font-size='12' fill='#57606a'>plain files in .infino/</text>
 
-<!-- cloud: explore -->
-<rect x='330' y='220' width='540' height='170' rx='10' fill='#ffffff' stroke='#2da44e' stroke-width='1.5'/>
-<text x='350' y='248' font-size='12' font-weight='600' fill='#2da44e'>INFINO PLATFORM</text>
-<text x='350' y='278' font-size='18' font-weight='600' fill='#24292f'>explore</text>
-<text x='350' y='300' font-size='13' fill='#57606a'>questions that span the repository, fifty at a time if Claude asks</text>
-<text x='350' y='318' font-size='13' fill='#57606a'>a fleet of small language models, each with deep context from the index</text>
-<text x='350' y='336' font-size='13' fill='#57606a'>one grounded answer back, cited path:line</text>
-<rect x='700' y='262' width='150' height='50' rx='8' fill='#f6f8fa' stroke='#d0d7de'/>
-<text x='775' y='283' text-anchor='middle' font-size='13' font-weight='600' fill='#24292f'>fleet of SLMs</text>
-<text x='775' y='300' text-anchor='middle' font-size='12' fill='#57606a'>in parallel</text>
-<rect x='700' y='322' width='150' height='50' rx='8' fill='#f6f8fa' stroke='#d0d7de'/>
-<text x='775' y='343' text-anchor='middle' font-size='13' font-weight='600' fill='#24292f'>the same index</text>
-<text x='775' y='360' text-anchor='middle' font-size='12' fill='#57606a'>search on object storage</text>
+<!-- infino platform: explore -->
+<rect x='330' y='230' width='600' height='180' rx='10' fill='#ffffff' stroke='#2da44e' stroke-width='1.5'/>
+<text x='350' y='258' font-size='12' font-weight='600' fill='#2da44e'>INFINO PLATFORM</text>
+<text x='350' y='290' font-size='18' font-weight='600' fill='#24292f'>explore</text>
+<text x='350' y='314' font-size='13' fill='#57606a'>questions that span the repository,</text>
+<text x='350' y='333' font-size='13' fill='#57606a'>fifty at a time when Claude fans out</text>
+<text x='350' y='352' font-size='13' fill='#57606a'>a fleet of small language models in parallel,</text>
+<text x='350' y='371' font-size='13' fill='#57606a'>each with deep context from the index</text>
+<text x='350' y='390' font-size='13' fill='#57606a'>one grounded answer back, cited path:line</text>
+<rect x='710' y='262' width='200' height='56' rx='8' fill='#f6f8fa' stroke='#d0d7de'/>
+<text x='810' y='285' text-anchor='middle' font-size='13' font-weight='600' fill='#24292f'>fleet of SLMs</text>
+<text x='810' y='304' text-anchor='middle' font-size='12' fill='#57606a'>in parallel</text>
+<rect x='710' y='334' width='200' height='56' rx='8' fill='#f6f8fa' stroke='#d0d7de'/>
+<text x='810' y='357' text-anchor='middle' font-size='13' font-weight='600' fill='#24292f'>the same index</text>
+<text x='810' y='376' text-anchor='middle' font-size='12' fill='#57606a'>search on object storage</text>
 
-<!-- arrows -->
-<path d='M 220 190 C 270 190, 280 110, 330 110' fill='none' stroke='#57606a' stroke-width='1.5' marker-end='url(#arrow)'/>
-<text x='262' y='138' font-size='12' fill='#57606a'>where is X</text>
-<path d='M 220 230 C 270 230, 280 305, 330 305' fill='none' stroke='#57606a' stroke-width='1.5' marker-end='url(#arrow)'/>
-<text x='250' y='285' font-size='12' fill='#57606a'>how does X work</text>
+<!-- arrows from Claude Code -->
+<path d='M 220 200 C 270 200, 280 115, 330 115' fill='none' stroke='#57606a' stroke-width='1.5' marker-end='url(#arrow)'/>
+<text x='275' y='140' text-anchor='middle' font-size='12' fill='#57606a'>where is X</text>
+<path d='M 220 240 C 270 240, 280 320, 330 320' fill='none' stroke='#57606a' stroke-width='1.5' marker-end='url(#arrow)'/>
+<text x='275' y='300' text-anchor='middle' font-size='12' fill='#57606a'>how does X work</text>
 
-<!-- one index, two places -->
-<path d='M 775 160 L 775 262' fill='none' stroke='#8b949e' stroke-width='1.5' stroke-dasharray='5 4'/>
-<text x='786' y='215' font-size='12' fill='#57606a'>one index, kept in both places</text>
+<!-- one index, kept in both places -->
+<path d='M 810 150 L 810 334' fill='none' stroke='#8b949e' stroke-width='1.5' stroke-dasharray='5 4'/>
+<rect x='662' y='198' width='296' height='22' rx='4' fill='#ffffff'/>
+<text x='810' y='214' text-anchor='middle' font-size='12' fill='#57606a'>one index, kept in both places</text>
 </svg>
