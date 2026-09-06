@@ -295,7 +295,9 @@ export async function serveMcp(rootPath?: string): Promise<void> {
         "- find - every line containing an exact string, where you would grep.\n" +
         "- search - how does X work, where is Y handled, code by meaning.\n" +
         "- sql - counts, rankings, and aggregates across the repo, including ranking files by how " +
-        "much of them is about a topic (rank by hybrid_search, not bm25, when the topic is a concept).\n" +
+        "much of them is about a topic (rank by hybrid_search, not bm25, when the topic is a concept; " +
+        "a total over a search relation is the top k's matched lines, never a file's length - sizes " +
+        "and whole-repo counts come from the chunks table with no search function).\n" +
         (platformTools
           ? "- ask - a question or task in plain language; returns the rows it retrieved (facts with path:line and the code), not an answer: compose from them. Spawn several in parallel for independent questions. How often a string occurs, per file, is find's byFile.\n" +
             "- explore - a question about a mechanism that spans files (how X works end to end, what calls what); it reads and follows what it finds and returns a written answer grounded in the facts it lists, with the chain of queries. Take the answer and cite its facts. Slower than ask: use it when one retrieval will not do.\n"
@@ -463,10 +465,17 @@ export async function serveMcp(rootPath?: string): Promise<void> {
         `when you know the term that appears in the source; vector_search('${TABLE}','embedding', ` +
         "{{q}}, k) is meaning alone. The {{name}} placeholders are filled server-side from the embed " +
         "map, so they cost you nothing but the name. Rank a topic, filtered on the same pass: " +
-        "SELECT path, SUM(end_line - start_line + 1) AS lines, COUNT(*) AS chunks FROM " +
+        "SELECT path, SUM(end_line - start_line + 1) AS matched_lines, COUNT(*) AS chunks FROM " +
         `hybrid_search('${TABLE}','content','<terms>','embedding', {{q}}, 300) WHERE path LIKE 'src/%' ` +
-        "GROUP BY path ORDER BY lines DESC LIMIT 15, with embed {\"q\":\"<the topic>\"}. Count a known " +
-        `term: the same shape over bm25_search('${TABLE}','content','<term>', 300). ` +
+        "GROUP BY path ORDER BY matched_lines DESC LIMIT 15, with embed {\"q\":\"<the topic>\"}. Count a " +
+        `known term: the same shape over bm25_search('${TABLE}','content','<term>', 300). ` +
+        "What such a total means: a search relation holds only the top k chunks of that query, so a " +
+        "SUM or COUNT over it is the lines or chunks that matched within the top k - a share of the " +
+        "file about the topic - and never the file's length or the repository's count; report it as " +
+        "'matched lines in the top 300 for <topic>', and expect files outside the top k, including " +
+        "large ones, to be missing from it. A file's length, a size ranking, or any count over the " +
+        `whole repository comes from ${TABLE} with no search function: SELECT path, MAX(end_line) AS ` +
+        `lines FROM ${TABLE} GROUP BY path ORDER BY lines DESC. ` +
         "The result includes a 'usage' field, a one-line receipt of tokens returned and rows.",
       inputSchema: {
         query: z
