@@ -467,11 +467,12 @@ export async function serveMcp(rootPath?: string): Promise<void> {
         `the words in the code; bm25_search('${TABLE}','content','terms', k) is keyword only, for ` +
         `when you know the term that appears in the source; vector_search('${TABLE}','embedding', ` +
         "{{q}}, k) is meaning alone. The {{name}} placeholders are filled server-side from the embed " +
-        "map, so they cost you nothing but the name. Rank a topic, filtered on the same pass: " +
-        "SELECT path, SUM(end_line - start_line + 1) AS matched_lines, COUNT(*) AS chunks FROM " +
-        `hybrid_search('${TABLE}','content','<terms>','embedding', {{q}}, 300) WHERE path LIKE 'src/%' ` +
-        "GROUP BY path ORDER BY matched_lines DESC LIMIT 15, with embed {\"q\":\"<the topic>\"}. Count a " +
-        `known term: the same shape over bm25_search('${TABLE}','content','<term>', 300). ` +
+        "map, so they cost you nothing but the name. Rank files by a named topic, filtered on the " +
+        "same pass: SELECT path, SUM(end_line - start_line + 1) AS matched_lines, COUNT(*) AS chunks FROM " +
+        `bm25_search('${TABLE}','content','<term>', 300) WHERE path LIKE 'src/%' GROUP BY path ORDER BY ` +
+        "matched_lines DESC LIMIT 15 - every row holds the term, so a reader can check it. Rank by a " +
+        `paraphrased concept: the same shape over hybrid_search('${TABLE}','content','<terms>','embedding', ` +
+        "{{q}}, 300), with embed {\"q\":\"<the topic>\"}. " +
         "What such a total means: a search relation holds only the top k chunks of that query, so a " +
         "SUM or COUNT over it is the lines or chunks that matched within the top k - a share of the " +
         "file about the topic - and never the file's length or the repository's count; report it as " +
