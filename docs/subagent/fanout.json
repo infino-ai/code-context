@@ -1,7 +1,9 @@
 {
-  "subtitle": "The same fifty questions asked all at once, one Explore subagent or one Infino exploration per question; seconds until the last answer arrived. claude-sonnet-4-6, infino repo, 2026-09-05.",
+  "subtitle": "Questions asked all at once, one Explore subagent or one SuperGrep exploration per question; seconds until the last answer arrived. claude-sonnet-4-6, infino repo, 2026-09-05 to 09-07.",
   "runs": [
-    { "label": "Sonnet + its Explore subagents, 72 spawned ($22.62)", "arm": "sonnet", "answered": 50, "of": 50, "lastSecs": 1218 },
-    { "label": "Infino Subagent, 50 explorations", "arm": "infino", "answered": 38, "of": 50, "lastSecs": 379 }
+    { "label": "Ten at once - Sonnet's Explore subagents", "arm": "sonnet", "answered": 10, "of": 10, "lastSecs": 316 },
+    { "label": "Ten at once - SuperGrep", "arm": "infino", "answered": 10, "of": 10, "lastSecs": 31 },
+    { "label": "Fifty at once - Sonnet's Explore subagents", "arm": "sonnet", "answered": 50, "of": 50, "lastSecs": 1218 },
+    { "label": "Fifty at once - SuperGrep", "arm": "infino", "answered": 38, "of": 50, "lastSecs": 379 }
   ]
 }

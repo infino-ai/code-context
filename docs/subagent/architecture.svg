@@ -1,52 +1,54 @@
-<svg xmlns='http://www.w3.org/2000/svg' width='960' height='440' viewBox='0 0 960 440' font-family='-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif'>
+<svg xmlns='http://www.w3.org/2000/svg' width='960' height='460' viewBox='0 0 960 460' font-family='-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif'>
 <defs>
   <marker id='arrow' viewBox='0 0 10 10' refX='9' refY='5' markerWidth='8' markerHeight='8' orient='auto-start-reverse'>
     <path d='M 0 0 L 10 5 L 0 10 z' fill='#57606a'/>
   </marker>
 </defs>
-<rect width='960' height='440' fill='#ffffff'/>
+<rect width='960' height='460' fill='#ffffff'/>
 
-<!-- Claude Code -->
-<rect x='30' y='160' width='190' height='120' rx='10' fill='#f6f8fa' stroke='#d0d7de'/>
-<text x='125' y='200' text-anchor='middle' font-size='18' font-weight='600' fill='#24292f'>Claude Code</text>
-<text x='125' y='224' text-anchor='middle' font-size='13' fill='#57606a'>keeps the reasoning,</text>
-<text x='125' y='242' text-anchor='middle' font-size='13' fill='#57606a'>decides when to delegate</text>
+<!-- the caller -->
+<rect x='30' y='170' width='190' height='120' rx='10' fill='#f6f8fa' stroke='#d0d7de'/>
+<text x='125' y='210' text-anchor='middle' font-size='18' font-weight='600' fill='#24292f'>Sonnet</text>
+<text x='125' y='234' text-anchor='middle' font-size='13' fill='#57606a'>keeps the reasoning,</text>
+<text x='125' y='252' text-anchor='middle' font-size='13' fill='#57606a'>decides when to delegate</text>
 
-<!-- your machine: find -->
-<rect x='330' y='40' width='600' height='150' rx='10' fill='#ffffff' stroke='#2f81f7' stroke-width='1.5'/>
-<text x='350' y='68' font-size='12' font-weight='600' fill='#2f81f7'>YOUR MACHINE</text>
-<text x='350' y='100' font-size='18' font-weight='600' fill='#24292f'>find</text>
-<text x='350' y='124' font-size='13' fill='#57606a'>exact lookups from a local index</text>
-<text x='350' y='143' font-size='13' fill='#57606a'>path:line hits in tens of milliseconds, offline</text>
-<text x='350' y='162' font-size='13' fill='#57606a'>no grep-and-read loop in Claude's context</text>
-<rect x='710' y='80' width='200' height='70' rx='8' fill='#f6f8fa' stroke='#d0d7de'/>
-<text x='810' y='109' text-anchor='middle' font-size='13' font-weight='600' fill='#24292f'>local index</text>
-<text x='810' y='129' text-anchor='middle' font-size='12' fill='#57606a'>plain files in .infino/</text>
+<!-- your machine: find, search, sql -->
+<rect x='330' y='30' width='600' height='185' rx='10' fill='#ffffff' stroke='#2f81f7' stroke-width='1.5'/>
+<text x='350' y='58' font-size='12' font-weight='600' fill='#2f81f7'>YOUR MACHINE</text>
+<text x='350' y='90' font-size='17' font-weight='600' fill='#24292f'>find</text>
+<text x='350' y='109' font-size='13' fill='#57606a'>every line holding an exact string</text>
+<text x='350' y='137' font-size='17' font-weight='600' fill='#24292f'>search</text>
+<text x='350' y='156' font-size='13' fill='#57606a'>keywords and meaning, one ranked pass</text>
+<text x='350' y='184' font-size='17' font-weight='600' fill='#24292f'>sql</text>
+<text x='350' y='203' font-size='13' fill='#57606a'>counts and rankings over those searches</text>
+<rect x='680' y='100' width='230' height='64' rx='8' fill='#f6f8fa' stroke='#d0d7de'/>
+<text x='795' y='125' text-anchor='middle' font-size='13' font-weight='600' fill='#24292f'>local index</text>
+<text x='795' y='145' text-anchor='middle' font-size='12' fill='#57606a'>plain files in .infino/</text>
 
-<!-- infino platform: explore -->
-<rect x='330' y='230' width='600' height='180' rx='10' fill='#ffffff' stroke='#2da44e' stroke-width='1.5'/>
-<text x='350' y='258' font-size='12' font-weight='600' fill='#2da44e'>INFINO PLATFORM</text>
-<text x='350' y='290' font-size='18' font-weight='600' fill='#24292f'>explore</text>
-<text x='350' y='314' font-size='13' fill='#57606a'>questions that span the repository,</text>
-<text x='350' y='333' font-size='13' fill='#57606a'>fifty at a time when Claude fans out</text>
-<text x='350' y='352' font-size='13' fill='#57606a'>a fleet of small language models in parallel,</text>
-<text x='350' y='371' font-size='13' fill='#57606a'>each with deep context from the index</text>
-<text x='350' y='390' font-size='13' fill='#57606a'>one grounded answer back, cited path:line</text>
-<rect x='710' y='262' width='200' height='56' rx='8' fill='#f6f8fa' stroke='#d0d7de'/>
-<text x='810' y='285' text-anchor='middle' font-size='13' font-weight='600' fill='#24292f'>fleet of SLMs</text>
-<text x='810' y='304' text-anchor='middle' font-size='12' fill='#57606a'>in parallel</text>
-<rect x='710' y='334' width='200' height='56' rx='8' fill='#f6f8fa' stroke='#d0d7de'/>
-<text x='810' y='357' text-anchor='middle' font-size='13' font-weight='600' fill='#24292f'>the same index</text>
-<text x='810' y='376' text-anchor='middle' font-size='12' fill='#57606a'>search on object storage</text>
+<!-- infino platform: explore, ask -->
+<rect x='330' y='250' width='600' height='185' rx='10' fill='#ffffff' stroke='#2da44e' stroke-width='1.5'/>
+<text x='350' y='278' font-size='12' font-weight='600' fill='#2da44e'>INFINO PLATFORM</text>
+<text x='350' y='310' font-size='17' font-weight='600' fill='#24292f'>explore</text>
+<text x='350' y='329' font-size='13' fill='#57606a'>a question that spans the repository,</text>
+<text x='350' y='347' font-size='13' fill='#57606a'>answered in writing, cited path:line</text>
+<text x='350' y='377' font-size='17' font-weight='600' fill='#24292f'>ask</text>
+<text x='350' y='396' font-size='13' fill='#57606a'>one retrieval, returned as the rows</text>
+<text x='350' y='414' font-size='13' fill='#57606a'>it found rather than as prose</text>
+<rect x='680' y='286' width='230' height='60' rx='8' fill='#f6f8fa' stroke='#d0d7de'/>
+<text x='795' y='311' text-anchor='middle' font-size='13' font-weight='600' fill='#24292f'>small models</text>
+<text x='795' y='330' text-anchor='middle' font-size='12' fill='#57606a'>many at once, in parallel</text>
+<rect x='680' y='360' width='230' height='60' rx='8' fill='#f6f8fa' stroke='#d0d7de'/>
+<text x='795' y='385' text-anchor='middle' font-size='13' font-weight='600' fill='#24292f'>the same index</text>
+<text x='795' y='404' text-anchor='middle' font-size='12' fill='#57606a'>search on object storage</text>
 
-<!-- arrows from Claude Code -->
-<path d='M 220 200 C 270 200, 280 115, 330 115' fill='none' stroke='#57606a' stroke-width='1.5' marker-end='url(#arrow)'/>
-<text x='275' y='140' text-anchor='middle' font-size='12' fill='#57606a'>where is X</text>
-<path d='M 220 240 C 270 240, 280 320, 330 320' fill='none' stroke='#57606a' stroke-width='1.5' marker-end='url(#arrow)'/>
-<text x='275' y='300' text-anchor='middle' font-size='12' fill='#57606a'>how does X work</text>
+<!-- what Sonnet sends where -->
+<path d='M 220 210 C 275 210, 285 112, 330 112' fill='none' stroke='#57606a' stroke-width='1.5' marker-end='url(#arrow)'/>
+<text x='276' y='152' text-anchor='middle' font-size='12' fill='#57606a'>find, search, count</text>
+<path d='M 220 250 C 275 250, 285 330, 330 330' fill='none' stroke='#57606a' stroke-width='1.5' marker-end='url(#arrow)'/>
+<text x='276' y='296' text-anchor='middle' font-size='12' fill='#57606a'>explore, ask</text>
 
 <!-- one index, kept in both places -->
-<path d='M 810 150 L 810 334' fill='none' stroke='#8b949e' stroke-width='1.5' stroke-dasharray='5 4'/>
-<rect x='662' y='198' width='296' height='22' rx='4' fill='#ffffff'/>
-<text x='810' y='214' text-anchor='middle' font-size='12' fill='#57606a'>one index, kept in both places</text>
+<path d='M 795 164 L 795 360' fill='none' stroke='#8b949e' stroke-width='1.5' stroke-dasharray='5 4'/>
+<rect x='660' y='221' width='270' height='22' rx='4' fill='#ffffff'/>
+<text x='795' y='237' text-anchor='middle' font-size='12' fill='#57606a'>one index, kept in both places</text>
 </svg>
