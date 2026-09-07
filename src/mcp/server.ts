@@ -458,9 +458,9 @@ export async function serveMcp(rootPath?: string): Promise<void> {
         "The search functions are table-valued: a ranked search is a relation, so WHERE, GROUP BY, " +
         "ORDER BY and joins compose with it in one pass, and one query replaces the several round " +
         "trips of searching, then filtering, then counting. Rank through a search relation rather " +
-        "than scanning the whole table with ILIKE: a scan has no relevance ranking, reads every " +
-        "chunk, and answers 'contains this substring' when the question asked which code is about " +
-        "something. " +
+        "than scanning the whole table - with ILIKE, LIKE, regexp_like, or a bare filter on path " +
+        "or lang: a scan has no relevance ranking, reads every chunk, and answers 'contains this " +
+        "substring' when the question asked which code is about something. " +
         `Rank with hybrid_search('${TABLE}','content','terms','embedding', {{q}}, k) - 'terms' and ` +
         "{{q}} are yours to fill in, not literals to copy - unless you have " +
         "a reason not to: it fuses exact terms with meaning, so it reaches the code whether or not " +
@@ -470,7 +470,8 @@ export async function serveMcp(rootPath?: string): Promise<void> {
         "is itself a literal string you know appears in the source and you want counts a reader can " +
         `check as occurrences. vector_search('${TABLE}','embedding', {{q}}, k) is meaning alone. ` +
         "The {{name}} placeholders are filled server-side from the embed " +
-        "map, so they cost you nothing but the name. Rank files by a topic, filtered on the " +
+        "map, so they cost you nothing but the name. Which files have the most code about a topic, " +
+        "ranked - the whole question in one statement, filtered on the " +
         "same pass, with your own words in place of the example's: SELECT path, SUM(end_line - start_line + 1) " +
         `AS ranked_lines, COUNT(*) AS chunks FROM hybrid_search('${TABLE}','content','merge small superfiles','embedding', {{q}}, 300) WHERE ` +
         "path LIKE 'src/%' GROUP BY path ORDER BY ranked_lines DESC LIMIT 15, with embed " +
@@ -482,9 +483,12 @@ export async function serveMcp(rootPath?: string): Promise<void> {
         "SUM or COUNT over it is the lines or chunks that ranked within the top k - a share of the " +
         "file about the topic - and never the file's length or the repository's count; report it as " +
         "'lines ranked in the top 300 for <topic>', and expect files outside the top k, including " +
-        "large ones, to be missing from it. A file's length, a size ranking, or any count over the " +
-        `whole repository comes from ${TABLE} with no search function: SELECT path, MAX(end_line) AS ` +
-        `lines FROM ${TABLE} GROUP BY path ORDER BY lines DESC. ` +
+        "large ones, to be missing from it. A question with no topic in it - a file's length, the " +
+        `largest files, a count over the whole repository - comes from ${TABLE} with no search ` +
+        `function: SELECT path, MAX(end_line) AS lines FROM ${TABLE} GROUP BY path ORDER BY lines ` +
+        "DESC. A path prefix is not a topic: filtering on WHERE path LIKE 'src/thing/%' and " +
+        "measuring lengths answers how big those files are, not which code is about the thing, and " +
+        "it guesses the answer from a directory name instead of retrieving it. " +
         "The result includes a 'usage' field, a one-line receipt of tokens returned and rows.",
       inputSchema: {
         query: z
