@@ -8,7 +8,7 @@
 
 # SuperGrep by Infino
 
-**Fast code retrieval for AI agents. Save 75% on your token bill.**
+**Small language models (SLMs) for fast code retrieval. Save 75% on your token bill.**
 
 Your agent keeps the reasoning. SuperGrep takes the exploration off
 it: the retrieval, the fan-out, the fifty "go look at this" jobs a hard task
