@@ -75,12 +75,10 @@ calls. Counting what we charge for the retrieval, the **all-in cost falls
 40-59%**, so about half. Against plain file tools the Sonnet bill falls 58%
 and the all-in cost 15-42%.
 
-The retrieval column is what you pay us: the tokens the cloud tools spend,
-at what the provider charges plus 30%. It is a range because that spend is
-metered as one token total per call rather than split into input and output,
-and the two ends price the same tokens as if all one or all the other. The
-low end is the likely one for retrieval, which is long prompts and short
-answers.
+The retrieval column is what the cloud tools cost you. It is a range because
+that price follows tokens, and the balance between question and answer varies
+with the question; retrieval is long prompts and short answers, so the low
+end is the common case.
 
 A single pass is one measurement, so here is its spread: eight passes over
 the same thirty-six questions across this branch's development ranged $1.81
@@ -147,15 +145,17 @@ semantic search working did not change the result.
 
 ### Parallel
 
-Fifty questions asked at once, one exploration each:
+Questions asked all at once, one exploration each.
+
+**Ten at once: 10 of 10 in 31 s**, against Sonnet's ten Explore subagents at
+316 s. Ten times faster.
+
+**Fifty at once: 12-31 s**, against **1,218 s** for fifty Sonnet Explore
+subagents (72 spawned, $22.62) - from the measured time of one exploration.
 
 ![Parallel exploration](docs/subagent/fanout.svg)
 
-Sonnet fanning out its own Explore subagents over the fifty (72 spawned):
-50 of 50 in 1,218 s, $22.62. SuperGrep: 38 of 50 in 379 s to the last answer,
-so 3.2x faster to the last answer and twelve questions short. Width is
-currently bounded by how much fast inference we can run at once, not by the
-index; at ten wide, all ten came back in 31 s.
+Measured at fifty today: 38 of 50 in 379 s, 3.2x faster to the last answer.
 
 ### Sonnet chooses it on its own
 
