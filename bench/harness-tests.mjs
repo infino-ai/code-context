@@ -39,7 +39,7 @@ import {
   keepInput,
   recordedQueries,
 } from "./lanes.mjs";
-import { compareFind, countInFile } from "./find-parity.mjs";
+import { compareFind, countInFile, projectionInvariance } from "./find-parity.mjs";
 import { warmHosted, splitDbUrl, DEFAULT_RETRY_AFTER_SECS } from "./warm-hosted.mjs";
 import { indexArgs, runIndexBuild, hostOf } from "./load-hosted.mjs";
 import { snowflakeSettings, CHUNK_COLUMNS } from "./snowflake-rest.mjs";
@@ -532,6 +532,36 @@ test("compareFind reports the totals, the per-file counts and the lines only one
   const extra = compareFind(agree, side(4, 3, [["a.rs", 2], ["b.rs", 1], ["c.rs", 1]], ["a.rs:1", "a.rs:9", "b.rs:4", "c.rs:7"]));
   assert.deepEqual(extra.onlyPlatform, ["c.rs:7"]);
   assert.deepEqual(extra.byFile, [{ path: "c.rs", client: null, platform: 1 }]);
+});
+
+test("projectionInvariance holds the totals and counts always, and the lines only when nothing was cut", () => {
+  const side = (total, files, byFile, lines, truncated = false) => ({ total, files, byFile: new Map(byFile), lines: new Set(lines), truncated });
+  const base = { label: "path", answer: side(3, 2, [["a.rs", 2], ["b.rs", 1]], ["a.rs:1", "a.rs:9", "b.rs:4"]) };
+  // adding columns changes nothing: the contract holds
+  assert.equal(projectionInvariance([base, { label: "path,symbol", answer: side(3, 2, [["a.rs", 2], ["b.rs", 1]], ["a.rs:9", "a.rs:1", "b.rs:4"]) }]).same, true);
+  // the bug this exists for: a projected column inflates the total and a count
+  const inflated = projectionInvariance([base, { label: "path,end_line", answer: side(4, 2, [["a.rs", 3], ["b.rs", 1]], ["a.rs:1", "a.rs:9", "b.rs:4"]) }]);
+  assert.equal(inflated.same, false);
+  assert.equal(inflated.broken[0].label, "path,end_line");
+  assert.deepEqual(inflated.broken[0].dimensions, ["total 3 against 4", "1 per-file counts"]);
+  // a cut answer holds some of the matches; which ones is not the contract
+  const cut = projectionInvariance([
+    { label: "path", answer: side(9, 2, [["a.rs", 8], ["b.rs", 1]], ["a.rs:1", "a.rs:9"], true) },
+    { label: "path,symbol", answer: side(9, 2, [["a.rs", 8], ["b.rs", 1]], ["a.rs:1", "b.rs:4"], true) },
+  ]);
+  assert.equal(cut.same, true);
+  // but a cut answer that disagrees on the total still breaks it
+  assert.equal(
+    projectionInvariance([
+      { label: "path", answer: side(9, 2, [["a.rs", 8], ["b.rs", 1]], ["a.rs:1"], true) },
+      { label: "path,symbol", answer: side(11, 2, [["a.rs", 8], ["b.rs", 1]], ["a.rs:1"], true) },
+    ]).same,
+    false,
+  );
+  // an untruncated pair that returns different lines does break it
+  const lines = projectionInvariance([base, { label: "path,symbol", answer: side(3, 2, [["a.rs", 2], ["b.rs", 1]], ["a.rs:1", "a.rs:9", "b.rs:5"]) }]);
+  assert.equal(lines.same, false);
+  assert.deepEqual(lines.broken[0].dimensions, ["2 lines"]);
 });
 
 test("countInFile is the referee: the 1-based lines of a file holding the literal, case-sensitively", () => {
