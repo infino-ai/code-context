@@ -1,6 +1,11 @@
 # Local embedder evaluation
 
-How the default local embedding model was chosen (2026-07-10).
+How the default local embedding model was chosen (2026-07-10, on the
+[infino](https://github.com/infino-ai/infino) engine repo as it stood that
+day - smaller than the 256,000-line corpus the README's numbers use). This
+eval covers only the local embedder, used by `find`, `search` and `sql`; the
+platform's own embedder, used by `explore` and `ask` by default, is a
+separate model on the platform side and out of scope here.
 
 ## Setup
 
@@ -27,9 +32,9 @@ How the default local embedding model was chosen (2026-07-10).
 | bge-small-en-v1.5 (q8) | 33M | 3.4 min | 6/15 / 0.197 | 5/15 / 0.200 |
 
 Also considered: Model2Vec / potion static embeddings (no maintained
-JavaScript inference path at eval time) and remote embedding APIs
-(evaluated but not shipped: the embedder is local-only, so the default
-works with no key and code never leaves the machine).
+JavaScript inference path at eval time) and remote embedding APIs (evaluated
+but not shipped for the local embedder: the default runs offline with no key
+and no code leaving the machine, which a remote API would give up).
 
 ## Verdict
 

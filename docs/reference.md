@@ -1,8 +1,8 @@
 # Reference
 
 The tools, flags, configuration and CLI behind
-[Infino Subagent](../README.md). The package, the CLI (`cx`) and the MCP
-server are named `code-context`.
+[SuperGrep](../README.md). The package, the CLI (`cx`) and the MCP
+server are still named `code-context`.
 
 ## The tools
 
@@ -15,22 +15,30 @@ server are named `code-context`.
 | `ask` | platform | a question or task in plain language; returns the rows it retrieved - `path`, `start_line`, `end_line` and the code - never a summary | when Claude wants facts to compose from rather than an answer |
 
 `explore` and `ask` are registered only when the server has `--db`.
-Each tool takes an optional `path` (an absolute repository root) so one
-server can serve several repositories in a session, each with its own index.
+`find`, `search` and `sql` take an optional `path` (an absolute repository
+root) so one server can serve several repositories in a session, each with
+its own local index; `explore` and `ask` read one platform database and
+refuse a `path` naming a different repository.
 
 ### The SQL move
 
-Search-as-a-table composes with aggregation - ranked by relevance, tallied
-by SQL, one engine pass:
+Search-as-a-table composes with aggregation - ranked by relevance, filtered
+and tallied by SQL, one engine pass. Lead with `hybrid_search`, which fuses
+keyword and meaning so it finds the code whether or not the question's words
+are the code's:
 
 ```sql
-SELECT path, SUM(end_line - start_line + 1) AS lines, COUNT(*) AS chunks
-FROM bm25_search('chunks', 'content', 'vector index quantization', 300)
-GROUP BY path ORDER BY lines DESC LIMIT 15
+SELECT path, SUM(end_line - start_line + 1) AS ranked_lines, COUNT(*) AS chunks
+FROM hybrid_search('chunks', 'content', 'merge small superfiles', 'embedding', {{q}}, 300)
+WHERE path LIKE 'src/%'
+GROUP BY path ORDER BY ranked_lines DESC LIMIT 15
 ```
-
-`hybrid_search(...)` and `vector_search(...)` work the same way; the server
-embeds `{{name}}` placeholders for them, so agents never handle raw vectors.
+with embed `{"q": "how small superfiles are merged into larger ones"}`. The
+total is the lines that ranked in the top 300 for that query, not the file's
+length or a repository-wide count. `bm25_search(...)` is the same shape,
+keyword-only, for when the topic is a literal string you want counted as
+occurrences a reader can check; the server embeds `{{name}}` placeholders
+server-side, so agents never handle raw vectors.
 
 ### One index in two places
 
@@ -42,7 +50,7 @@ never drift. `find`, `search` and `sql` read the local copy; `ask` and
 index alone, and nothing leaves the machine: no account, no key, no
 telemetry; embedding is a small local model downloaded once.
 
-The keyword index commits first - under a second on a 3,000-chunk
+The keyword index commits first - about a second on a 3,000-chunk
 repository - so search works before any embedding model exists on the
 machine; vectors backfill in the background and hybrid ranking unlocks when
 they land. The local index lives in `.infino/` in the repository root (added
@@ -64,9 +72,11 @@ that touch it, `cx index` and `cx mcp`:
 | `--subagent-max-turns`, `--subagent-max-wall-secs`, `--subagent-k` | 4, 120, 10 | `cx mcp` only: turn and wall-clock caps for one `ask` call, and how many facts a call returns |
 | `--explore-max-turns`, `--explore-max-wall-secs` | the platform's budget, 300 | `cx mcp` only: the same caps for one `explore` call |
 
-A development instance that is not on a public hostname is reachable over
-plain `http://` only as a loopback host: tunnel it to your machine and use a
-`http://127.0.0.1:<port>/<database>` URL. Any other host must be `https://`.
+Plain `http://` is accepted for a loopback host only
+(`http://127.0.0.1:<port>/<database>` or `http://localhost:<port>/<database>`);
+any other host must be `https://`, since the bearer key travels in the
+request and a non-loopback address is assumed to be reachable over the
+network.
 
 ## Configuration
 
@@ -124,7 +134,7 @@ the platform tools are on the `feat/platform-backend` branch.
 
 ## What it is, and what it isn't
 
-Infino Subagent's lane is ranked **content** retrieval and grounded
+SuperGrep's lane is ranked **content** retrieval and grounded
 exploration over it: find code by words or meaning, rank files by how much
 they are about a topic, answer a question that spans files with citations.
 It does not do structural code intelligence (call-graph tracing, dead-code
@@ -133,7 +143,7 @@ stack.
 
 ## Architecture
 
-![Infino Subagent: find locally, explore in the cloud, one index in both places](subagent/architecture.svg)
+![SuperGrep: find, search and sql locally, ask and explore in the cloud, one index in both places](subagent/architecture.svg)
 
 - **Chunking:** tree-sitter (WASM, no native compiles) cuts at definition
   boundaries for TypeScript/JS, Python, Rust, Go, Java, C/C++, Ruby, C#, PHP;
@@ -154,5 +164,4 @@ stack.
 
 - [Code search for coding agents](concepts/code-search-for-coding-agents.md) - the crawl-vs-retrieve model and when an index saves tokens.
 - [FAQ](faq.md), [Tradeoffs](tradeoffs.md) - the honest limits.
-- [Benchmark](benchmark.md) - the local index's measured results, with the harness to reproduce them.
 - [`bench/`](../bench/) - the lanes, the questions, the judge, and the chart script behind the README's numbers.

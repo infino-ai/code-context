@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for your interest in code-context!
+Thanks for your interest in SuperGrep!
 
 ## Getting started
 
@@ -29,7 +29,9 @@ npm test          # vitest - unit + engine-integration tests, no network needed
 ## What runs where
 
 - `src/core/` - indexing, chunking, file-state sync, search; shared by both
-  surfaces. Pure logic lives here and is unit-tested directly.
+  surfaces. Pure logic lives here and is unit-tested directly. `hosted.ts`
+  (the platform client) and `retrieval-agent.ts` (the `ask`/`explore` loop)
+  are the platform half, live only in the `--db` path.
 - `src/commands/` + `src/cli.ts` - the CLI surface.
 - `src/mcp/` - the MCP server surface.
 

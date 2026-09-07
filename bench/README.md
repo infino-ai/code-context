@@ -19,13 +19,14 @@ node run-questions.mjs /path/to/repo files,combo questions/mine.json
 
 Nothing is hardcoded - the repo, lanes, and question set are all arguments.
 Question sets live in [`questions/`](questions/) as a JSON array of
-`{ "cat": "aggregation"|"comprehension", "q": "..." }`; `cat` splits the summary
-into **aggregation** (ranking/counting across the repo) vs **comprehension**
-(how/where something works). Add your own file there and pass its path (or set
-`CX_BENCH_QUESTIONS`). Shipped sets:
+`{ "cat": "...", "q": "..." }`; `cat` splits the summary by category. The
+README's headline numbers come from four sets against the infino engine
+repo, 36 questions in five categories: `questions/infino.json` (16,
+aggregation and comprehension), `questions/infino-pinpoint.json` (8),
+`questions/infino-known-file.json` (6), `questions/infino-by-meaning.json`
+(6). Add your own file there and pass its path (or set
+`CX_BENCH_QUESTIONS`). Also shipped:
 
-- `questions/infino.json` (default) - targets the
-  [infino](https://github.com/infino-ai/infino) engine repo.
 - `questions/swe-qa-django.json` - the comprehension slice from the
   [SWE-QA](https://github.com/peng-weihan/SWE-QA-Bench) dataset; run it against
   Django checked out at commit `14fc2e9`:
@@ -33,6 +34,8 @@ into **aggregation** (ranking/counting across the repo) vs **comprehension**
   git clone https://github.com/django/django && git -C django checkout 14fc2e9
   cx index django && node run-questions.mjs django files,combo questions/swe-qa-django.json
   ```
+- `questions/session-drift.json` - probes whether tool choice drifts over a
+  long session.
 
 The win is largest on a codebase the model does not already know from training
 (a private repo), where the file-tools baseline has to explore rather than
@@ -56,7 +59,7 @@ database too and registers the `ask` and `explore` tools that run there. The
 | `hosted`       | hosted | Glob, Grep, Read, LS, Bash | yes        | `--db $CX_BENCH_DB_URL --api-key-file $CX_BENCH_KEY_FILE --embed-provider platform` (`CX_BENCH_EMBED_PROVIDER` overrides the provider), with `ask` and `explore` removed from the model's context (the SDK's `disallowedTools`): the three local tools alone, a control | `CX_BENCH_DB_URL`, `CX_BENCH_KEY_FILE`  |
 | `hosted-agent` | hosted | Glob, Grep, Read, LS, Bash | yes        | as `hosted` with `ask` kept (`explore` hidden)                                                                    | `CX_BENCH_DB_URL`, `CX_BENCH_KEY_FILE`  |
 | `agent-only`   | hosted | Read                      | yes        | as `hosted-agent`, with `find`, `search` and `sql` removed too                                                         | `CX_BENCH_DB_URL`, `CX_BENCH_KEY_FILE`  |
-
+| `hosted-full`  | hosted | Glob, Grep, Read, LS, Bash | yes        | as `hosted`, with nothing hidden: all five tools stay in the model's context                                           | `CX_BENCH_DB_URL`, `CX_BENCH_KEY_FILE`  |
 | `stock-explore`    | local  | Glob, Grep, Read, LS, Bash, Agent | no  | - (the built-in Explore subagent)                                                                             | -                                        |
 | `index-explore`    | local  | Glob, Grep, Read, LS, Bash, Agent | yes | `Explore` overridden: `find`, `search`, `sql`, Read, Haiku inside                                             | -                                        |
 | `platform-explore` | hosted | Glob, Grep, Read, LS, Bash, Agent | yes | `--db ...`, `Explore` overridden: `explore` (the platform's explore mode), Read, Haiku relaying                 | `CX_BENCH_DB_URL`, `CX_BENCH_KEY_FILE`  |

@@ -1,7 +1,22 @@
 # Tradeoffs and honest limits
 
-code-context is a ranked retrieval layer, not a do-everything code tool. The
+SuperGrep is a ranked retrieval layer, not a do-everything code tool. The
 honest boundaries:
+
+### The quality gap is real, and it is not close
+
+A blind judge - `claude-opus-5` with the repository checked out - scores
+SuperGrep's answers against Sonnet's own tools on the same thirty-six
+questions. It holds the exact lookups: `find` ties or wins pinpoint (where is
+this symbol) and known-file (what does this file do), with no more
+unsupported claims than the baseline. It loses aggregation, comprehension and
+by-meaning, in both comparisons, with more unsupported claims overall - **9
+wins, 9 ties, 18 losses** against plain file tools; **7, 7, 21** against
+Sonnet's own Explore subagents. A model that reads the files writes an answer
+with more of the code in it, and this judge rewards that. The full tables and
+categories are in the [README](../README.md#quality). What SuperGrep buys is
+cost and speed on the questions it wins outright, not parity on the ones it
+does not.
 
 ### It does not do structural code intelligence
 
@@ -18,14 +33,14 @@ file counts, no file scanned. A grep hit still needs a follow-up read before
 it is a cited line; a `find` hit already is one, so on exact lookups the
 saving is the reads that never happen, not a change in what gets found.
 Measured against the grep path on eight such questions: -35% tokens, -17%
-dollars, -38% tool calls, with answer quality level under a blind judge (see
-the [benchmark](benchmark.md#find-the-grep-replacement)). Ranked `search` is
-the wrong tool there: it returns chunks that carry their content, which is
-what pays off on "how does X work" and whole-repo questions and is dead
-weight when all you need is a path. The large savings are still on questions
-that span the repo, and a fourth tool has a standing cost of about a thousand
-prompt tokens per turn plus the occasional wrong pick; the benchmark records
-both.
+dollars, -38% tool calls, with answer quality level under a blind judge (both
+arms held `find` and neither the file's content, so this is not the whole-
+surface comparison above). Ranked `search` is the wrong tool there: it
+returns chunks that carry their content, which is what pays off on "how does
+X work" and whole-repo questions and is dead weight when all you need is a
+path. The large savings are still on questions that span the repo, and each
+additional tool has a standing cost of about a thousand prompt tokens per
+turn plus the occasional wrong pick.
 
 ### The first index of a repo pays a one-time vector cost
 
@@ -71,11 +86,11 @@ through SQL. Rebuild it with `cx index`.
 Indexing scales roughly linearly with the tree. Pathological files (parser
 stress fixtures, generated blobs) fall back to fixed-window chunking under a
 per-parse deadline so a single file cannot stall a run. Practical caps
-(`CX_MAX_FILES`, `CX_MAX_FILE_BYTES`) bound the work; see the
-[benchmark](benchmark.md) for indexing-at-scale timings.
+(`CX_MAX_FILES`, `CX_MAX_FILE_BYTES`) bound the work.
 
 When a tree exceeds the file cap the index is partial, and it says so rather
-than pretending to be complete: `search` and `sql` results carry a `partial`
-marker (files skipped and the cap in effect), and `cx status` reports it. That
+than pretending to be complete: `find`, `search` and `sql` results carry a
+`partial` marker (files skipped and the cap in effect), and `cx status`
+reports it. That
 turns "no match" into "no match in the indexed subset" - raise `CX_MAX_FILES`
 and re-index for full coverage.

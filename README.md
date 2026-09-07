@@ -174,7 +174,7 @@ ours on every category, including the ones it goes on to lose:
 
 ## Install
 
-Node 22 or newer, macOS or Linux. The cloud tools are on this branch and
+Node 20 or newer, macOS or Linux. The cloud tools are on this branch and
 not yet in the npm release, so build from the branch:
 
 ```bash
@@ -210,8 +210,8 @@ environment variables, the CLI, other MCP clients - is in
 ## Learn more
 
 - [Reference](docs/reference.md) - tools, flags, configuration, CLI, architecture.
-- [Benchmark](docs/benchmark.md) - the local index alone against stock tools, with the harness to reproduce it.
 - [FAQ](docs/faq.md), [Tradeoffs](docs/tradeoffs.md) - the honest limits.
+- [`bench/`](bench/) - the harness, the questions and the judge behind the numbers above.
 
 ## License
 
