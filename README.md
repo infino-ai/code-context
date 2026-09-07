@@ -6,9 +6,9 @@
 
 </div>
 
-# Subagent: a better retrieval agent for Claude Code. Run queries on small language models and save 50% on your Anthropic bill. 
+# SuperGrep by Infino
 
-**Same accuracy as frontier models while being 3x faster.**
+**Fast code retrieval for AI agents. Save 75% on your token bill.**
 
 Claude Code keeps the reasoning. Infino Subagent takes the exploration off
 it: the retrieval, the fan-out, the fifty "go look at this" jobs a hard task
