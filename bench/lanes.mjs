@@ -131,13 +131,17 @@ const exploreDelegated = {
   model: DELEGATE_MODEL,
 };
 
-/** The turn budget of a relay: one call to the platform, one answer written
- * from what it returned, and a little room for the single rephrase its prompt
- * allows. Small on purpose - the multi-turn retrieval belongs inside the
- * platform's loop, where the tokens are an eighth of a frontier model's, and a
- * relay that starts retrieving for itself is the failure this budget catches
- * rather than the work it is meant to do. */
-const RELAY_MAX_TURNS = 4;
+/** The relay gets the session's own turn budget, like every other lane, and the
+ * prompt is the only thing steering it. A small cap was tried and it is a
+ * hazard rather than a lever: a subagent cut off mid-question returns something
+ * thin, the outer model spawns another, and each spawn re-pays the whole prompt
+ * at the outer model's output rate. Measured three times on the same shape - at
+ * 50 turns the outer model spawned twice, at 12 three times, at 4 it spawned
+ * thirteen on one counting question for 911 seconds and twenty times the cost
+ * of the same question uncapped. So capping the inner agent converts cheap
+ * inner turns into expensive outer respawns, and CX_BENCH_INNER_MAX_TURNS
+ * exists to reproduce that rather than to tune it. */
+const RELAY_MAX_TURNS = SESSION_MAX_TURNS;
 
 /** The same surface as `exploreDelegated` and the same model, differing only in
  * what it is told to do with them: spend one retrieval and then write. The

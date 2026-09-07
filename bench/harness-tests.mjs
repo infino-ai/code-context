@@ -280,16 +280,18 @@ test("delegated-relay differs from delegated-forced in the prompt and the budget
     assert.deepEqual(relay.tools, forced.tools);
     assert.equal(relay.tools.includes("mcp__code-context__find"), true);
     assert.equal(relay.model, forced.model);
-    // and only these two things differ
+    // and exactly one thing differs: the prompt. The budget is deliberately
+    // the same on both sides, because a low cap on the subagent was measured
+    // to multiply the outer model's spawns rather than reduce its spend.
     assert.notEqual(relay.prompt, forced.prompt);
     assert.equal(forced.maxTurns, 50);
-    assert.equal(relay.maxTurns, 4);
+    assert.equal(relay.maxTurns, 50);
     // the instruction is one retrieval then the answer
     assert.match(relay.prompt, /Spend one retrieval/);
     assert.match(relay.prompt, /in one call/);
-    // the knob still overrides the relay's own default
-    assert.equal(innerMaxTurns({ CX_BENCH_INNER_MAX_TURNS: "2" }, 4), 2);
-    assert.equal(innerMaxTurns({}, 4), 4);
+    // the knob still overrides, which is how the respawn effect is reproduced
+    assert.equal(innerMaxTurns({ CX_BENCH_INNER_MAX_TURNS: "4" }), 4);
+    assert.equal(innerMaxTurns({}), 50);
   });
 });
 
