@@ -16,6 +16,8 @@ that half off to fast subagents running small language models (SLMs): the
 retrieval, the fan-out, the fifty "go look at this" jobs a hard task spawns.
 No config needed. Sonnet keeps the reasoning and decides when to use them.
 
+![SuperGrep: find, search and sql locally, ask and explore in the cloud, one index in both places](docs/subagent/architecture.svg)
+
 **Five tools. Three run on your machine, two run in the cloud, over one
 index kept in both places.**
 
@@ -26,8 +28,6 @@ index kept in both places.**
 | local | **`sql`** | Read-only SQL over the index. The ranked searches are table-valued relations, so "which files have the most code about X" is one query that ranks and tallies in a single pass. |
 | cloud | **`explore`** | A question that spans the repository. Small language models run the investigation in parallel against the same index, with deep context from it, and one grounded answer comes back with the facts it rests on, cited `path:line`. |
 | cloud | **`ask`** | One retrieval, returned as the rows it found rather than as prose, for when you want the facts and not a write-up. |
-
-![SuperGrep: find, search and sql locally, ask and explore in the cloud, one index in both places](docs/subagent/architecture.svg)
 
 The models are small on purpose. Deciding where to look next in a
 256,000-line repository is retrieval work, and a small model with deep
