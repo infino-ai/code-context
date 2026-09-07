@@ -187,8 +187,9 @@ subagents.[^fifty]
 ### Sonnet chooses it on its own
 
 Nothing in the prompt names a tool. Given all five beside its own file tools,
-**76% of every call Sonnet makes goes to the index**, and its first move is
-ours on every category, including the ones it goes on to lose:
+**76% of every call Sonnet makes is to SuperGrep, of its own choosing**, and
+its first move is ours on every category, including the ones it goes on to
+lose:
 
 | question | Sonnet's first tool call |
 |---|---|
@@ -197,6 +198,22 @@ ours on every category, including the ones it goes on to lose:
 | where is X handled | `explore` 3, `search` 3 of 6 |
 | where is this symbol | `find` 7, `Grep` 1 of 8 |
 | what does this file do | `find` 4, `Glob` 1, `Read` 1 of 6 |
+
+It uses the whole surface rather than settling on one tool. Every call it made
+across the thirty-six questions, in order of how often:
+
+| tool | calls | | tool | calls |
+|---|---|---|---|---|
+| **`find`** | 17 | | `Read` | 12 |
+| **`ask`** | 14 | | `Glob` | 4 |
+| **`sql`** | 11 | | `Grep` | 3 |
+| **`search`** | 11 | | `Bash` | 1 |
+| **`explore`** | 9 | | | |
+
+All five are load-bearing, and the twenty calls that are not ours are mostly
+`Read`: it reads a file *after* the index has told it which one, rather than
+instead of asking. That is the shape you want - the index does the finding,
+and the model still opens what it needs to quote.
 
 ## Install
 
