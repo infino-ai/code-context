@@ -53,6 +53,12 @@ const CONTENT_COLUMN = "content";
 /** The limit both sides are asked for: the client's own ceiling, so neither
  * cuts before the other and the returned lines are comparable up to it. */
 const LIMIT = 500;
+/** The retrieval loop's own default limit, checked as well as LIMIT because it
+ * is what the inner model actually gets and it cuts far more often: a literal
+ * with a few hundred matches is ordinary, so at 100 nearly every answer is a
+ * cut one, and a cut answer is where an order that is not positional does its
+ * damage. A contract held only at the ceiling is not held where it is used. */
+const LOOP_LIMIT = 100;
 /** The columns the platform's find is asked to project. The client's retrieval
  * tools ask for these, so this is the projection the loop's find actually runs
  * with - and a dedupe keyed on the projected tuple rather than on (path, line)
@@ -246,9 +252,13 @@ async function main(argv) {
   const handle = openIndex(repo);
   const wanted = terms.length ? terms : DEFAULT_TERMS;
 
-  console.log(`find parity: ${indexDir} against ${dbUrl.replace(/\/\/.*@/, "//")}, projection ${PROJECTION.join(",")}, limit ${LIMIT}`);
+  console.log(`find parity: ${indexDir} against ${dbUrl.replace(/\/\/.*@/, "//")}, projection ${PROJECTION.join(",")}, limits ${LIMIT} and ${LOOP_LIMIT}`);
   console.log("term             client tot/files  platform tot/files  parity   projections  counts-only  file order (by projection)");
   let disagreed = 0;
+  /** Terms whose contract also held at the loop's own limit. Counted and
+   * reported even when nothing went wrong: a check that speaks only on
+   * failure leaves a reader unable to tell it from a check that did not run. */
+  let heldAtLoopLimit = 0;
   for (const literal of wanted) {
     let client;
     let platform;
@@ -299,6 +309,36 @@ async function main(argv) {
       disagreed++;
       console.log(`    counts-only (limit ${COUNTS_ONLY_LIMIT}): total ${countsOnly.total}, files ${countsOnly.files}, groups ${countsOnly.byFile.size} - the full answer says ${client.total}/${client.files}`);
     }
+    // The same contract at the limit the retrieval loop actually uses, where
+    // almost every answer is a cut one. Only the platform is asked: the
+    // client's ceiling is its own and a lower one would compare two different
+    // questions, while the property under test - that adding columns to look
+    // at changes neither the count nor which lines come back - is the
+    // platform's alone.
+    let atLoopLimit;
+    try {
+      const cut = [];
+      for (const projection of PROJECTIONS) {
+        cut.push({ label: projection.join(","), answer: await platformFind(dbUrl, key, literal, projection, LOOP_LIMIT) });
+      }
+      const invariant = projectionInvariance(cut);
+      const disorder = cut.filter((c) => !fileOrder(c.answer.ordered).ordered);
+      atLoopLimit = { invariant, disorder, returned: cut[0].answer.ordered.length, truncated: cut[0].answer.truncated };
+    } catch (err) {
+      atLoopLimit = { error: err.message };
+    }
+    if (atLoopLimit.error) {
+      console.log(`    at limit ${LOOP_LIMIT}: error ${atLoopLimit.error}`);
+      disagreed++;
+    } else if (!atLoopLimit.invariant.same || atLoopLimit.disorder.length) {
+      disagreed++;
+      const parts = [];
+      if (!atLoopLimit.invariant.same) parts.push(atLoopLimit.invariant.broken.map((b) => `${b.label}: ${b.dimensions.join("; ")}`).join(", "));
+      if (atLoopLimit.disorder.length) parts.push(`not in file order: ${atLoopLimit.disorder.map((d) => d.label).join(" | ")}`);
+      console.log(`    at limit ${LOOP_LIMIT} (${atLoopLimit.returned} returned${atLoopLimit.truncated ? ", cut" : ""}): ${parts.join(" | ")}`);
+    } else {
+      heldAtLoopLimit++;
+    }
     if (diff.same) continue;
     disagreed++;
     if (diff.total) console.log(`    total: client ${diff.total.client}, platform ${diff.total.platform}`);
@@ -316,7 +356,8 @@ async function main(argv) {
     }
     if (diff.byFile.length > REFEREE_FILES) console.log(`    (+${diff.byFile.length - REFEREE_FILES} more files differ)`);
   }
-  console.log(`\n${wanted.length - disagreed} of ${wanted.length} terms agree`);
+  console.log(`\n${wanted.length - disagreed} of ${wanted.length} terms agree at limit ${LIMIT}`);
+  console.log(`${heldAtLoopLimit} of ${wanted.length} also hold across projections and in file order at the loop's limit of ${LOOP_LIMIT}`);
   return disagreed === 0 ? 0 : 1;
 }
 
