@@ -64,6 +64,36 @@ reported, so a large log is simply absent from the index rather than flagged -
 raise `CX_MAX_FILE_BYTES` if you are pointing this at logs. A multi-gigabyte
 trace is not what this handles today.
 
+### Sonnet chooses it on its own
+
+Nothing in the prompt names a tool. Given all five beside its own file tools,
+**76% of every call Sonnet makes is to SuperGrep, of its own choosing**, and
+its first choice is always SuperGrep in every category of question:
+
+| question | Sonnet's first tool call |
+|---|---|
+| which files have the most X | `sql`, 10 of 10 |
+| how does X work | `explore`, 6 of 6 |
+| where is X handled | `explore` 3, `search` 3 of 6 |
+| where is this symbol | `find` 7, `Grep` 1 of 8 |
+| what does this file do | `find` 4, `Glob` 1, `Read` 1 of 6 |
+
+It uses the whole surface rather than settling on one tool. Every call it made
+across the thirty-six questions, in order of how often:
+
+| tool | calls | | tool | calls |
+|---|---|---|---|---|
+| **`find`** | 17 | | `Read` | 12 |
+| **`ask`** | 14 | | `Glob` | 4 |
+| **`sql`** | 11 | | `Grep` | 3 |
+| **`search`** | 11 | | `Bash` | 1 |
+| **`explore`** | 9 | | | |
+
+All five are load-bearing, and the twenty calls that are not SuperGrep are mostly
+`Read`: it reads a file *after* the index has told it which one, rather than
+instead of asking. That is the shape you want - the index does the finding,
+and the model still opens what it needs to quote.
+
 ## The numbers
 
 Real agent runs through the Claude Agent SDK: `claude-sonnet-4-6`, the same
@@ -183,36 +213,6 @@ subagents.[^fifty]
 ![Parallel exploration](docs/subagent/fanout.svg)
 
 [^fifty]: From the measured time and token cost of one exploration.
-
-### Sonnet chooses it on its own
-
-Nothing in the prompt names a tool. Given all five beside its own file tools,
-**76% of every call Sonnet makes is to SuperGrep, of its own choosing**, and
-its first move is ours in every category:
-
-| question | Sonnet's first tool call |
-|---|---|
-| which files have the most X | `sql`, 10 of 10 |
-| how does X work | `explore`, 6 of 6 |
-| where is X handled | `explore` 3, `search` 3 of 6 |
-| where is this symbol | `find` 7, `Grep` 1 of 8 |
-| what does this file do | `find` 4, `Glob` 1, `Read` 1 of 6 |
-
-It uses the whole surface rather than settling on one tool. Every call it made
-across the thirty-six questions, in order of how often:
-
-| tool | calls | | tool | calls |
-|---|---|---|---|---|
-| **`find`** | 17 | | `Read` | 12 |
-| **`ask`** | 14 | | `Glob` | 4 |
-| **`sql`** | 11 | | `Grep` | 3 |
-| **`search`** | 11 | | `Bash` | 1 |
-| **`explore`** | 9 | | | |
-
-All five are load-bearing, and the twenty calls that are not ours are mostly
-`Read`: it reads a file *after* the index has told it which one, rather than
-instead of asking. That is the shape you want - the index does the finding,
-and the model still opens what it needs to quote.
 
 ## Install
 
