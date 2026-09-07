@@ -10,9 +10,9 @@
 
 **Fast code retrieval for AI agents. Save 75% on your token bill.**
 
-Claude Code keeps the reasoning. SuperGrep takes the exploration off
+Your agent keeps the reasoning. SuperGrep takes the exploration off
 it: the retrieval, the fan-out, the fifty "go look at this" jobs a hard task
-spawns. Two tools, and Claude decides when to call them:
+spawns. Your agent decides when to call them:
 
 - **`find` - local.** The repository is indexed on your machine, and exact
   lookups come back as `path:line` hits from the index, in tens of
