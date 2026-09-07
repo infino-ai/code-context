@@ -8,7 +8,7 @@
 
 # SuperGrep
 
-**Retrieval subagents for Claude Sonnet. 70% off the Sonnet bill.**
+**Retrieval subagents for Claude Sonnet. Half your agent bill.**
 
 Sonnet is the model most agent sessions actually run on, and most of what it
 spends goes on finding code rather than reasoning about it. SuperGrep farms
@@ -57,11 +57,11 @@ answers. The harness, the questions, the judge and the chart script are in
 
 ### Cost
 
-| arm | cost per pass (every Sonnet call, subagents included) | main-agent tokens | tool calls (inside subagents included) |
-|---|---|---|---|
-| Sonnet, file tools | $5.22 | 4,549k | 249 |
-| Sonnet + its Explore subagents | $7.35 | 1,918k | 355 |
-| Sonnet + SuperGrep | **$2.18** | **1,086k** | **82** |
+| arm | your Sonnet bill per pass (subagents included) | + retrieval, billed by us | all-in | main-agent tokens | tool calls (inside subagents included) |
+|---|---|---|---|---|---|
+| Sonnet, file tools | $5.22 | - | $5.22 | 4,549k | 249 |
+| Sonnet + its Explore subagents | $7.35 | - | $7.35 | 1,918k | 355 |
+| Sonnet + SuperGrep | **$2.18** | $0.84 - $2.25 | **$3.01 - $4.43** | **1,086k** | **82** |
 
 ![Cost per pass](docs/subagent/cost-per-pass.svg)
 
@@ -69,20 +69,28 @@ answers. The harness, the questions, the judge and the chart script are in
 
 ![Tool calls per pass](docs/subagent/calls-per-pass.svg)
 
-Against Sonnet's own Explore subagents: **3.4x lower Sonnet cost**, a 70%
-reduction, with 43% less main-agent context and under a quarter of the tool
-calls. Against plain file tools: **2.4x lower cost**, 76% fewer main-agent
-tokens, 67% fewer tool calls.
+Against Sonnet's own Explore subagents, **your Sonnet bill falls 70%** - 3.4x
+lower - with 43% less main-agent context and under a quarter of the tool
+calls. Counting what we charge for the retrieval, the **all-in cost falls
+40-59%**, so about half. Against plain file tools the Sonnet bill falls 58%
+and the all-in cost 15-42%.
+
+The retrieval column is what you pay us: the tokens the cloud tools spend,
+at what the provider charges plus 30%. It is a range because that spend is
+metered as one token total per call rather than split into input and output,
+and the two ends price the same tokens as if all one or all the other. The
+low end is the likely one for retrieval, which is long prompts and short
+answers.
 
 A single pass is one measurement, so here is its spread: eight passes over
 the same thirty-six questions across this branch's development ranged $1.81
-to $2.63, median $2.15. The cost claim is the stable part of this page.
+to $2.63 of Sonnet, median $2.15. The cost claim is the stable part of this
+page.
 
-Two things are not in these figures. The platform's own model spend for
-`explore` and `ask`, which the platform meters and bills on its account. And
-the same arms on a frontier model, where the gap is much smaller: a stronger
-model already retrieves efficiently, so there is less waste to remove. These
-are Sonnet numbers and they are a claim about Sonnet.
+One thing is still not in these figures: the same arms on a frontier model,
+where the gap is much smaller, because a stronger model already retrieves
+efficiently and there is less waste to remove. These are Sonnet numbers and
+they are a claim about Sonnet.
 
 ### Quality
 

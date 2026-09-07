@@ -174,7 +174,9 @@ const MEASURED = "2026-09-07";
 const passSubtitle = `Per pass over the same ${passes[0].questions} questions, claude-sonnet-4-6, infino repo; one pass per arm on one build. ${MEASURED}.`;
 const written = [
   barChart({
-    title: "Cost per pass - every Sonnet call, subagents included",
+    // Titled as the caller's own bill, since the README's headline is the
+    // all-in figure and this chart is only the Sonnet half of it.
+    title: "Your Sonnet bill per pass - every Sonnet call, subagents included",
     subtitle: passSubtitle,
     items: passes.map((p) => ({ label: p.label, value: p.cost, color: p.color })),
     format: (v) => `$${v.toFixed(2)}`,
