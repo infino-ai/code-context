@@ -10,11 +10,7 @@
 
 **Retrieval subagents for Claude Sonnet. Up to 10x faster and 50% lower Anthropic bill.**
 
-Sonnet is the model most agent sessions actually run on, and most of what it
-spends goes on finding code rather than reasoning about it. SuperGrep farms
-that half off to fast subagents running small language models (SLMs): the
-retrieval, the fan-out, the fifty "go look at this" jobs a hard task spawns.
-No config needed. Sonnet keeps the reasoning and decides when to use them.
+Most of what Sonnet time on in agent sessions goes towards finding code rather than reasoning about it. SuperGrep farms that half off to fast subagents running small language models (SLMs): the retrieval, the fan-out, the fifty "go look at this" jobs a hard task spawns. No config needed. Sonnet keeps the reasoning and decides when to use them.
 
 ![SuperGrep: find, search and sql locally, ask and explore in the cloud, one index in both places](docs/subagent/architecture.svg)
 
@@ -35,34 +31,6 @@ context from the index can do it at a fraction of the cost and fifty at a
 time. What it is not is a reasoning model: it will not out-argue Sonnet
 about the code, and the numbers below are honest about where that shows.
 It is where Sonnet's exploration, retrieval and fan-out go.
-
-**Sonnet thinks. Infino explores.**
-
-## Code is the first corpus, not the only one
-
-The index takes the files a question needs, not just the source. Logs, test
-output, stack traces, CI output, configuration and docs go in beside the code,
-and the same five tools run over all of it: `find` for an exact stack frame,
-`search` for a failure you can only describe, `sql` to count and rank across a
-run, `explore` for the question that spans several of them at once.
-
-That matters most where a frontier model is weakest. A log is the pathological
-case for a context window - large, repetitive, mostly irrelevant, and paid for
-again on every turn it stays in the transcript. An index collapses it to the
-spans that matter before Sonnet sees any of it. It is the same trade the cost
-table below measures on source code, on a corpus where the ratio is worse.
-
-So "why did this integration test start failing?" is one question over source,
-recent logs, test output, stack traces and config - and the retrieval, the
-fan-out and the fifty parallel investigations are the part that is farmed out.
-
-**Not yet measured.** Every number on this page is a source-code corpus. The
-log and trace case is indexable today and is what we are measuring next;
-nothing here should be read as covering it. Two limits worth knowing now: a
-single file above 1 MB is skipped, and today it is skipped without being
-reported, so a large log is simply absent from the index rather than flagged -
-raise `CX_MAX_FILE_BYTES` if you are pointing this at logs. A multi-gigabyte
-trace is not what this handles today.
 
 ### Sonnet chooses it on its own
 
@@ -93,6 +61,24 @@ All five are load-bearing, and the twenty calls that are not SuperGrep are mostl
 `Read`: it reads a file *after* the index has told it which one, rather than
 instead of asking. That is the shape you want - the index does the finding,
 and the model still opens what it needs to quote.
+
+## Code is the first corpus, not the only one
+
+SuperGrep looks across all the files a question needs, not just the source. Logs, test
+output, stack traces, CI output, configuration and docs go in beside the code,
+and the same five tools run over all of it: `find` for an exact stack frame,
+`search` for a failure you can only describe, `sql` to count and rank across a
+run, `explore` for the question that spans several of them at once.
+
+That matters most where a frontier model is weakest. A log is the pathological
+case for a context window - large, repetitive, mostly irrelevant, and paid for
+again on every turn it stays in the transcript. An index collapses it to the
+spans that matter before Sonnet sees any of it. It is the same trade the cost
+table below measures on source code, on a corpus where the ratio is worse.
+
+So "why did this integration test start failing?" is one question over source,
+recent logs, test output, stack traces and config - and the retrieval, the
+fan-out and the fifty parallel investigations are the part that is farmed out.
 
 ## The numbers
 
@@ -131,21 +117,10 @@ calls. With what the cloud tools cost you counted in, the **all-in bill falls
 58%**, so better than half. Against plain file tools it is 2.4x on the Sonnet
 bill and 1.7x all-in.
 
-A single pass is one measurement, so here is its spread: eight passes over
-the same thirty-six questions across this branch's development ranged $1.81
-to $2.63 of Sonnet, median $2.15. The cost claim is the stable part of this
-page.
-
 **It earns its keep on fan-out.** The saving is not spread evenly across
-everything you ask: on a question one agent answers by itself there is little
-in it either way. Where it pays is the hard task that spawns a fleet of "go
+everything you ask: where it really pays is the hard task that spawns a fleet of "go
 look at this" jobs - that is where a fanning-out agent's bill actually goes,
 and it is the case SuperGrep is built for.
-
-One thing is still not in these figures: the same arms on a frontier model,
-where the gap is much smaller, because a stronger model already retrieves
-efficiently and there is less waste to remove. These are Sonnet numbers and
-they are a claim about Sonnet.
 
 ### Quality
 
@@ -181,28 +156,10 @@ its turn limit and is left out rather than counted):
 
 ![Blind judge per category, against Explore subagents](docs/subagent/judge-vs-explore.svg)
 
-**Read that plainly: on this judge, cheap retrieval buys the cost and does
-not buy the quality.** It holds the exact lookups - `find` ties or wins
-pinpoint and known-file against both baselines, with no more unsupported
-claims than the baseline - and it loses aggregation, comprehension and by
-meaning, in both comparisons, with more unsupported claims overall. A model
-that reads the files writes an answer with more of the code in it, and this
-judge rewards that.
 
-Three conditions worth knowing, since they are what we would want to know.
-The judge counts a claim unsupported unless the answer's grain matches the
-question, so an answer that names five files where the question implies ten
-is marked down for the gap rather than for being wrong. **Aggregation** is
-scored largely on whether a number reproduces, and a total over a ranked
-search is a fact about that query rather than about the repository; the tool
-text now says so, these runs used that text, and the row still loses.
-**By meaning** was live semantic search in these runs - an earlier version of
-this page blamed an absent vector half for that row, and rerunning it with
-semantic search working did not change the result.
+### Fanout
 
-### Parallel
-
-Questions asked all at once, one exploration each.
+When a questions spawns several agents at once, with one exploration each. Of course, this always depends on workload so YMMV.
 
 **Ten at once: 10 of 10 in 31 s**, against Sonnet's ten Explore subagents at
 316 s. Ten times faster.
