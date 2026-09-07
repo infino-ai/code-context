@@ -10,9 +10,8 @@
 
 **Small language models (SLMs) for fast code retrieval. Save 75% on your token bill.**
 
-Your agent keeps the reasoning. SuperGrep takes the exploration off
-it: the retrieval, the fan-out, the fifty "go look at this" jobs a hard task
-spawns. Your agent decides when to call them:
+Your agent keeps the reasoning. SuperGrep farms exploration off to fast subagents: the retrieval, the fan-out, the fifty "go look at this" jobs a hard task
+spawns. No config needed. Your agent decides when to use them:
 
 - **`find` - local.** The repository is indexed on your machine, and exact
   lookups come back as `path:line` hits from the index, in tens of
