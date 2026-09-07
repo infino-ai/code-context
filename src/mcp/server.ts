@@ -457,27 +457,31 @@ export async function serveMcp(rootPath?: string): Promise<void> {
         "file extension, e.g. 'rs' - for counts, rankings, and GROUP BY across the whole repo. " +
         "The search functions are table-valued: a ranked search is a relation, so WHERE, GROUP BY, " +
         "ORDER BY and joins compose with it in one pass, and one query replaces the several round " +
-        "trips of searching, then filtering, then counting. Which function you rank by decides what " +
-        "the counts mean: when the topic is a word that appears in the code - a subsystem or " +
-        "identifier name such as compaction, WAL, manifest - rank with bm25_search, whose counts are " +
-        "literal occurrences a reader can check, and reach for hybrid_search only when the " +
-        `question's words are not the code's: hybrid_search('${TABLE}','content','terms','embedding', {{q}}, k) fuses ` +
-        "exact terms with meaning, so use it whenever the topic is a concept rather than a literal " +
-        "string - 'code about X', 'files that do Y' - because the words in the question are rarely " +
-        `the words in the code; bm25_search('${TABLE}','content','terms', k) is keyword only, for ` +
-        `when you know the term that appears in the source; vector_search('${TABLE}','embedding', ` +
-        "{{q}}, k) is meaning alone. The {{name}} placeholders are filled server-side from the embed " +
-        "map, so they cost you nothing but the name. Rank files by a named topic, filtered on the " +
-        "same pass, with your own word in place of the example's: SELECT path, SUM(end_line - start_line + 1) " +
-        `AS matched_lines, COUNT(*) AS chunks FROM bm25_search('${TABLE}','content','compaction', 300) WHERE ` +
-        "path LIKE 'src/%' GROUP BY path ORDER BY matched_lines DESC LIMIT 15 - every row holds the word, so " +
-        "a reader can check it. Rank by a paraphrased concept, again with your own words in both places: " +
-        `the same shape over hybrid_search('${TABLE}','content','merge small superfiles','embedding', {{q}}, 300), ` +
-        "with embed {\"q\":\"how small superfiles are merged into larger ones\"}. " +
+        "trips of searching, then filtering, then counting. Rank through a search relation rather " +
+        "than scanning the whole table with ILIKE: a scan has no relevance ranking, reads every " +
+        "chunk, and answers 'contains this substring' when the question asked which code is about " +
+        "something. " +
+        `Rank with hybrid_search('${TABLE}','content','terms','embedding', {{q}}, k) - 'terms' and ` +
+        "{{q}} are yours to fill in, not literals to copy - unless you have " +
+        "a reason not to: it fuses exact terms with meaning, so it reaches the code whether or not " +
+        "the question's words are the code's words, and they rarely are. That covers a concept, a " +
+        "subsystem, 'code about X', 'files that do Y' - the shape of almost every ranking question. " +
+        `bm25_search('${TABLE}','content','terms', k) is keyword only: reach for it when the topic ` +
+        "is itself a literal string you know appears in the source and you want counts a reader can " +
+        `check as occurrences. vector_search('${TABLE}','embedding', {{q}}, k) is meaning alone. ` +
+        "The {{name}} placeholders are filled server-side from the embed " +
+        "map, so they cost you nothing but the name. Rank files by a topic, filtered on the " +
+        "same pass, with your own words in place of the example's: SELECT path, SUM(end_line - start_line + 1) " +
+        `AS ranked_lines, COUNT(*) AS chunks FROM hybrid_search('${TABLE}','content','merge small superfiles','embedding', {{q}}, 300) WHERE ` +
+        "path LIKE 'src/%' GROUP BY path ORDER BY ranked_lines DESC LIMIT 15, with embed " +
+        "{\"q\":\"how small superfiles are merged into larger ones\"}. Where the topic is a literal " +
+        "string you want counted as occurrences, the same shape over " +
+        `bm25_search('${TABLE}','content','compaction', 300) instead - every row then holds the word, ` +
+        "so a reader can check it. " +
         "What such a total means: a search relation holds only the top k chunks of that query, so a " +
-        "SUM or COUNT over it is the lines or chunks that matched within the top k - a share of the " +
+        "SUM or COUNT over it is the lines or chunks that ranked within the top k - a share of the " +
         "file about the topic - and never the file's length or the repository's count; report it as " +
-        "'matched lines in the top 300 for <topic>', and expect files outside the top k, including " +
+        "'lines ranked in the top 300 for <topic>', and expect files outside the top k, including " +
         "large ones, to be missing from it. A file's length, a size ranking, or any count over the " +
         `whole repository comes from ${TABLE} with no search function: SELECT path, MAX(end_line) AS ` +
         `lines FROM ${TABLE} GROUP BY path ORDER BY lines DESC. ` +

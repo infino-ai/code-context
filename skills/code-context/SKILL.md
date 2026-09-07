@@ -81,19 +81,49 @@ One read-only SELECT/WITH statement over the table
 Search functions are callable as table-valued relations, so one query can
 rank AND aggregate:
 
-- `bm25_search('chunks','content','<terms>', k)` - keyword ranking, no
-  embedding needed.
-- `hybrid_search('chunks','content','<terms>','embedding', {{q}}, k)` and
-  `vector_search('chunks','embedding', {{q}}, k)` - take a `{{name}}`
-  placeholder filled via the `embed` argument, e.g. `{"q": "query text"}`.
+- `hybrid_search('chunks','content','<terms>','embedding', {{q}}, k)` -
+  keyword fused with meaning. **Rank with this unless you have a reason
+  not to**: the words in a question are rarely the words in the code. It
+  takes a `{{name}}` placeholder filled via the `embed` argument, e.g.
+  `{"q": "query text"}`.
+- `bm25_search('chunks','content','<terms>', k)` - keyword only. Use it
+  when the topic *is* a literal string you know appears in the source and
+  you want counts a reader can check as occurrences. No embedding needed.
+- `vector_search('chunks','embedding', {{q}}, k)` - meaning alone.
+- `token_match('chunks','content','<term>','and')` - **unranked and
+  complete**: every chunk holding the token, with no top-k at all. This is
+  the one to count with.
 - `regexp_like(content, 'pattern')` works in WHERE.
 
-The canonical move - "which files have the most code about X":
+The canonical move - "which files have the most code about X". Fill in your
+own words in both places; `<terms>` is never the literal string to send:
 
 ```sql
-SELECT path, SUM(end_line - start_line + 1) AS lines, COUNT(*) AS chunks
-FROM bm25_search('chunks','content','<terms>', 300)
-GROUP BY path ORDER BY lines DESC LIMIT 15
+SELECT path, SUM(end_line - start_line + 1) AS ranked_lines, COUNT(*) AS chunks
+FROM hybrid_search('chunks','content','merge small superfiles','embedding', {{q}}, 300)
+GROUP BY path ORDER BY ranked_lines DESC LIMIT 15
+```
+
+with `embed` `{"q": "how small superfiles are merged into larger ones"}`.
+The alias says `ranked_lines` and not `matched_lines` on purpose: fusion
+unions the keyword and meaning arms, so a row can rank in the top 300
+without containing your terms. Report such a total as "lines ranked in the
+top 300 for X", never as occurrences.
+
+**Two relations compose in one statement, which is what makes this worth
+learning.** A ranked search says which files matter; an unranked match
+counts them exactly. One query, no round trips, and a count a reader can
+verify by opening the line:
+
+```sql
+WITH about AS (
+  SELECT DISTINCT path
+  FROM hybrid_search('chunks','content','merge small superfiles','embedding', {{q}}, 300)
+)
+SELECT t.path, COUNT(*) AS chunks_with_term
+FROM token_match('chunks','content','merge','and') t
+JOIN about USING (path)
+GROUP BY t.path ORDER BY chunks_with_term DESC LIMIT 15
 ```
 
 ## Index lifecycle (usually zero-touch)
