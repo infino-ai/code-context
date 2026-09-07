@@ -80,21 +80,11 @@ the same thirty-six questions across this branch's development ranged $1.81
 to $2.63 of Sonnet, median $2.15. The cost claim is the stable part of this
 page.
 
-**The saving is concentrated in the fan-out.** Sonnet reached for its own
-Explore subagents on 9 of the 36 questions and spawned 212 of them, and those
-nine are **66% of that arm's entire bill**. Per question, with our side
-counting everything you pay - the Sonnet calls and the Infino tokens:
-
-| | Sonnet + its Explore subagents | Sonnet + SuperGrep, all in | |
-|---|---|---|---|
-| the 9 questions where it fanned out | $0.3904 | **$0.0789** | **5.0x** |
-| the 27 where it did not | $0.0441 | $0.0423 | 1.0x |
-
-So this is not a saving spread thinly across everything you ask. **On a
-question one agent answers by itself we save you nothing** - the two are level
-to within a tenth of a cent. On the questions where a hard task spawns a fleet
-of "go look at this" jobs, it is five times, and that is the case SuperGrep is
-for.
+**It earns its keep on fan-out.** The saving is not spread evenly across
+everything you ask: on a question one agent answers by itself there is little
+in it either way. Where it pays is the hard task that spawns a fleet of "go
+look at this" jobs - that is where a fanning-out agent's bill actually goes,
+and it is the case SuperGrep is built for.
 
 One thing is still not in these figures: the same arms on a frontier model,
 where the gap is much smaller, because a stronger model already retrieves
