@@ -46,6 +46,11 @@ const CX_RETRIEVAL_TOOLS = ["find", "search", "sql"];
  * sees only the tools its definition names, the main agent keeps its own). */
 const AGENT_TOOL = "Agent";
 const EXPLORE = "Explore";
+/** The turn budget of one run. Named because a delegating lane has to hand the
+ * same number to the subagent: a truncated run's cost is a capped cost, and a
+ * cap that applies to one side of a comparison and not the other would price
+ * the architecture rather than measure it. */
+const SESSION_MAX_TURNS = 50;
 /** The model inside an overridden Explore: the cheap one, since the index
  * does the finding and the subagent only reads results and writes the
  * conclusion. */
@@ -126,6 +131,39 @@ const exploreDelegated = {
   model: DELEGATE_MODEL,
 };
 
+/** The turn budget of a relay: one call to the platform, one answer written
+ * from what it returned, and a little room for the single rephrase its prompt
+ * allows. Small on purpose - the multi-turn retrieval belongs inside the
+ * platform's loop, where the tokens are an eighth of a frontier model's, and a
+ * relay that starts retrieving for itself is the failure this budget catches
+ * rather than the work it is meant to do. */
+const RELAY_MAX_TURNS = 4;
+
+/** The same surface as `exploreDelegated` and the same model, differing only in
+ * what it is told to do with them: spend one retrieval and then write. The
+ * local primitives stay, because an exact string is a local lookup and going
+ * to the platform for one would be absurd; what changes is that a question
+ * spanning files goes to the platform's loop in a single call rather than
+ * being taken apart into searches here. Measured on the same question, a
+ * subagent left to its own judgment spent 26 calls, twelve of them repeated
+ * searches, and cost eight times what the retrieval it was standing in for
+ * costs inside the platform - so the instruction, not the tool set, is what
+ * this lane changes. */
+const exploreRelay = {
+  description: DELEGATED_DESCRIPTION,
+  tools: exploreDelegated.tools,
+  prompt:
+    "You answer one question about this repository and the caller sees only what you write. Spend one " +
+    "retrieval on it, then write. If the question names an exact string, that is find. Anything that " +
+    "spans files - how something works, where it is handled, what calls what - is explore, in one call, " +
+    "with the question as it was asked: explore runs its own grounded loop over the index and comes back " +
+    "with facts, a written answer and the queries behind it, so taking the question apart into searches " +
+    "here does that work again more expensively. Then write the answer from the rows you have, with a " +
+    "path:line citation from them on every claim, and leave out whatever you could not place - a claim " +
+    "the caller cannot check is worse to it than a gap you name.",
+  model: DELEGATE_MODEL,
+};
+
 /** Who fills the platform table's vectors when the caller does not pick: the
  * product default - the platform embeds - since the platform lanes measure the
  * product as shipped. CX_BENCH_EMBED_PROVIDER=local ships the local model's
@@ -143,6 +181,11 @@ export const BENCH_EMBED_PROVIDER = "CX_BENCH_EMBED_PROVIDER";
 /** Optional turn cap for ask in the agent lanes, passed through as
  * the server's --subagent-max-turns; unset leaves the server's default. */
 export const BENCH_AGENT_MAX_TURNS = "CX_BENCH_AGENT_MAX_TURNS";
+/** Optional turn cap for the model inside a delegating lane's subagent. The
+ * session's own budget is the default, so the subagent is not handicapped
+ * against an outer model doing the same work; lowering it is how the lane
+ * measures whether the inner model's turn count is the cost or the answer. */
+export const BENCH_INNER_MAX_TURNS = "CX_BENCH_INNER_MAX_TURNS";
 /** Optional facts-per-call for ask in the agent lanes, passed through as
  * the server's --subagent-k; unset leaves the server's default. */
 export const BENCH_AGENT_K = "CX_BENCH_AGENT_K";
@@ -247,6 +290,15 @@ export function hostedFlags(env = process.env) {
   ];
 }
 
+/** The turn budget of the model inside a delegating lane's subagent: the
+ * session's own unless the harness names a lower one. Recorded per run by the
+ * lane's own definition, so a row's inner cost can be read against the cap
+ * that produced it. */
+export function innerMaxTurns(env = process.env, fallback = SESSION_MAX_TURNS) {
+  const named = Number(env[BENCH_INNER_MAX_TURNS]);
+  return Number.isFinite(named) && named > 0 ? named : fallback;
+}
+
 /** The server flags that cap the agent tools, when the harness names a turn
  * cap or a facts-per-call; empty otherwise (the tools themselves come with
  * --db). */
@@ -316,6 +368,18 @@ export function agentFlags(env = process.env) {
  *                      model that only retrieves; the lane measures which it
  *                      does when both are offered, and what the answers cost
  *                      when the reading happens a level down
+ *   delegated-forced - the same split with the choice removed: the outer model
+ *                      has the Agent tool and nothing else, and the server
+ *                      travels on the subagent rather than in the session, so
+ *                      every retrieval happens a level down by construction.
+ *                      `delegated` measures whether a model picks the split;
+ *                      this one prices the split itself
+ *   delegated-relay  - delegated-forced with the retrieving put back where it
+ *                      is cheap: same outer surface, same subagent tools and
+ *                      model, but told to spend one retrieval and then write,
+ *                      on a relay's turn budget. The pair isolates what the
+ *                      layer in the middle costs when it retrieves against
+ *                      what it costs when it only writes
  *   snowflake        - the stock tools plus the Snowflake server in the
  *                      index's place: the same outer model with Snowflake as
  *                      the index - keyword search and SQL over the chunks
@@ -397,6 +461,55 @@ export const LANES = {
     agents: { [EXPLORE]: exploreDelegated },
     requires: HOSTED_REQUIRES,
   },
+  "delegated-forced": {
+    kind: "hosted",
+    // The outer model's only built-in is the one that spawns the subagent, and
+    // the lane registers no session-level server, so nothing but the subagent
+    // can reach the index. This is the shape `delegated` measures the *choice*
+    // of; this lane removes the choice so the architecture can be priced on
+    // its own - what it costs when the retrieving happens a level down, and
+    // the outer model only reads a written answer and digests it.
+    tools: [AGENT_TOOL],
+    // No session-level server. The tools are not denied to the session - they
+    // were never registered in it - which is what leaves the subagent's own
+    // copy reachable. Denying them would have been the obvious route and it is
+    // the wrong one: `disallowedTools` is a session-level list, and whether it
+    // also reaches a subagent that names the tool itself is unestablished.
+    mcp: false,
+    // The server travels on the subagent instead, so the index is one level
+    // down by construction rather than by the model's good judgment.
+    agents: (repoDir, indexDir) => ({
+      [EXPLORE]: {
+        ...exploreDelegated,
+        mcpServers: [cxServer(mcpEnvBase(repoDir, indexDir), [...hostedFlags(), ...agentFlags()])],
+        // The session's own budget by default, so a short inner run is the
+        // model's choice and not a cap the lane imposed on one side of the
+        // comparison. CX_BENCH_INNER_MAX_TURNS lowers it, which is the one
+        // knob that changes the inner model's token volume directly.
+        maxTurns: innerMaxTurns(),
+      },
+    }),
+    requires: HOSTED_REQUIRES,
+  },
+  "delegated-relay": {
+    kind: "hosted",
+    // `delegated-forced` with the retrieving put back where it is cheap. Same
+    // outer surface, same subagent tools, same subagent model: the only
+    // differences are the subagent's prompt and its turn budget, so the pair
+    // isolates one thing - what the layer in the middle costs when it
+    // retrieves for itself, against what it costs when it spends one call on
+    // the platform's loop and writes the answer.
+    tools: [AGENT_TOOL],
+    mcp: false,
+    agents: (repoDir, indexDir) => ({
+      [EXPLORE]: {
+        ...exploreRelay,
+        mcpServers: [cxServer(mcpEnvBase(repoDir, indexDir), [...hostedFlags(), ...agentFlags()])],
+        maxTurns: innerMaxTurns(process.env, RELAY_MAX_TURNS),
+      },
+    }),
+    requires: HOSTED_REQUIRES,
+  },
   "find-subagent": {
     kind: "hosted",
     tools: STOCK_TOOLS,
@@ -472,7 +585,12 @@ export function laneOptions(lane, repoDir, indexDir) {
     settingSources: [],
     strictMcpConfig: true,
     tools: def.tools,
-    ...(def.agents ? { agents: def.agents } : {}),
+    // A lane's `agents` may be a factory rather than a literal, because a
+    // subagent that carries its own MCP server has to be handed the run's
+    // paths and env to build the server's command line. The factory runs here,
+    // in the hermetic base, so it is available whether or not the lane also
+    // registers a session-level server.
+    ...(def.agents ? { agents: typeof def.agents === "function" ? def.agents(repoDir, indexDir) : def.agents } : {}),
   };
   if (!def.mcp) return hermetic;
   return {
@@ -634,11 +752,12 @@ export const cxTookMs = (toolDetails) => tookMsOf(toolDetails, isCxTool);
 export const sfTookMs = (toolDetails) => tookMsOf(toolDetails, isSfTool);
 
 /** Run one agent conversation; returns the measured record. */
-export async function runLane({ lane, prompt, system, repoDir, indexDir, maxTurns = 50 }) {
+export async function runLane({ lane, prompt, system, repoDir, indexDir, maxTurns = SESSION_MAX_TURNS }) {
   const t0 = performance.now();
   const acc = newToolAccounting();
   let usage = null;
   let costUsd = null;
+  let modelUsage = null;
   let answer = "";
   let error = null;
   try {
@@ -662,6 +781,12 @@ export async function runLane({ lane, prompt, system, repoDir, indexDir, maxTurn
       if (m.type === "result") {
         usage = m.usage ?? null;
         costUsd = m.total_cost_usd ?? null;
+        // `usage` is the main loop alone; `modelUsage` is every model call the
+        // run made, subagents included, and carries a cost per model. It is
+        // the only field that separates what the outer model spent from what
+        // the model underneath spent, which is the whole question a delegating
+        // lane asks.
+        modelUsage = m.modelUsage ?? null;
         if (m.result) answer = m.result;
       }
     }
@@ -685,6 +810,7 @@ export async function runLane({ lane, prompt, system, repoDir, indexDir, maxTurn
     tokens,
     usage: u,
     costUsd,
+    modelUsage,
     wallMs: Math.round(performance.now() - t0),
     toolCalls,
     toolDetails,

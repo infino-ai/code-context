@@ -38,6 +38,7 @@ import {
   sfTookMs,
   keepInput,
   recordedQueries,
+  innerMaxTurns,
 } from "./lanes.mjs";
 import { compareFind, countInFile, projectionInvariance, fileOrder } from "./find-parity.mjs";
 import { warmHosted, splitDbUrl, DEFAULT_RETRY_AFTER_SECS } from "./warm-hosted.mjs";
@@ -104,12 +105,14 @@ function withSnowflakeEnv(fn, extra = {}) {
 
 // --- lane table ---------------------------------------------------------------
 
-test("the lane table names exactly the fourteen lanes and an unknown lane throws", () => {
+test("the lane table names exactly the sixteen lanes and an unknown lane throws", () => {
   assert.deepEqual(Object.keys(LANES).sort(), [
     "agent-only",
     "combo",
     "cx",
     "delegated",
+    "delegated-forced",
+    "delegated-relay",
     "files",
     "find-explore",
     "find-subagent",
@@ -217,8 +220,10 @@ test("delegated offers rather than blocks: the outer model keeps every tool and 
     const opts = laneOptions("delegated", "/r", "/r/.infino");
     // the whole stock surface plus the Agent tool
     assert.deepEqual(opts.tools, ["Glob", "Grep", "Read", "LS", "Bash", "Agent"]);
-    // nothing hidden: denying a tool is session-level, so it would blind the
-    // subagent that the lane exists to measure
+    // nothing hidden: what the offer draws is the measurement, and hiding the
+    // tools would remove it. Where the outer model must be left without them,
+    // the lane below scopes the server to the subagent instead of denying it
+    // to the session.
     assert.equal(opts.disallowedTools, undefined);
     // the subagent holds the whole surface, and a different model runs it
     const explore = opts.agents.Explore;
@@ -236,6 +241,55 @@ test("delegated offers rather than blocks: the outer model keeps every tool and 
     assert.match(explore.description, /runs find and explore/);
     assert.equal(opts.mcpServers["code-context"].args.includes("--db"), true);
     assert.equal(laneDef("delegated").kind, "hosted");
+  });
+});
+
+test("delegated-forced puts the server on the subagent, not in the session", () => {
+  withHostedEnv(() => {
+    const opts = laneOptions("delegated-forced", "/r", "/r/.infino");
+    // the outer model can spawn the subagent and do nothing else
+    assert.deepEqual(opts.tools, ["Agent"]);
+    // no session-level server at all, and so nothing to deny
+    assert.equal(opts.mcpServers, undefined);
+    assert.equal(opts.disallowedTools, undefined);
+    // the subagent carries its own copy of the server, pointed at the platform
+    const explore = opts.agents.Explore;
+    const server = explore.mcpServers[0]["code-context"];
+    assert.equal(server.args.includes("--db"), true);
+    assert.equal(server.args.includes("--api-key-file"), true);
+    // and the same model and turn budget the session itself runs under
+    assert.equal(explore.model, "sonnet");
+    // the session's budget by default, and the knob lowers it
+    assert.equal(explore.maxTurns, 50);
+    assert.equal(innerMaxTurns({}), 50);
+    assert.equal(innerMaxTurns({ CX_BENCH_INNER_MAX_TURNS: "12" }), 12);
+    assert.equal(innerMaxTurns({ CX_BENCH_INNER_MAX_TURNS: "nope" }), 50);
+    assert.equal(innerMaxTurns({ CX_BENCH_INNER_MAX_TURNS: "0" }), 50);
+    assert.equal(laneDef("delegated-forced").kind, "hosted");
+  });
+});
+
+test("delegated-relay differs from delegated-forced in the prompt and the budget alone", () => {
+  withHostedEnv(() => {
+    const forced = laneOptions("delegated-forced", "/r", "/r/.infino").agents.Explore;
+    const relay = laneOptions("delegated-relay", "/r", "/r/.infino").agents.Explore;
+    // same outer surface, so the two are comparable
+    assert.deepEqual(laneOptions("delegated-relay", "/r", "/r/.infino").tools, ["Agent"]);
+    // same tools and same model in the middle: the local primitives stay,
+    // because an exact string is a local lookup
+    assert.deepEqual(relay.tools, forced.tools);
+    assert.equal(relay.tools.includes("mcp__code-context__find"), true);
+    assert.equal(relay.model, forced.model);
+    // and only these two things differ
+    assert.notEqual(relay.prompt, forced.prompt);
+    assert.equal(forced.maxTurns, 50);
+    assert.equal(relay.maxTurns, 4);
+    // the instruction is one retrieval then the answer
+    assert.match(relay.prompt, /Spend one retrieval/);
+    assert.match(relay.prompt, /in one call/);
+    // the knob still overrides the relay's own default
+    assert.equal(innerMaxTurns({ CX_BENCH_INNER_MAX_TURNS: "2" }, 4), 2);
+    assert.equal(innerMaxTurns({}, 4), 4);
   });
 });
 
