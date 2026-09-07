@@ -57,7 +57,7 @@ answers. The harness, the questions, the judge and the chart script are in
 
 ### Cost
 
-| arm | your Sonnet bill per pass (subagents included) | + retrieval, billed by us | all-in | main-agent tokens | tool calls (inside subagents included) |
+| arm | your Sonnet bill per pass (subagents included) | Infino tokens | all-in | main-agent tokens | tool calls (inside subagents included) |
 |---|---|---|---|---|---|
 | Sonnet, file tools | $5.22 | - | $5.22 | 4,549k | 249 |
 | Sonnet + its Explore subagents | $7.35 | - | $7.35 | 1,918k | 355 |
@@ -71,14 +71,9 @@ answers. The harness, the questions, the judge and the chart script are in
 
 Against Sonnet's own Explore subagents, **your Sonnet bill falls 70%** - 3.4x
 lower - with 43% less main-agent context and under a quarter of the tool
-calls. Counting what we charge for the retrieval, the **all-in cost falls
-40-59%**, so about half. Against plain file tools the Sonnet bill falls 58%
-and the all-in cost 15-42%.
-
-The retrieval column is what the cloud tools cost you. It is a range because
-that price follows tokens, and the balance between question and answer varies
-with the question; retrieval is long prompts and short answers, so the low
-end is the common case.
+calls. With the Infino tokens the cloud tools spend counted in, the **all-in
+cost falls 40-59%**, so about half. Against plain file tools the Sonnet bill
+falls 58% and the all-in cost 15-42%.
 
 A single pass is one measurement, so here is its spread: eight passes over
 the same thirty-six questions across this branch's development ranged $1.81
