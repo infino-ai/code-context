@@ -39,7 +39,7 @@ import {
   keepInput,
   recordedQueries,
 } from "./lanes.mjs";
-import { compareFind, countInFile, projectionInvariance } from "./find-parity.mjs";
+import { compareFind, countInFile, projectionInvariance, fileOrder } from "./find-parity.mjs";
 import { warmHosted, splitDbUrl, DEFAULT_RETRY_AFTER_SECS } from "./warm-hosted.mjs";
 import { indexArgs, runIndexBuild, hostOf } from "./load-hosted.mjs";
 import { snowflakeSettings, CHUNK_COLUMNS } from "./snowflake-rest.mjs";
@@ -562,6 +562,20 @@ test("projectionInvariance holds the totals and counts always, and the lines onl
   const lines = projectionInvariance([base, { label: "path,symbol", answer: side(3, 2, [["a.rs", 2], ["b.rs", 1]], ["a.rs:1", "a.rs:9", "b.rs:5"]) }]);
   assert.equal(lines.same, false);
   assert.deepEqual(lines.broken[0].dimensions, ["2 lines"]);
+});
+
+test("fileOrder names the first pair of returned lines that are out of file order", () => {
+  assert.deepEqual(fileOrder(["a.rs:1", "a.rs:9", "b.rs:2", "b.rs:40"]), { ordered: true });
+  assert.deepEqual(fileOrder([]), { ordered: true });
+  assert.deepEqual(fileOrder(["a.rs:7"]), { ordered: true });
+  // a line number that goes backwards inside one file
+  assert.deepEqual(fileOrder(["a.rs:9", "a.rs:1"]), { ordered: false, at: 1, after: "a.rs:9", before: "a.rs:1" });
+  // a path that goes backwards
+  assert.deepEqual(fileOrder(["b.rs:1", "a.rs:1"]), { ordered: false, at: 1, after: "b.rs:1", before: "a.rs:1" });
+  // numeric, not lexical: 40 after 9 is in order
+  assert.deepEqual(fileOrder(["a.rs:9", "a.rs:40"]), { ordered: true });
+  // a path holding a colon still splits at the last one
+  assert.deepEqual(fileOrder(["a:b.rs:1", "a:b.rs:2"]), { ordered: true });
 });
 
 test("countInFile is the referee: the 1-based lines of a file holding the literal, case-sensitively", () => {

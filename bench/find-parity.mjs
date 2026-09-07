@@ -13,6 +13,23 @@
 // lines are counted straight from the files, so "which side is right" is
 // settled by the repository rather than by either tool.
 //
+// A trap this file exists to span, since it is the only place both shapes are
+// read: `line` does not mean the same thing on the two sides.
+//
+//   platform find   `line`       the matched line's TEXT, excerpted
+//                   `file_line`  its 1-based number in the file
+//   client find     `line`       its 1-based number in the file
+//                   `text`       the matched line's text, excerpted
+//
+// Both are published contracts and neither should be renamed; anyone reading
+// `line` from both gets text from one and a number from the other.
+//
+// Two limits, not one: the platform's route defaults to 500 and the retrieval
+// loop's own find tool defaults to 100, and the loop's take is clamped to 500
+// however large a k it asks for. So the effective range the inner model lives
+// in is 0 to 500, and a check that runs only at 500 does not see what a
+// default loop call gets on a literal with more matches than that.
+//
 // A real platform and a key are needed, so this is a script rather than a unit
 // test; `compareFind` and `countInFile` are exported and tested without either.
 //
@@ -68,8 +85,16 @@ const REFEREE_FILES = 6;
 
 /** One side's answer, in the shape the comparison needs: the repo-wide total
  * before any limit, the distinct files, the per-file counts, the set of
- * `path:line` the side returned, and whether the limit cut that set. */
-const answer = (total, files, byFile, lines, truncated = false) => ({ total, files, byFile, lines, truncated });
+ * `path:line` the side returned, that set in the order it was returned, and
+ * whether the limit cut it. */
+const answer = (total, files, byFile, ordered, truncated = false) => ({
+  total,
+  files,
+  byFile,
+  ordered,
+  lines: new Set(ordered),
+  truncated,
+});
 
 /** What differs between two find answers: the totals, the file counts, the
  * per-file counts, and the lines only one side returned. Pure, so the
@@ -123,6 +148,26 @@ export function projectionInvariance(answers) {
   return { same: broken.length === 0, broken };
 }
 
+/** Whether returned lines are in file order - path, then line number. It
+ * matters most exactly where it is hardest to see: when the limit cuts the
+ * answer, the caller gets some N of the matches, and only a positional order
+ * makes that the first N rather than an arbitrary N. `keys` are `path:line`
+ * strings in the order they were returned. */
+export function fileOrder(keys) {
+  const at = (k) => {
+    const cut = k.lastIndexOf(":");
+    return [k.slice(0, cut), Number(k.slice(cut + 1))];
+  };
+  for (let i = 1; i < keys.length; i++) {
+    const [prevPath, prevLine] = at(keys[i - 1]);
+    const [path, line] = at(keys[i]);
+    if (path < prevPath || (path === prevPath && line < prevLine)) {
+      return { ordered: false, at: i, after: keys[i - 1], before: keys[i] };
+    }
+  }
+  return { ordered: true };
+}
+
 /** The 1-based numbers of the lines of `text` that contain `literal`: the
  * referee's count, case-sensitive like find's default. */
 export function countInFile(text, literal) {
@@ -140,7 +185,7 @@ async function clientFind(handle, literal) {
     r.total,
     r.files,
     new Map(r.byFile.map((f) => [f.path, f.count])),
-    new Set(r.matches.map((m) => `${m.path}:${m.line}`)),
+    r.matches.map((m) => `${m.path}:${m.line}`),
     r.truncated === true,
   );
 }
@@ -175,7 +220,7 @@ async function platformFind(dbUrl, key, literal, projection = PROJECTION, limit 
     body.total,
     body.groups_total,
     new Map((body.groups ?? []).map((g) => [g.value, g.lines])),
-    new Set(lines.map((r) => `${r.columns.path}:${r.file_line}`)),
+    lines.map((r) => `${r.columns.path}:${r.file_line}`),
     body.truncated === true,
   );
 }
@@ -199,7 +244,7 @@ async function main(argv) {
   const wanted = terms.length ? terms : DEFAULT_TERMS;
 
   console.log(`find parity: ${indexDir} against ${dbUrl.replace(/\/\/.*@/, "//")}, projection ${PROJECTION.join(",")}, limit ${LIMIT}`);
-  console.log("term             client tot/files  platform tot/files  parity   projections  counts-only");
+  console.log("term             client tot/files  platform tot/files  parity   projections  counts-only  file order (by projection)");
   let disagreed = 0;
   for (const literal of wanted) {
     let client;
@@ -226,10 +271,21 @@ async function main(argv) {
     // before paying for any of it.
     const countsDiff = compareFind({ ...client, lines: countsOnly.lines }, countsOnly);
     const countsOk = countsDiff.total === null && countsDiff.files === null && countsDiff.byFile.length === 0;
+    // Whether each answer came back in file order, the client's included:
+    // the property that makes a cut answer the first N matches rather than an
+    // arbitrary N. Reported per projection, since the sort key is built from
+    // the projected columns.
+    const orders = [{ label: "client", result: fileOrder(client.ordered) }, ...byProjection.map((p) => ({ label: p.label, result: fileOrder(p.answer.ordered) }))];
+    const disordered = orders.filter((o) => !o.result.ordered);
     console.log(
       `${literal.padEnd(15)}  ${String(client.total).padStart(5)}/${String(client.files).padEnd(5)}  ${String(platform.total).padStart(5)}/${String(platform.files).padEnd(5)}  ` +
-        `${(diff.same ? "same" : "DIFFERS").padEnd(8)} ${(invariance.same ? "invariant" : "VARIES").padEnd(12)} ${countsOk ? `${countsOnly.total}/${countsOnly.files}` : "WRONG"}`,
+        `${(diff.same ? "same" : "DIFFERS").padEnd(8)} ${(invariance.same ? "invariant" : "VARIES").padEnd(12)} ${(countsOk ? `${countsOnly.total}/${countsOnly.files}` : "WRONG").padEnd(12)} ` +
+        `${disordered.length === 0 ? "all in order" : `${disordered.length} of ${orders.length} NOT in order: ${disordered.map((o) => o.label).join(" | ")}`}`,
     );
+    if (disordered.length && platform.truncated) {
+      console.log(`    the answer is cut at ${LIMIT} of ${platform.total}, so an order that is not positional makes the cut an arbitrary ${LIMIT}, not the first ${LIMIT}`);
+      for (const o of disordered.slice(0, 3)) console.log(`    ${o.label}: ${o.result.after} returned before ${o.result.before} (position ${o.result.at})`);
+    }
     if (!invariance.same) {
       disagreed++;
       for (const b of invariance.broken) {
