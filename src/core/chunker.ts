@@ -76,6 +76,7 @@ const PARSE_CAP_BYTES = 512 * 1024;
 // Extension → language tag. Doubles as the indexing allowlist.
 const EXT_LANG: Record<string, string> = {
   md: "md", mdx: "md", rst: "rst", txt: "txt", adoc: "adoc", tex: "tex",
+  log: "log", jsonl: "jsonl", ndjson: "jsonl", out: "log", err: "log",
   ts: "ts", tsx: "tsx", js: "js", jsx: "js", mjs: "js", cjs: "js",
   py: "py", pyi: "py", rs: "rs", go: "go", java: "java", rb: "rb",
   c: "c", h: "c", cpp: "cpp", hpp: "cpp", cc: "cpp", hh: "cpp", cs: "cs",
