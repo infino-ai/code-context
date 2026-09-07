@@ -86,6 +86,59 @@ import { createEmbedder, createIndexingEmbedder, embedderInfo, platformEmbedderI
 import { RepoRegistry, type RepoCtx } from "./repos.js";
 import { ensureIndexed, type EnsureResult } from "./ensure.js";
 
+/** The `sql` tool's description, named because it is the one description whose
+ * every clause was put there by a measurement and can be regressed by an edit
+ * that reads better. Five of its clauses are load-bearing in that sense and
+ * `test/tool-text.test.ts` asserts each one, each assertion shown to fail when
+ * its clause is rewritten: hybrid named before bm25 (a tool named second was
+ * measured taken 0 times in 1,103 queries); the placeholder marked as the
+ * caller's to fill (a model copied one literally in 8 of 8 calls); the total
+ * named `ranked_lines` and reported as ranked, since fusion unions the keyword
+ * and meaning arms so a row can place in the top k without holding the terms;
+ * the pair that says a path filter narrows a search but is never the topic -
+ * every aggregation statement in the bench that aggregated at all was a
+ * directory guess measuring file lengths; and the scan clause naming every
+ * predicate rather than ILIKE alone. */
+export const SQL_DESCRIPTION =
+  "Read-only SQL, one SELECT or WITH, over " +
+  `${TABLE}(path, start_line, end_line, lang, symbol, content[, embedding]) - lang is the ` +
+  "file extension, e.g. 'rs' - for counts, rankings, and GROUP BY across the whole repo. " +
+  "The search functions are table-valued: a ranked search is a relation, so WHERE, GROUP BY, " +
+  "ORDER BY and joins compose with it in one pass, and one query replaces the several round " +
+  "trips of searching, then filtering, then counting. Rank through a search relation rather " +
+  "than scanning the whole table - with ILIKE, LIKE, regexp_like, or a bare filter on path " +
+  "or lang: a scan has no relevance ranking, reads every chunk, and answers 'contains this " +
+  "substring' when the question asked which code is about something. " +
+  `Rank with hybrid_search('${TABLE}','content','terms','embedding', {{q}}, k) - 'terms' and ` +
+  "{{q}} are yours to fill in, not literals to copy - unless you have " +
+  "a reason not to: it fuses exact terms with meaning, so it reaches the code whether or not " +
+  "the question's words are the code's words, and they rarely are. That covers a concept, a " +
+  "subsystem, 'code about X', 'files that do Y' - the shape of almost every ranking question. " +
+  `bm25_search('${TABLE}','content','terms', k) is keyword only: reach for it when the topic ` +
+  "is itself a literal string you know appears in the source and you want counts a reader can " +
+  `check as occurrences. vector_search('${TABLE}','embedding', {{q}}, k) is meaning alone. ` +
+  "The {{name}} placeholders are filled server-side from the embed " +
+  "map, so they cost you nothing but the name. Which files have the most code about a topic, " +
+  "ranked - the whole question in one statement, filtered on the " +
+  "same pass, with your own words in place of the example's: SELECT path, SUM(end_line - start_line + 1) " +
+  `AS ranked_lines, COUNT(*) AS chunks FROM hybrid_search('${TABLE}','content','merge small superfiles','embedding', {{q}}, 300) WHERE ` +
+  "path LIKE 'src/%' GROUP BY path ORDER BY ranked_lines DESC LIMIT 15, with embed " +
+  '{"q":"how small superfiles are merged into larger ones"}. Where the topic is a literal ' +
+  "string you want counted as occurrences, the same shape over " +
+  `bm25_search('${TABLE}','content','compaction', 300) instead - every row then holds the word, ` +
+  "so a reader can check it. " +
+  "What such a total means: a search relation holds only the top k chunks of that query, so a " +
+  "SUM or COUNT over it is the lines or chunks that ranked within the top k - a share of the " +
+  "file about the topic - and never the file's length or the repository's count; report it as " +
+  "'lines ranked in the top 300 for <topic>', and expect files outside the top k, including " +
+  "large ones, to be missing from it. A question with no topic in it - a file's length, the " +
+  `largest files, a count over the whole repository - comes from ${TABLE} with no search ` +
+  `function: SELECT path, MAX(end_line) AS lines FROM ${TABLE} GROUP BY path ORDER BY lines ` +
+  "DESC. A path prefix is not a topic: filtering on WHERE path LIKE 'src/thing/%' and " +
+  "measuring lengths answers how big those files are, not which code is about the thing, and " +
+  "it guesses the answer from a directory name instead of retrieving it. " +
+  "The result includes a 'usage' field, a one-line receipt of tokens returned and rows.";
+
 export async function serveMcp(rootPath?: string): Promise<void> {
   const defaultRoot = resolveRoot(rootPath);
 
@@ -451,45 +504,7 @@ export async function serveMcp(rootPath?: string): Promise<void> {
     "sql",
     {
       title: "SQL over the code index",
-      description:
-        "Read-only SQL, one SELECT or WITH, over " +
-        `${TABLE}(path, start_line, end_line, lang, symbol, content[, embedding]) - lang is the ` +
-        "file extension, e.g. 'rs' - for counts, rankings, and GROUP BY across the whole repo. " +
-        "The search functions are table-valued: a ranked search is a relation, so WHERE, GROUP BY, " +
-        "ORDER BY and joins compose with it in one pass, and one query replaces the several round " +
-        "trips of searching, then filtering, then counting. Rank through a search relation rather " +
-        "than scanning the whole table - with ILIKE, LIKE, regexp_like, or a bare filter on path " +
-        "or lang: a scan has no relevance ranking, reads every chunk, and answers 'contains this " +
-        "substring' when the question asked which code is about something. " +
-        `Rank with hybrid_search('${TABLE}','content','terms','embedding', {{q}}, k) - 'terms' and ` +
-        "{{q}} are yours to fill in, not literals to copy - unless you have " +
-        "a reason not to: it fuses exact terms with meaning, so it reaches the code whether or not " +
-        "the question's words are the code's words, and they rarely are. That covers a concept, a " +
-        "subsystem, 'code about X', 'files that do Y' - the shape of almost every ranking question. " +
-        `bm25_search('${TABLE}','content','terms', k) is keyword only: reach for it when the topic ` +
-        "is itself a literal string you know appears in the source and you want counts a reader can " +
-        `check as occurrences. vector_search('${TABLE}','embedding', {{q}}, k) is meaning alone. ` +
-        "The {{name}} placeholders are filled server-side from the embed " +
-        "map, so they cost you nothing but the name. Which files have the most code about a topic, " +
-        "ranked - the whole question in one statement, filtered on the " +
-        "same pass, with your own words in place of the example's: SELECT path, SUM(end_line - start_line + 1) " +
-        `AS ranked_lines, COUNT(*) AS chunks FROM hybrid_search('${TABLE}','content','merge small superfiles','embedding', {{q}}, 300) WHERE ` +
-        "path LIKE 'src/%' GROUP BY path ORDER BY ranked_lines DESC LIMIT 15, with embed " +
-        "{\"q\":\"how small superfiles are merged into larger ones\"}. Where the topic is a literal " +
-        "string you want counted as occurrences, the same shape over " +
-        `bm25_search('${TABLE}','content','compaction', 300) instead - every row then holds the word, ` +
-        "so a reader can check it. " +
-        "What such a total means: a search relation holds only the top k chunks of that query, so a " +
-        "SUM or COUNT over it is the lines or chunks that ranked within the top k - a share of the " +
-        "file about the topic - and never the file's length or the repository's count; report it as " +
-        "'lines ranked in the top 300 for <topic>', and expect files outside the top k, including " +
-        "large ones, to be missing from it. A question with no topic in it - a file's length, the " +
-        `largest files, a count over the whole repository - comes from ${TABLE} with no search ` +
-        `function: SELECT path, MAX(end_line) AS lines FROM ${TABLE} GROUP BY path ORDER BY lines ` +
-        "DESC. A path prefix is not a topic: filtering on WHERE path LIKE 'src/thing/%' and " +
-        "measuring lengths answers how big those files are, not which code is about the thing, and " +
-        "it guesses the answer from a directory name instead of retrieving it. " +
-        "The result includes a 'usage' field, a one-line receipt of tokens returned and rows.",
+      description: SQL_DESCRIPTION,
       inputSchema: {
         query: z
           .string()
