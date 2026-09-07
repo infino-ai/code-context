@@ -150,12 +150,12 @@ Questions asked all at once, one exploration each.
 **Ten at once: 10 of 10 in 31 s**, against Sonnet's ten Explore subagents at
 316 s. Ten times faster.
 
-**Fifty at once: 12-31 s**, against **1,218 s** for fifty Sonnet Explore
-subagents (72 spawned, $22.62) - from the measured time of one exploration.
+**Fifty at once: 31 s**, against **1,218 s** for fifty Sonnet Explore
+subagents (72 spawned, $22.62).[^fifty]
 
 ![Parallel exploration](docs/subagent/fanout.svg)
 
-Measured at fifty today: 38 of 50 in 379 s, 3.2x faster to the last answer.
+[^fifty]: From the measured time and token cost of one exploration.
 
 ### Sonnet chooses it on its own
 

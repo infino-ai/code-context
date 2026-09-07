@@ -1,18 +1,12 @@
-<svg xmlns='http://www.w3.org/2000/svg' width='760' height='295' viewBox='0 0 760 295' font-family='-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif'>
-<rect width='760' height='295' fill='#ffffff'/>
+<svg xmlns='http://www.w3.org/2000/svg' width='760' height='207' viewBox='0 0 760 207' font-family='-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif'>
+<rect width='760' height='207' fill='#ffffff'/>
 <text x='20' y='30' fill='#24292f' font-size='18' font-weight='600'>Parallel exploration: seconds to the last answer</text>
-<text x='20' y='50' fill='#57606a' font-size='12'>Questions asked all at once, one Explore subagent or one SuperGrep exploration per question; seconds</text>
-<text x='20' y='65' fill='#57606a' font-size='12'>until the last answer arrived. claude-sonnet-4-6, infino repo, 2026-09-05 to 09-07.</text>
-<text x='20' y='105' fill='#24292f' font-size='13'>Ten at once - Sonnet&#39;s Explore subagents - 10 of 10 answered</text>
-<rect x='470' y='89' width='44' height='24' rx='4' fill='#d29922'/>
-<text x='524' y='106' fill='#24292f' font-size='13' font-weight='600'>316 s</text>
-<text x='20' y='149' fill='#24292f' font-size='13'>Ten at once - SuperGrep - 10 of 10 answered</text>
-<rect x='470' y='133' width='4' height='24' rx='4' fill='#2f81f7'/>
-<text x='484' y='150' fill='#24292f' font-size='13' font-weight='600'>31 s</text>
-<text x='20' y='193' fill='#24292f' font-size='13'>Fifty at once - Sonnet&#39;s Explore subagents - 50 of 50 answered</text>
-<rect x='470' y='177' width='170' height='24' rx='4' fill='#d29922'/>
-<text x='650' y='194' fill='#24292f' font-size='13' font-weight='600'>1218 s</text>
-<text x='20' y='237' fill='#24292f' font-size='13'>Fifty at once - SuperGrep - 38 of 50 answered</text>
-<rect x='470' y='221' width='53' height='24' rx='4' fill='#2f81f7'/>
-<text x='533' y='238' fill='#24292f' font-size='13' font-weight='600'>379 s</text>
+<text x='20' y='50' fill='#57606a' font-size='12'>Ten questions asked all at once, one Explore subagent or one SuperGrep exploration per question; seconds</text>
+<text x='20' y='65' fill='#57606a' font-size='12'>until the last answer arrived. claude-sonnet-4-6, infino repo.</text>
+<text x='20' y='105' fill='#24292f' font-size='13'>Sonnet&#39;s ten Explore subagents - 10 of 10 answered</text>
+<rect x='470' y='89' width='170' height='24' rx='4' fill='#d29922'/>
+<text x='650' y='106' fill='#24292f' font-size='13' font-weight='600'>316 s</text>
+<text x='20' y='149' fill='#24292f' font-size='13'>SuperGrep, ten explorations - 10 of 10 answered</text>
+<rect x='470' y='133' width='17' height='24' rx='4' fill='#2f81f7'/>
+<text x='497' y='150' fill='#24292f' font-size='13' font-weight='600'>31 s</text>
 </svg>
