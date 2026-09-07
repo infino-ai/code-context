@@ -8,7 +8,7 @@
 
 # SuperGrep
 
-**Retrieval subagents for Claude Sonnet. Save 50% on your Anthropic bill. 10x faster than Sonnet Explorer.**
+**Retrieval subagents for Claude Sonnet. Save 50% on your Anthropic bill. 5x faster on fanout.**
 
 Sonnet is the model most agent sessions actually run on, and most of what it
 spends goes on finding code rather than reasoning about it. SuperGrep farms
