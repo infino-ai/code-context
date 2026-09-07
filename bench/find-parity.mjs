@@ -122,26 +122,29 @@ export function compareFind(client, platform) {
 }
 
 /** Whether a set of answers to one literal, differing only in what they asked
- * to see, agree on how many lines there are and which files hold them.
- * `answers` is a list of {label, answer}; the first is the reference.
+ * to see, agree on how many lines there are, which files hold them, and which
+ * lines came back. `answers` is a list of {label, answer}; the first is the
+ * reference.
  *
- * The totals and the per-file counts must match always. The returned lines are
- * compared only when neither answer was cut by the limit: a cut answer holds
- * some 500 of the matches, and which 500 is a matter of ordering among equals
- * rather than of the contract. Pure, so the contract is testable without a
- * platform. */
+ * The returned lines are asserted for cut answers too. That is only sound
+ * because the order is positional: a cut answer is the FIRST N matches, so two
+ * answers cut at the same limit hold the same N. If a change ever puts
+ * something other than position at the head of the sort, a cut answer becomes
+ * an arbitrary N, this assertion is what says so, and the message will name
+ * `lines` while the totals still agree. Pure, so the contract is testable
+ * without a platform. */
 export function projectionInvariance(answers) {
   const [reference, ...rest] = answers;
   const broken = [];
   for (const other of rest) {
     const diff = compareFind(reference.answer, other.answer);
-    const cut = reference.answer.truncated || other.answer.truncated;
     const dimensions = [];
     if (diff.total) dimensions.push(`total ${diff.total.client} against ${diff.total.platform}`);
     if (diff.files) dimensions.push(`files ${diff.files.client} against ${diff.files.platform}`);
     if (diff.byFile.length) dimensions.push(`${diff.byFile.length} per-file counts`);
-    if (!cut && (diff.onlyClient.length || diff.onlyPlatform.length)) {
-      dimensions.push(`${diff.onlyClient.length + diff.onlyPlatform.length} lines`);
+    if (diff.onlyClient.length || diff.onlyPlatform.length) {
+      const cut = reference.answer.truncated || other.answer.truncated;
+      dimensions.push(`${diff.onlyClient.length + diff.onlyPlatform.length} lines${cut ? " (both cut at the limit, so the cut is not the same N)" : ""}`);
     }
     if (dimensions.length) broken.push({ label: other.label, against: reference.label, dimensions, diff });
   }

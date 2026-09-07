@@ -544,12 +544,23 @@ test("projectionInvariance holds the totals and counts always, and the lines onl
   assert.equal(inflated.same, false);
   assert.equal(inflated.broken[0].label, "path,end_line");
   assert.deepEqual(inflated.broken[0].dimensions, ["total 3 against 4", "1 per-file counts"]);
-  // a cut answer holds some of the matches; which ones is not the contract
+  // a cut answer is the FIRST N matches, so two answers cut at one limit hold
+  // the same N: differing lines break the contract even when both were cut,
+  // and the message says the cut is not the same N
   const cut = projectionInvariance([
     { label: "path", answer: side(9, 2, [["a.rs", 8], ["b.rs", 1]], ["a.rs:1", "a.rs:9"], true) },
     { label: "path,symbol", answer: side(9, 2, [["a.rs", 8], ["b.rs", 1]], ["a.rs:1", "b.rs:4"], true) },
   ]);
-  assert.equal(cut.same, true);
+  assert.equal(cut.same, false);
+  assert.match(cut.broken[0].dimensions[0], /^2 lines \(both cut at the limit/);
+  // two answers cut at one limit that hold the same N still agree
+  assert.equal(
+    projectionInvariance([
+      { label: "path", answer: side(9, 2, [["a.rs", 8], ["b.rs", 1]], ["a.rs:1", "a.rs:9"], true) },
+      { label: "path,symbol", answer: side(9, 2, [["a.rs", 8], ["b.rs", 1]], ["a.rs:9", "a.rs:1"], true) },
+    ]).same,
+    true,
+  );
   // but a cut answer that disagrees on the total still breaks it
   assert.equal(
     projectionInvariance([
