@@ -38,6 +38,32 @@ It is where Sonnet's exploration, retrieval and fan-out go.
 
 **Sonnet thinks. Infino explores.**
 
+## Code is the first corpus, not the only one
+
+The index takes the files a question needs, not just the source. Logs, test
+output, stack traces, CI output, configuration and docs go in beside the code,
+and the same five tools run over all of it: `find` for an exact stack frame,
+`search` for a failure you can only describe, `sql` to count and rank across a
+run, `explore` for the question that spans several of them at once.
+
+That matters most where a frontier model is weakest. A log is the pathological
+case for a context window - large, repetitive, mostly irrelevant, and paid for
+again on every turn it stays in the transcript. An index collapses it to the
+spans that matter before Sonnet sees any of it. It is the same trade the cost
+table below measures on source code, on a corpus where the ratio is worse.
+
+So "why did this integration test start failing?" is one question over source,
+recent logs, test output, stack traces and config - and the retrieval, the
+fan-out and the fifty parallel investigations are the part that is farmed out.
+
+**Not yet measured.** Every number on this page is a source-code corpus. The
+log and trace case is indexable today and is what we are measuring next;
+nothing here should be read as covering it. Two limits worth knowing now: a
+single file above 1 MB is skipped, and today it is skipped without being
+reported, so a large log is simply absent from the index rather than flagged -
+raise `CX_MAX_FILE_BYTES` if you are pointing this at logs. A multi-gigabyte
+trace is not what this handles today.
+
 ## The numbers
 
 Real agent runs through the Claude Agent SDK: `claude-sonnet-4-6`, the same
