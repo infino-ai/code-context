@@ -6,7 +6,7 @@
 
 </div>
 
-# SuperGrep by Infino
+# SuperGrep
 
 **Small language models (SLMs) for fast code retrieval. Save 75% on your token bill.**
 
