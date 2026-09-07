@@ -26,8 +26,8 @@
 // selection - so find is unranked and complete where search is ranked and
 // top-k, and hybrid search's keyword half already ranks exact identifiers.
 // Every sentence in the descriptions below is paid for on every turn and
-// was measured to steer selection (docs/benchmark.md, "The tool surface"):
-// change them with the bench, not by taste.
+// was measured to steer selection: change them with the bench (bench/),
+// not by taste.
 // Results carry took_ms - server-side time for the call (query embedding
 // included where one happens; no transport).
 

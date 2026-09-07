@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: Copyright The Infino Authors
 //
-// code-context / cx - local code search for AI coding agents.
+// SuperGrep, package/CLI/MCP server code-context / cx - retrieval subagents
+// for Claude Sonnet: three tools over a local code index, two more over the
+// same index's platform copy.
 //
 // Configuration is command-line flags. The platform knobs are flags on the two
 // commands that write or serve the platform table (`index`, `mcp`); they are
@@ -74,10 +76,10 @@ Examples:
   cx sql "SELECT path, SUM(end_line - start_line + 1) AS lines \\
           FROM bm25_search('chunks','content','vector index', 300) \\
           GROUP BY path ORDER BY lines DESC LIMIT 10"
-  cx mcp                              serve the MCP tools (find/search/sql) over stdio
-  cx index --db https://api.platform.infino.ws/my-repo --api-key-file ~/.infino/key
+  cx mcp                              serve the three local MCP tools (find/search/sql) over stdio
+  cx index --db https://host/<database> --api-key-file ~/.infino/key
                                       index the repo locally AND load it into the platform database
-  cx mcp --db https://api.platform.infino.ws/my-repo --api-key-file ~/.infino/key
+  cx mcp --db https://host/<database> --api-key-file ~/.infino/key
                                       serve find/search/sql over the local index, plus ask and
                                       explore over the platform copy; every sync updates both`,
   );

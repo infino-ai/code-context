@@ -111,9 +111,9 @@ for (const s of summaries) {
   );
 }
 
-// CX_MD=1 prints the same summary as markdown tables for docs/benchmark.md:
-// one per category with a row per build, plus the blended table. "Right
-// first" counts runs whose first call was the tool the question shape is for.
+// CX_MD=1 prints the same summary as markdown tables: one per category with
+// a row per build, plus the blended table. "Right first" counts runs whose
+// first call was the tool the question shape is for.
 const INTENDED = {
   aggregation: (t) => t === "cx:sql",
   comprehension: (t) => t === "cx:search" || t === "cx:context",

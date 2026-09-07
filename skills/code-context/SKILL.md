@@ -1,29 +1,35 @@
 ---
 name: code-context
 description: >
-  How to answer codebase questions with the code-context MCP tools (find,
-  search, sql): exact-text lookup that replaces grep, ranked hybrid
-  keyword+semantic search, relevance-ranked SQL aggregation over the index,
-  and index lifecycle. Use when you would grep for an identifier or literal,
-  when a question spans many files ("how does X work", "where is Y
-  handled"), when ranking or counting code by topic across a repo, or when
-  the code-context tools are present but deferred and need loading before
-  use.
+  How to answer codebase questions with the SuperGrep MCP tools: find, search
+  and sql locally (exact-text lookup that replaces grep, ranked hybrid
+  keyword+semantic search, relevance-ranked SQL aggregation over the index),
+  and ask/explore over the platform copy when the server has --db (retrieval
+  subagents that answer or return facts instead of you crawling the repo
+  yourself). Use when you would grep for an identifier or literal, when a
+  question spans many files ("how does X work", "where is Y handled"), when
+  ranking or counting code by topic across a repo, or when the code-context
+  tools are present but deferred and need loading before use.
 ---
 
 # code-context: search over the repository
 
 code-context maintains a local index of the repository (in `.infino/` at the
-repo root) and exposes three MCP tools. Every lookup an agent would otherwise
-do with grep or by crawling files runs against the index instead: `find` for
-the exact-text case, one ranked pass for everything that spans the repo.
+repo root) and exposes three MCP tools; two more run over the same index's
+platform copy when the server has `--db`. Every lookup an agent would
+otherwise do with grep or by crawling files runs against the index instead,
+or is delegated to a retrieval subagent entirely: `find` for the exact-text
+case, one ranked pass for everything that spans the repo, `explore`/`ask`
+when you would rather hand the exploration off than do it yourself.
 
 ## If the tools are deferred
 
 When the tool names appear in a deferred-tools listing but their schemas are
-not loaded, load all three in ONE ToolSearch call before the first use, e.g.
-query `+code-context find search sql` (or `select:` with the exact listed
-names, comma-separated). Never load them one call at a time.
+not loaded, load them in ONE ToolSearch call before the first use, e.g. query
+`+code-context find search sql ask explore` (or `select:` with the exact
+listed names, comma-separated) - name only the tools that actually appear in
+the deferred listing, since `ask` and `explore` are registered only when the
+server has `--db`. Never load them one call at a time.
 
 ## Choosing the right tool
 
@@ -31,8 +37,10 @@ names, comma-separated). Never load them one call at a time.
 | --- | --- |
 | Every occurrence of an exact identifier, string, or key (where you would grep) | `find` |
 | A file you already know the path of | Read |
-| "How does X work", "where is Y handled", concept without exact name | `search` |
+| "How does X work", "where is Y handled", concept without exact name - and `ask`/`explore` are registered | `explore` (or `ask`/`search` - see below) |
+| "How does X work", "where is Y handled", concept without exact name - local only | `search` |
 | Counts, rankings, GROUP BY across the repo ("which files have the most code about X") | `sql` |
+| A question you would rather delegate than explore yourself | `ask` (facts back) or `explore` (a written, cited answer) |
 | Working tree changed a lot mid-session | nothing - the next query re-syncs (see lifecycle) |
 
 ## find
@@ -173,15 +181,19 @@ not need re-reading or re-checking.
 - A result carrying a `partial` marker means the repo exceeded the index's
   file cap and some files were left out: treat a missing match as
   possibly-unindexed, not as proof the code doesn't exist.
-- Find, search, and sql results carry a one-line `usage` receipt (tokens
-  returned, matches or chunks / files, session running total), computed
-  locally. It is there for the user who asks what a lookup cost; `cx usage`
-  keeps the ledger.
+- Every tool's result carries a one-line `usage` receipt - find/search/sql's
+  computed locally (tokens returned, matches or chunks / files, session
+  running total), ask/explore's naming what the platform metered for the
+  call. It is there for the user who asks what a lookup cost; `cx usage`
+  keeps the local ledger.
 
 ## Multi-repo sessions
 
-Every tool takes an optional `path` (an **absolute** repo root) to target a
-different repository than the one the server started in.
+`find`, `search` and `sql` take an optional `path` (an **absolute** repo
+root) to target a different repository than the one the server started in,
+each with its own local index. `ask` and `explore` read the one platform
+database the server was started with, which holds one repository's index;
+they refuse a `path` naming a different one.
 
 ## Cost awareness
 
