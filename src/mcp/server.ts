@@ -650,7 +650,10 @@ export async function serveMcp(rootPath?: string): Promise<void> {
           "it searches, reads what it finds, follows definitions to their uses, and returns answer, " +
           "its written answer, grounded in the facts it lists (hits: the rows it ended on, with exact " +
           "path, start_line, end_line and the code) and the chain of queries it ran. Take the answer " +
-          "and cite path:line from its hits; it does not need re-reading or re-checking. Slower and " +
+          "and cite path:line from its hits; it does not need re-reading or re-checking. On a " +
+          "mechanism that spans layers, the answer's own symbols are the next question: ask again " +
+          "naming one of them to reach the file that calls it, because the layer that decides usually " +
+          "describes itself in different words than the question used. Slower and " +
           "dearer than ask: use ask for one retrieval, explore when one retrieval will not " +
           "do. For every occurrence of an exact string use find; for a file you already know, Read " +
           "it. The result includes a 'usage' field, a one-line receipt of what the call cost.",
