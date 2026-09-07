@@ -146,7 +146,7 @@ Questions asked all at once, one exploration each.
 316 s. Ten times faster.
 
 **Fifty at once: 31 s**, against **1,218 s** for fifty Sonnet Explore
-subagents (72 spawned, $22.62).[^fifty]
+subagents.[^fifty]
 
 ![Parallel exploration](docs/subagent/fanout.svg)
 
