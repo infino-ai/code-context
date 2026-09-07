@@ -4,10 +4,11 @@
 // The charts the README shows, drawn from the bench's own results so every
 // bar traces to a recorded run: per-pass cost and main-agent tokens of the
 // three arms (Sonnet with file tools, Sonnet with its Explore subagents,
-// Sonnet with Infino Subagent), the blind judge's verdicts per category, and
-// the fan-out probe (from docs/subagent/fanout.json, the probe's summary
-// numbers, since the probe runs outside the lanes). Plain SVG, no
-// dependencies, so GitHub renders them inline.
+// Sonnet with all five tools), the blind judge's verdicts per category
+// against each of the two baselines, and the fan-out probe (from
+// docs/subagent/fanout.json, the probe's summary numbers, since the probe
+// runs outside the lanes). Plain SVG, no dependencies, so GitHub renders
+// them inline.
 // Usage: node readme-charts.mjs [outDir=../docs/subagent]
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -19,12 +20,20 @@ mkdirSync(outDir, { recursive: true });
 /** The arms the README compares: a build label as recorded on the rows, the
  * lane it ran in, and the words the chart uses for it. */
 const ARMS = [
-  { build: "FILES", lane: "files", label: "Sonnet, file tools", color: "#8b949e" },
-  { build: "SE1", lane: "stock-explore", label: "Sonnet + its Explore subagents", color: "#d29922" },
-  { build: "FX5", lane: "find-explore", label: "Sonnet + Infino Subagent", color: "#2f81f7" },
+  { build: "SONFILES2", lane: "files", label: "Sonnet, file tools", color: "#8b949e" },
+  { build: "SONEXP2", lane: "stock-explore", label: "Sonnet + its Explore subagents", color: "#d29922" },
+  { build: "SONFULL9", lane: "hosted-full", label: "Sonnet + SuperGrep", color: "#2f81f7" },
 ];
-/** The judge comparison drawn per category: pure Sonnet against the Subagent arm. */
-const JUDGE = { baseline: "FILES", candidate: "FX5", rule: "checkout" };
+/** The candidate arm every judge chart scores, and the two baselines it is
+ * scored against — one chart each, so a category's verdicts are never mixed
+ * across baselines. `rule` is the judging rule the verdicts were recorded
+ * under; verdicts from different rules are not comparable and never summed. */
+const JUDGE_CANDIDATE = "SONFULL9";
+const JUDGE_RULE = "grain+queries";
+const JUDGES = [
+  { baseline: "SONFILES2", baselineLabel: "file-tools arm wins", file: "judge-vs-file-tools.svg", against: "Sonnet with file tools" },
+  { baseline: "SONEXP2", baselineLabel: "Explore-subagent arm wins", file: "judge-vs-explore.svg", against: "Sonnet with its own Explore subagents" },
+];
 const CATEGORIES = ["aggregation", "comprehension", "pinpoint", "known-file", "by-meaning"];
 const CATEGORY_LABEL = {
   aggregation: "aggregation - which files have the most X",
@@ -55,17 +64,24 @@ function perPass(arm) {
 }
 const passes = ARMS.map((arm) => ({ ...arm, ...perPass(arm) }));
 
-// --- the judge: latest verdict per pair under the rule, wins per category ---
-const verdicts = new Map();
-for (const v of readJsonl(join(RESULTS, "judge.jsonl"))) {
-  if (v.baseline !== JUDGE.baseline || v.candidate !== JUDGE.candidate || (v.rule ?? "checkout") !== JUDGE.rule || !v.winner) continue;
-  verdicts.set(`${v.cat} ${v.q} ${v.rep}`, v);
+// --- the judge: latest verdict per pair under the rule, wins per category.
+// A pair whose judging errored carries no winner and is left out, so `pairs`
+// is what was actually scored rather than what was submitted. ---
+const allVerdicts = readJsonl(join(RESULTS, "judge.jsonl"));
+function judgeVerdicts(baseline) {
+  const verdicts = new Map();
+  for (const v of allVerdicts) {
+    if (v.baseline !== baseline || v.candidate !== JUDGE_CANDIDATE) continue;
+    if ((v.rule ?? "checkout") !== JUDGE_RULE || !v.winner) continue;
+    verdicts.set(`${v.cat} ${v.q} ${v.rep}`, v);
+  }
+  const byCat = CATEGORIES.map((cat) => {
+    const vs = [...verdicts.values()].filter((v) => v.cat === cat);
+    const n = (w) => vs.filter((v) => v.winner === w).length;
+    return { cat, wins: n("candidate"), ties: n("tie"), losses: n("baseline"), pairs: vs.length };
+  });
+  return { byCat, pairs: verdicts.size };
 }
-const judgeByCat = CATEGORIES.map((cat) => {
-  const vs = [...verdicts.values()].filter((v) => v.cat === cat);
-  const n = (w) => vs.filter((v) => v.winner === w).length;
-  return { cat, wins: n("candidate"), ties: n("tie"), losses: n("baseline"), pairs: vs.length };
-});
 
 // --- SVG helpers ---
 const FONT = "font-family='-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif'";
@@ -120,7 +136,7 @@ function barChart({ title, subtitle, items, format, file, labelW = 250 }) {
 }
 
 /** One stacked bar per category: wins, ties, losses for the candidate. */
-function judgeChart({ title, subtitle, cats, file }) {
+function judgeChart({ title, subtitle, cats, file, baselineLabel }) {
   const w = 760;
   const rowH = 44;
   const head = header(title, subtitle);
@@ -145,7 +161,7 @@ function judgeChart({ title, subtitle, cats, file }) {
   });
   const ly = top + cats.length * rowH + 30;
   let lx = labelW;
-  for (const [part, label] of [["wins", "Infino Subagent arm wins"], ["ties", "tie"], ["losses", "file-tools arm wins"]]) {
+  for (const [part, label] of [["wins", "SuperGrep arm wins"], ["ties", "tie"], ["losses", baselineLabel]]) {
     s += `<rect x='${Math.round(lx)}' y='${ly - 11}' width='14' height='14' fill='${colors[part]}'/>\n`;
     s += text(lx + 20, ly, label, "font-size='12'", "#57606a");
     lx += 20 + label.length * 6.6 + 24;
@@ -154,8 +170,8 @@ function judgeChart({ title, subtitle, cats, file }) {
   return file;
 }
 
-const passOf = (b) => passes.find((p) => p.build === b);
-const passSubtitle = `Per pass over the same ${passOf("FILES").questions} questions, claude-sonnet-4-6, infino repo; median of 3 repeats per question, summed. 2026-09-05.`;
+const MEASURED = "2026-09-07";
+const passSubtitle = `Per pass over the same ${passes[0].questions} questions, claude-sonnet-4-6, infino repo; one pass per arm on one build. ${MEASURED}.`;
 const written = [
   barChart({
     title: "Cost per pass - every Sonnet call, subagents included",
@@ -178,13 +194,19 @@ const written = [
     format: (v) => `${Math.round(v)}`,
     file: "calls-per-pass.svg",
   }),
-  judgeChart({
-    title: "Blind judge, per category: Infino Subagent arm vs Sonnet with file tools",
-    subtitle: `claude-opus-5 judging ${[...verdicts.values()].length} answer pairs blind, in random order, with the repository to verify against. 2026-09-05.`,
-    cats: judgeByCat,
-    file: "judge-vs-file-tools.svg",
-  }),
 ];
+const judged = JUDGES.map((j) => ({ ...j, ...judgeVerdicts(j.baseline) }));
+for (const j of judged) {
+  written.push(
+    judgeChart({
+      title: `Blind judge, per category: SuperGrep arm vs ${j.against}`,
+      subtitle: `claude-opus-5 judging ${j.pairs} answer pairs blind, in random order, with the repository to verify against. ${MEASURED}.`,
+      cats: j.byCat,
+      file: j.file,
+      baselineLabel: j.baselineLabel,
+    }),
+  );
+}
 
 // --- the fan-out probe, from its summary file ---
 const fanoutFile = join(outDir, "fanout.json");
@@ -208,5 +230,8 @@ if (existsSync(fanoutFile)) {
 }
 
 console.log(`wrote ${written.join(", ")} to ${outDir}`);
-for (const p of passes) console.log(`${p.build.padEnd(6)} ${p.questions} questions  tokens ${Math.round(p.tokens / 1000)}k  cost $${p.cost.toFixed(2)}  calls ${Math.round(p.calls)}`);
-for (const c of judgeByCat) console.log(`${c.cat.padEnd(14)} wins ${c.wins} ties ${c.ties} losses ${c.losses} of ${c.pairs}`);
+for (const p of passes) console.log(`${p.build.padEnd(10)} ${p.questions} questions  tokens ${Math.round(p.tokens / 1000)}k  cost $${p.cost.toFixed(2)}  calls ${Math.round(p.calls)}`);
+for (const j of judged) {
+  console.log(`vs ${j.baseline} (${j.pairs} pairs judged):`);
+  for (const c of j.byCat) console.log(`  ${c.cat.padEnd(14)} wins ${c.wins} ties ${c.ties} losses ${c.losses} of ${c.pairs}`);
+}
