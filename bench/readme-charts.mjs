@@ -170,6 +170,85 @@ function judgeChart({ title, subtitle, cats, file, baselineLabel }) {
   return file;
 }
 
+/** Which tool the main agent reached for FIRST on each question, per category.
+ * Only the arm that had all five tools beside its own file tools, since the
+ * question is what it picks when it has the choice. Subagent calls are
+ * excluded: that lane has no Agent tool, so every recorded call is the main
+ * agent's, and `inSubagent` is checked anyway so the chart cannot silently
+ * start counting a subagent's tools if the arm ever gains one. */
+const FIRST_CHOICE_ARM = { build: "SONFULL9", lane: "hosted-full" };
+/** A stable colour per tool: ours in the arm's blue, the built-ins in grey,
+ * so the split a reader cares about is the one the eye sees first. */
+const TOOL_COLOR = {
+  "cx:find": "#2f81f7",
+  "cx:search": "#4c9aff",
+  "cx:sql": "#1f6feb",
+  "cx:explore": "#6cb6ff",
+  "cx:ask": "#8fc8ff",
+};
+const OTHER_TOOL_COLOR = "#8b949e";
+
+function firstChoice() {
+  return CATEGORIES.map((cat) => {
+    const counts = new Map();
+    let n = 0;
+    for (const r of rows) {
+      if (r.build !== FIRST_CHOICE_ARM.build || r.lane !== FIRST_CHOICE_ARM.lane || r.error) continue;
+      if (r.cat !== cat) continue;
+      const first = (r.toolDetails ?? []).find((d) => !d.inSubagent);
+      if (!first?.name) continue;
+      counts.set(first.name, (counts.get(first.name) ?? 0) + 1);
+      n++;
+    }
+    const parts = [...counts.entries()]
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .map(([name, count]) => ({ name, count }));
+    return { cat, parts, n };
+  });
+}
+
+/** One stacked bar per category, segmented by the tool that opened the
+ * question. Shares the judge chart's geometry so the two read as a set. */
+function firstChoiceChart({ title, subtitle, cats, file }) {
+  const w = 760;
+  const rowH = 44;
+  const head = header(title, subtitle);
+  const top = head.top;
+  const labelW = 290;
+  const h = top + cats.length * rowH + 70;
+  const barMax = w - labelW - 60;
+  let s = svgOpen(w, h) + head.markup;
+  cats.forEach((c, i) => {
+    const y = top + i * rowH;
+    s += text(20, y + 26, CATEGORY_LABEL[c.cat] ?? c.cat, "font-size='13'");
+    let x = labelW;
+    for (const p of c.parts) {
+      const len = c.n ? Math.round((p.count / c.n) * barMax) : 0;
+      if (len <= 0) continue;
+      s += `<rect x='${x}' y='${y + 10}' width='${len}' height='24' fill='${TOOL_COLOR[p.name] ?? OTHER_TOOL_COLOR}'/>\n`;
+      // The label only fits inside a segment wide enough to hold it.
+      const short = p.name.replace(/^cx:/, "");
+      if (len > short.length * 7 + 16) s += text(x + len / 2 - (short.length * 3.4 + 4), y + 27, `${short} ${p.count}`, "font-size='11' font-weight='600'", "#ffffff");
+      x += len;
+    }
+    s += text(x + 10, y + 27, `of ${c.n}`, "font-size='12'", "#57606a");
+  });
+  // Legend: every tool that opened at least one question, ours first.
+  const seen = [...new Set(cats.flatMap((c) => c.parts.map((p) => p.name)))].sort(
+    (a, b) => Number(b.startsWith("cx:")) - Number(a.startsWith("cx:")) || a.localeCompare(b),
+  );
+  const ly = top + cats.length * rowH + 30;
+  let lx = labelW;
+  for (const name of seen) {
+    const label = name.startsWith("cx:") ? name.replace(/^cx:/, "") : `${name} (built-in)`;
+    s += `<rect x='${Math.round(lx)}' y='${ly - 11}' width='14' height='14' fill='${TOOL_COLOR[name] ?? OTHER_TOOL_COLOR}'/>\n`;
+    s += text(lx + 20, ly, label, "font-size='12'", "#57606a");
+    lx += 20 + label.length * 6.6 + 20;
+  }
+  writeFileSync(join(outDir, file), s + "</svg>\n");
+  return file;
+}
+
 const MEASURED = "2026-09-07";
 const passSubtitle = `Per pass over the same ${passes[0].questions} questions, claude-sonnet-4-6, infino repo; one pass per arm on one build. ${MEASURED}.`;
 const written = [
