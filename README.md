@@ -8,7 +8,7 @@
 
 # SuperGrep
 
-**Subagents for fast retrieval. Save 75% on your token bill.**
+**Subagents for fast retrieval. Save 75% on your Sonnet bill.**
 
 Your agent keeps the reasoning. SuperGrep farms exploration off to fast subagents running small language models (SLMs): the retrieval, the fan-out, the fifty "go look at this" jobs a hard task spawns. No config needed. Your agent decides when to use them:
 
