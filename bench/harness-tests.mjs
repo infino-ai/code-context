@@ -39,6 +39,7 @@ import {
   keepInput,
   recordedQueries,
 } from "./lanes.mjs";
+import { compareFind, countInFile } from "./find-parity.mjs";
 import { warmHosted, splitDbUrl, DEFAULT_RETRY_AFTER_SECS } from "./warm-hosted.mjs";
 import { indexArgs, runIndexBuild, hostOf } from "./load-hosted.mjs";
 import { snowflakeSettings, CHUNK_COLUMNS } from "./snowflake-rest.mjs";
@@ -507,6 +508,39 @@ test("snowflakeSettings: the bench defaults, SF_* overrides, the token from its 
     assert.throws(() => snowflakeSettings(env), (err) => /SF_TOKEN_FILE/.test(err.message) && /SF_TOKEN\b/.test(err.message));
   }
   assert.deepEqual(CHUNK_COLUMNS, ["path", "start_line", "end_line", "lang", "symbol", "content"]);
+});
+
+test("compareFind reports the totals, the per-file counts and the lines only one side returned", () => {
+  const side = (total, files, byFile, lines) => ({ total, files, byFile: new Map(byFile), lines: new Set(lines) });
+  const agree = side(3, 2, [["a.rs", 2], ["b.rs", 1]], ["a.rs:1", "a.rs:9", "b.rs:4"]);
+  const same = compareFind(agree, side(3, 2, [["a.rs", 2], ["b.rs", 1]], ["a.rs:9", "a.rs:1", "b.rs:4"]));
+  assert.equal(same.same, true);
+  assert.equal(same.total, null);
+  assert.deepEqual(same.byFile, []);
+  // the shape of the bug this script exists for: identical lines, inflated counts
+  const inflated = compareFind(agree, side(4, 2, [["a.rs", 3], ["b.rs", 1]], ["a.rs:1", "a.rs:9", "b.rs:4"]));
+  assert.equal(inflated.same, false);
+  assert.deepEqual(inflated.total, { client: 3, platform: 4 });
+  assert.deepEqual(inflated.byFile, [{ path: "a.rs", client: 2, platform: 3 }]);
+  assert.deepEqual(inflated.onlyClient, []);
+  assert.deepEqual(inflated.onlyPlatform, []);
+  // a line, and a whole file, present on one side only
+  const missing = compareFind(agree, side(2, 1, [["a.rs", 2]], ["a.rs:1", "a.rs:9"]));
+  assert.deepEqual(missing.files, { client: 2, platform: 1 });
+  assert.deepEqual(missing.onlyClient, ["b.rs:4"]);
+  assert.deepEqual(missing.byFile, [{ path: "b.rs", client: 1, platform: null }]);
+  const extra = compareFind(agree, side(4, 3, [["a.rs", 2], ["b.rs", 1], ["c.rs", 1]], ["a.rs:1", "a.rs:9", "b.rs:4", "c.rs:7"]));
+  assert.deepEqual(extra.onlyPlatform, ["c.rs:7"]);
+  assert.deepEqual(extra.byFile, [{ path: "c.rs", client: null, platform: 1 }]);
+});
+
+test("countInFile is the referee: the 1-based lines of a file holding the literal, case-sensitively", () => {
+  const text = "let compaction = 1;\n// Compaction runs\nno match here\n  compaction();\n";
+  assert.deepEqual(countInFile(text, "compaction"), [1, 4]);
+  assert.deepEqual(countInFile(text, "Compaction"), [2]);
+  assert.deepEqual(countInFile(text, "absent"), []);
+  // one line holding it twice is one line, as grep -c counts it
+  assert.deepEqual(countInFile("a compaction and compaction\n", "compaction"), [1]);
 });
 
 test("readOnlyError admits one SELECT or WITH and refuses everything else", () => {
