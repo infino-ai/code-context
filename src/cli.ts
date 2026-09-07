@@ -15,6 +15,7 @@
 
 import { Command } from "commander";
 import { indexCmd, type IndexCmdOptions } from "./commands/index-cmd.js";
+import { installCmd, type InstallCmdOptions } from "./commands/install-cmd.js";
 import { findCmd, searchCmd, sqlCmd, statusCmd, usageCmd } from "./commands/query-cmds.js";
 import {
   DEFAULT_SEARCH_K,
@@ -53,6 +54,10 @@ function applyHosted(flags: HostedFlags): void {
   configureHosted(hostedSettingsFromFlags(flags));
 }
 
+/** Published version of this package. `cx install` pins it into the `npx`
+ * entry it writes, so a client resolves the same build on every start. */
+const CLI_VERSION = "0.5.0";
+
 const program = new Command();
 
 program
@@ -64,7 +69,7 @@ program
       "With --db the same index is also kept on an infino-platform database, where the\n" +
       "ask and explore tools run.",
   )
-  .version("0.5.0")
+  .version(CLI_VERSION)
   .addHelpText(
     "after",
     `
@@ -77,6 +82,9 @@ Examples:
           FROM bm25_search('chunks','content','vector index', 300) \\
           GROUP BY path ORDER BY lines DESC LIMIT 10"
   cx mcp                              serve the three local MCP tools (find/search/sql) over stdio
+  cx install                          write the MCP entry into .mcp.json so a client picks it up
+  cx install --db https://host/<database> --api-key-file ~/.infino/key
+                                      the same, with ask and explore enabled for whoever opens the repo
   cx index --db https://host/<database> --api-key-file ~/.infino/key
                                       index the repo locally AND load it into the platform database
   cx mcp --db https://host/<database> --api-key-file ~/.infino/key
@@ -156,6 +164,20 @@ program
   .option("--json", "machine-readable output")
   .option("-C, --path <dir>", "repo root (default: current directory)")
   .action(usageCmd);
+
+hostedOptions(
+  program
+    .command("install")
+    .description("write this server's MCP entry into a client config (default: .mcp.json in the repo root)")
+    .option("--config <path>", "client config to write instead of <root>/.mcp.json (any file with an mcpServers object)")
+    .option("--name <name>", "name of the server entry (default code-context)")
+    .option("--local", "run the checked-out build instead of npx with the published version")
+    .option("--uninstall", "remove the server entry instead of writing it")
+    .option("--dry-run", "print the entry that would be written and change nothing")
+    .option("-C, --path <dir>", "repo root (default: current directory)"),
+).action((opts: InstallCmdOptions) => {
+  installCmd(opts, CLI_VERSION);
+});
 
 hostedOptions(
   program
