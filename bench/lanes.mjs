@@ -90,6 +90,42 @@ const exploreOnPlatform = {
     "say so. The caller will not see your tool results.",
   model: EXPLORE_MODEL,
 };
+/** The model inside the delegating lane's Explore: the mid-tier one, because
+ * that lane asks whether a strong writer over the index beats a strong model
+ * doing its own reading. The outer model is the lane's (`BENCH_MODEL`), so the
+ * two differ and the split is visible in the bill. */
+const DELEGATE_MODEL = "sonnet";
+
+/** What the delegating lane's Explore advertises: the shared description plus
+ * the names of the instruments it holds. That lane hides nothing from the outer
+ * model, so this line is the whole of the case for delegating - it has to say
+ * that going one level down reaches the same index, with a model that spends
+ * all of its turns on retrieval. */
+const DELEGATED_DESCRIPTION =
+  `${EXPLORE_DESCRIPTION} It runs find and explore over the index itself and returns cited places, ` +
+  "so a question that spans the repository costs the caller one call.";
+
+/** Explore over the whole code-context surface, Sonnet inside: the shape where
+ * the outer model delegates exploring rather than doing it, and every retrieval
+ * happens one level down. The subagent gets the platform tools as well as the
+ * local ones so it can escalate when one retrieval will not do, and its prompt
+ * requires a citation per claim - a written conclusion with no places in it is
+ * what let confident wrong details through to an outer model before. */
+const exploreDelegated = {
+  description: DELEGATED_DESCRIPTION,
+  tools: [...[...CX_RETRIEVAL_TOOLS, "explore", "ask"].map((tool) => `${CX_TOOL_PREFIX}${tool}`), "Read"],
+  prompt:
+    "You explore this repository through code-context's index, and the caller sees only what you " +
+    "write. find: every occurrence of an exact identifier or string, where you would grep. search: " +
+    "how something works or where it is handled, by meaning. sql: counts and rankings across the " +
+    "repo. explore: a mechanism that spans files, when one retrieval will not do. ask: one " +
+    "retrieval returned as rows. Answer from the rows you retrieved and give every claim a " +
+    "path:line citation from them; Read a file only for a hit marked truncated. If you could not " +
+    "ground a claim in a row, leave it out and say what you could not find - an unplaced claim is " +
+    "worse to the caller than a gap, because the caller cannot check it.",
+  model: DELEGATE_MODEL,
+};
+
 /** Who fills the platform table's vectors when the caller does not pick: the
  * product default - the platform embeds - since the platform lanes measure the
  * product as shipped. CX_BENCH_EMBED_PROVIDER=local ships the local model's
@@ -273,6 +309,13 @@ export function agentFlags(env = process.env) {
  *                      help or confuse? (The `find`/`explore` lanes hide
  *                      `search` and `sql`, which are the local instruments
  *                      for questions by meaning and for counts.)
+ *   delegated        - hosted-full plus the Agent tool, with Explore
+ *                      overridden to run the whole code-context surface with
+ *                      the mid-tier model inside. The outer model can retrieve
+ *                      for itself or hand a repository-spanning question to a
+ *                      model that only retrieves; the lane measures which it
+ *                      does when both are offered, and what the answers cost
+ *                      when the reading happens a level down
  *   snowflake        - the stock tools plus the Snowflake server in the
  *                      index's place: the same outer model with Snowflake as
  *                      the index - keyword search and SQL over the chunks
@@ -334,6 +377,24 @@ export const LANES = {
     env: mcpEnvBase,
     args: (env) => [...hostedFlags(env), ...agentFlags(env)],
     agents: { [EXPLORE]: exploreOnPlatform },
+    requires: HOSTED_REQUIRES,
+  },
+  delegated: {
+    kind: "hosted",
+    // The outer model keeps everything a real session gives it - shell, file
+    // search, and all five code-context tools - and gets the Agent tool with
+    // an Explore that runs on the index underneath. Nothing is hidden, because
+    // what the offer draws is the thing being measured: a model that picks
+    // `find` over `grep` with both in front of it should also pick an explorer
+    // whose description says it runs find, and if it does not, that is the
+    // result rather than a reason to confiscate the alternatives. A shape that
+    // only holds when the other tools are taken away would not survive
+    // shipping, where nothing can be taken away.
+    tools: [...STOCK_TOOLS, AGENT_TOOL],
+    mcp: true,
+    env: mcpEnvBase,
+    args: (env) => [...hostedFlags(env), ...agentFlags(env)],
+    agents: { [EXPLORE]: exploreDelegated },
     requires: HOSTED_REQUIRES,
   },
   "find-subagent": {

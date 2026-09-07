@@ -104,11 +104,12 @@ function withSnowflakeEnv(fn, extra = {}) {
 
 // --- lane table ---------------------------------------------------------------
 
-test("the lane table names exactly the thirteen lanes and an unknown lane throws", () => {
+test("the lane table names exactly the fourteen lanes and an unknown lane throws", () => {
   assert.deepEqual(Object.keys(LANES).sort(), [
     "agent-only",
     "combo",
     "cx",
+    "delegated",
     "files",
     "find-explore",
     "find-subagent",
@@ -208,6 +209,33 @@ test("hosted-full hides nothing: all five code-context tools stay in the model's
     assert.deepEqual(opts.tools, ["Glob", "Grep", "Read", "LS", "Bash"]);
     assert.equal(opts.mcpServers["code-context"].args.includes("--db"), true);
     assert.equal(laneDef("hosted-full").kind, "hosted");
+  });
+});
+
+test("delegated offers rather than blocks: the outer model keeps every tool and gains the subagent", () => {
+  withHostedEnv(() => {
+    const opts = laneOptions("delegated", "/r", "/r/.infino");
+    // the whole stock surface plus the Agent tool
+    assert.deepEqual(opts.tools, ["Glob", "Grep", "Read", "LS", "Bash", "Agent"]);
+    // nothing hidden: denying a tool is session-level, so it would blind the
+    // subagent that the lane exists to measure
+    assert.equal(opts.disallowedTools, undefined);
+    // the subagent holds the whole surface, and a different model runs it
+    const explore = opts.agents.Explore;
+    assert.deepEqual(explore.tools, [
+      "mcp__code-context__find",
+      "mcp__code-context__search",
+      "mcp__code-context__sql",
+      "mcp__code-context__explore",
+      "mcp__code-context__ask",
+      "Read",
+    ]);
+    assert.equal(explore.model, "sonnet");
+    assert.match(explore.prompt, /path:line citation/);
+    // the offer has to name the instruments, since nothing forces the choice
+    assert.match(explore.description, /runs find and explore/);
+    assert.equal(opts.mcpServers["code-context"].args.includes("--db"), true);
+    assert.equal(laneDef("delegated").kind, "hosted");
   });
 });
 
