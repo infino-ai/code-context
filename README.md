@@ -188,8 +188,7 @@ subagents.[^fifty]
 
 Nothing in the prompt names a tool. Given all five beside its own file tools,
 **76% of every call Sonnet makes is to SuperGrep, of its own choosing**, and
-its first move is ours on every category, including the ones it goes on to
-lose:
+its first move is ours in every category:
 
 | question | Sonnet's first tool call |
 |---|---|
