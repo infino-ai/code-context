@@ -233,17 +233,19 @@ function firstChoiceChart({ title, subtitle, cats, file }) {
     }
     s += text(x + 10, y + 27, `of ${c.n}`, "font-size='12'", "#57606a");
   });
-  // Legend: every tool that opened at least one question, ours first.
-  const seen = [...new Set(cats.flatMap((c) => c.parts.map((p) => p.name)))].sort(
-    (a, b) => Number(b.startsWith("cx:")) - Number(a.startsWith("cx:")) || a.localeCompare(b),
-  );
+  // Legend: our tools named individually, then one entry for the built-ins.
+  // They share a colour, so listing each by name only pushed the row off the
+  // canvas without telling the reader anything the bars do not already show.
+  const seen = [...new Set(cats.flatMap((c) => c.parts.map((p) => p.name)))];
+  const ours = seen.filter((n) => n.startsWith("cx:")).sort();
+  const entries = ours.map((n) => [n.replace(/^cx:/, ""), TOOL_COLOR[n]]);
+  if (seen.some((n) => !n.startsWith("cx:"))) entries.push(["built-in file tools", OTHER_TOOL_COLOR]);
   const ly = top + cats.length * rowH + 30;
-  let lx = labelW;
-  for (const name of seen) {
-    const label = name.startsWith("cx:") ? name.replace(/^cx:/, "") : `${name} (built-in)`;
-    s += `<rect x='${Math.round(lx)}' y='${ly - 11}' width='14' height='14' fill='${TOOL_COLOR[name] ?? OTHER_TOOL_COLOR}'/>\n`;
+  let lx = 20;
+  for (const [label, color] of entries) {
+    s += `<rect x='${Math.round(lx)}' y='${ly - 11}' width='14' height='14' fill='${color}'/>\n`;
     s += text(lx + 20, ly, label, "font-size='12'", "#57606a");
-    lx += 20 + label.length * 6.6 + 20;
+    lx += 20 + label.length * 6.6 + 18;
   }
   writeFileSync(join(outDir, file), s + "</svg>\n");
   return file;
@@ -276,6 +278,16 @@ const written = [
     file: "calls-per-pass.svg",
   }),
 ];
+const opens = firstChoice();
+written.push(
+  firstChoiceChart({
+    title: "What Sonnet reaches for first, by question type",
+    subtitle: `The arm with all five tools beside its own file tools, and nothing in the prompt naming a tool. One bar per category, segmented by the tool that opened the question. ${MEASURED}.`,
+    cats: opens,
+    file: "first-choice.svg",
+  }),
+);
+
 const judged = JUDGES.map((j) => ({ ...j, ...judgeVerdicts(j.baseline) }));
 for (const j of judged) {
   written.push(
@@ -312,6 +324,8 @@ if (existsSync(fanoutFile)) {
 
 console.log(`wrote ${written.join(", ")} to ${outDir}`);
 for (const p of passes) console.log(`${p.build.padEnd(10)} ${p.questions} questions  tokens ${Math.round(p.tokens / 1000)}k  cost $${p.cost.toFixed(2)}  calls ${Math.round(p.calls)}`);
+console.log("first tool call, by category:");
+for (const c of opens) console.log(`  ${c.cat.padEnd(14)} ${c.parts.map((p) => `${p.name} ${p.count}`).join(", ")} of ${c.n}`);
 for (const j of judged) {
   console.log(`vs ${j.baseline} (${j.pairs} pairs judged):`);
   for (const c of j.byCat) console.log(`  ${c.cat.padEnd(14)} wins ${c.wins} ties ${c.ties} losses ${c.losses} of ${c.pairs}`);

@@ -38,13 +38,7 @@ Nothing in the prompt names a tool. Given all five beside its own file tools,
 **76% of every call Sonnet makes is to SuperGrep, of its own choosing**, and
 its first choice is always SuperGrep in every category of question:
 
-| question | Sonnet's first tool call |
-|---|---|
-| which files have the most X | `sql`, 10 of 10 |
-| how does X work | `explore`, 6 of 6 |
-| where is X handled | `explore` 3, `search` 3 of 6 |
-| where is this symbol | `find` 7, `Grep` 1 of 8 |
-| what does this file do | `find` 4, `Glob` 1, `Read` 1 of 6 |
+![What Sonnet reaches for first, by question type](docs/subagent/first-choice.svg)
 
 It uses the whole surface rather than settling on one tool. Every call it made
 across the thirty-six questions, in order of how often:

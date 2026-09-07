@@ -1,0 +1,44 @@
+<svg xmlns='http://www.w3.org/2000/svg' width='760' height='369' viewBox='0 0 760 369' font-family='-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif'>
+<rect width='760' height='369' fill='#ffffff'/>
+<text x='20' y='30' fill='#24292f' font-size='18' font-weight='600'>What Sonnet reaches for first, by question type</text>
+<text x='20' y='50' fill='#57606a' font-size='12'>The arm with all five tools beside its own file tools, and nothing in the prompt naming a tool. One bar</text>
+<text x='20' y='65' fill='#57606a' font-size='12'>per category, segmented by the tool that opened the question. 2026-09-07.</text>
+<text x='20' y='105' fill='#24292f' font-size='13'>aggregation - which files have the most X</text>
+<rect x='290' y='89' width='410' height='24' fill='#1f6feb'/>
+<text x='481' y='106' fill='#ffffff' font-size='11' font-weight='600'>sql 10</text>
+<text x='710' y='106' fill='#57606a' font-size='12'>of 10</text>
+<text x='20' y='149' fill='#24292f' font-size='13'>comprehension - how does X work</text>
+<rect x='290' y='133' width='410' height='24' fill='#6cb6ff'/>
+<text x='467' y='150' fill='#ffffff' font-size='11' font-weight='600'>explore 6</text>
+<text x='710' y='150' fill='#57606a' font-size='12'>of 6</text>
+<text x='20' y='193' fill='#24292f' font-size='13'>pinpoint - where is this symbol</text>
+<rect x='290' y='177' width='359' height='24' fill='#2f81f7'/>
+<text x='452' y='194' fill='#ffffff' font-size='11' font-weight='600'>find 7</text>
+<rect x='649' y='177' width='51' height='24' fill='#8b949e'/>
+<text x='657' y='194' fill='#ffffff' font-size='11' font-weight='600'>Grep 1</text>
+<text x='710' y='194' fill='#57606a' font-size='12'>of 8</text>
+<text x='20' y='237' fill='#24292f' font-size='13'>known file - what does this file do</text>
+<rect x='290' y='221' width='273' height='24' fill='#2f81f7'/>
+<text x='409' y='238' fill='#ffffff' font-size='11' font-weight='600'>find 4</text>
+<rect x='563' y='221' width='68' height='24' fill='#8b949e'/>
+<text x='579' y='238' fill='#ffffff' font-size='11' font-weight='600'>Glob 1</text>
+<rect x='631' y='221' width='68' height='24' fill='#8b949e'/>
+<text x='647' y='238' fill='#ffffff' font-size='11' font-weight='600'>Read 1</text>
+<text x='709' y='238' fill='#57606a' font-size='12'>of 6</text>
+<text x='20' y='281' fill='#24292f' font-size='13'>by meaning - where is X handled</text>
+<rect x='290' y='265' width='205' height='24' fill='#6cb6ff'/>
+<text x='365' y='282' fill='#ffffff' font-size='11' font-weight='600'>explore 3</text>
+<rect x='495' y='265' width='205' height='24' fill='#4c9aff'/>
+<text x='573' y='282' fill='#ffffff' font-size='11' font-weight='600'>search 3</text>
+<text x='710' y='282' fill='#57606a' font-size='12'>of 6</text>
+<rect x='20' y='318' width='14' height='14' fill='#6cb6ff'/>
+<text x='40' y='329' fill='#57606a' font-size='12'>explore</text>
+<rect x='104' y='318' width='14' height='14' fill='#2f81f7'/>
+<text x='124' y='329' fill='#57606a' font-size='12'>find</text>
+<rect x='169' y='318' width='14' height='14' fill='#4c9aff'/>
+<text x='189' y='329' fill='#57606a' font-size='12'>search</text>
+<rect x='246' y='318' width='14' height='14' fill='#1f6feb'/>
+<text x='266' y='329' fill='#57606a' font-size='12'>sql</text>
+<rect x='304' y='318' width='14' height='14' fill='#8b949e'/>
+<text x='324' y='329' fill='#57606a' font-size='12'>built-in file tools</text>
+</svg>
