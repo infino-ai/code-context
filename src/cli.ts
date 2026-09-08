@@ -172,7 +172,8 @@ hostedOptions(
     .description("write this server's MCP entry into a client config (default: .mcp.json in the repo root)")
     .option("--config <path>", "client config to write instead of <root>/.mcp.json (any file with an mcpServers object)")
     .option("--name <name>", "name of the server entry (default code-context)")
-    .option("--local", "run the checked-out build instead of npx with the published version")
+    .option("--local", "force an entry that runs this build, when the default would write npx")
+    .option("--npx", "force an npx entry pinned to this version, when the default would run this build")
     .option("--uninstall", "remove the server entry instead of writing it")
     .option("--dry-run", "print the entry that would be written and change nothing")
     .option("-C, --path <dir>", "repo root (default: current directory)"),

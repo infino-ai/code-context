@@ -29,8 +29,20 @@ afterEach(() => {
 });
 
 describe("cx install: writing the entry", () => {
-  it("creates .mcp.json with the pinned npx entry", () => {
+  it("creates .mcp.json with an entry that starts the server", () => {
     installCmd({ path: root }, VERSION);
+    const entry = read(configIn(root)).mcpServers["code-context"];
+    // The command depends on where this CLI runs from, and the suite runs
+    // from the checkout, so the shape asserted here is the source-build one.
+    // `serverEntry` owns which shape is chosen and is tested for both.
+    expect(entry.command).toBe(process.execPath);
+    expect(entry.args[0]).toMatch(/cli\.js$/);
+    expect(entry.args[1]).toBe("mcp");
+    expect(entry.alwaysLoad).toBe(true);
+  });
+
+  it("writes the pinned npx entry when asked for one", () => {
+    installCmd({ path: root, npx: true }, VERSION);
     const entry = read(configIn(root)).mcpServers["code-context"];
     expect(entry.command).toBe("npx");
     expect(entry.args).toEqual(["-y", `@infino-ai/code-context@${VERSION}`, "mcp"]);
@@ -59,7 +71,7 @@ describe("cx install: writing the entry", () => {
     const cfg = read(configIn(root));
     expect(cfg.$schema).toBe("https://example.invalid/schema.json");
     expect(cfg.mcpServers.other).toEqual({ command: "keep-me", args: ["untouched"] });
-    expect(cfg.mcpServers["code-context"].command).toBe("npx");
+    expect(cfg.mcpServers["code-context"].command).not.toBe("stale");
   });
 
   it("writes into an existing config that has no mcpServers block", () => {
@@ -84,21 +96,29 @@ describe("cx install: writing the entry", () => {
     expect(existsSync(configIn(root))).toBe(false);
   });
 
-  it("--local runs this build through an absolute node, wherever it is installed to", () => {
-    const entry = serverEntry({ local: true }, VERSION);
+  it("defaults to running this build, because these tests run from a source tree", () => {
+    // The default is decided by where the CLI is running from, not by a flag:
+    // the test suite runs from the checkout, so the entry must name this
+    // build. Writing an npx entry here would pin a version that is not on the
+    // registry until release, and the client could not start it.
+    const entry = serverEntry({}, VERSION);
     expect(entry.command).toBe(process.execPath);
-    // The path is this build's own cli.js, not one under the repository being
-    // installed into: a checkout is built once and installed into many repos,
-    // and a path relative to the target names a file that is not there.
+    // This build's own cli.js, not one under the repository being installed
+    // into: a checkout is built once and installed into many repos, so a path
+    // relative to the target names a file that is not there.
     expect(entry.args[0]).toMatch(/cli\.js$/);
     expect(entry.args[0]).not.toContain(root);
     expect(entry.args[1]).toBe("mcp");
   });
 
-  it("defaults to an npx entry pinned to this package's version", () => {
-    const entry = serverEntry({}, VERSION);
-    expect(entry.command).toBe("npx");
-    expect(entry.args).toEqual(["-y", `@infino-ai/code-context@${VERSION}`, "mcp"]);
+  it("--local and --npx force either shape", () => {
+    expect(serverEntry({ local: true }, VERSION).command).toBe(process.execPath);
+    const pinned = serverEntry({ npx: true }, VERSION);
+    expect(pinned.command).toBe("npx");
+    expect(pinned.args).toEqual(["-y", `@infino-ai/code-context@${VERSION}`, "mcp"]);
+    // --npx wins when both are passed, so the forced published entry is never
+    // silently downgraded to a local path.
+    expect(serverEntry({ local: true, npx: true }, VERSION).command).toBe("npx");
   });
 
   it("--dry-run writes nothing", () => {

@@ -36,7 +36,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { bold, dim, green, yellow } from "../core/output.js";
@@ -71,8 +71,12 @@ export interface InstallCmdOptions {
   name?: string;
   /** Repo root whose `.mcp.json` is written (default: current directory). */
   path?: string;
-  /** Run the checked-out build (`node <root>/dist/cli.js`) instead of `npx`. */
+  /** Force an entry that runs this build directly, when the default would
+   * have written `npx`. */
   local?: boolean;
+  /** Force an `npx` entry pinned to this version, when the default would have
+   * run this build directly. */
+  npx?: boolean;
   /** Platform database URL, passed through to the server as `--db`. */
   db?: string;
   /** Path to the API key file, passed through as `--api-key-file`. */
@@ -272,21 +276,38 @@ function ownCliPath(): string {
   return resolve(dirname(fileURLToPath(import.meta.url)), "..", "cli.js");
 }
 
-/** The server entry to write. `npx` with a pinned version by default, so the
- * client resolves the same build every start; `--local` runs this checkout's
- * own `dist/cli.js` through the absolute node running this install, because a
- * client's process often has no node on PATH.
+/** Is the copy of the CLI running this install an installed package rather
+ * than a source build? An installed one lives under a `node_modules`
+ * directory - a project dependency, a global install, or npx's own cache all
+ * do - while a clone that was built does not. */
+function runningFromPackage(): boolean {
+  return ownCliPath().split(sep).includes("node_modules");
+}
+
+/** The server entry to write.
  *
- * `--local` is the right choice from a source build, and not only a
- * preference: the pinned `npx` spec names this package's version, which is
- * not on the registry until it is released, so an unreleased build that wrote
- * an `npx` entry would hand the client a version it cannot fetch. */
+ * Which command it names is decided by where this CLI is running from, not by
+ * a flag, because getting it wrong writes an entry that cannot start and the
+ * default has to be the one that works:
+ *
+ * - an installed package (a dependency, a global install, npx's cache) writes
+ *   an `npx` entry pinned to this version, so the client resolves the same
+ *   published build on every start;
+ * - a source build writes that build's own `dist/cli.js`, run through the
+ *   absolute node running this install, because a client's process often has
+ *   no node on PATH. Pinning `npx` here would name this package's version,
+ *   which is not on the registry until it is released.
+ *
+ * `--local` and `--npx` force either, for the cases the check cannot know
+ * about: a source build of a version that *is* published and meant to be
+ * fetched, or an installed copy being used to write an entry for a checkout. */
 export function serverEntry(opts: InstallCmdOptions, version: string): ServerEntry {
   const tail = ["mcp", ...platformArgs(opts)];
-  if (opts.local) {
-    return { command: process.execPath, args: [ownCliPath(), ...tail], alwaysLoad: true };
+  const npx = opts.npx ?? (opts.local ? false : runningFromPackage());
+  if (npx) {
+    return { command: "npx", args: ["-y", `${PACKAGE_NAME}@${version}`, ...tail], alwaysLoad: true };
   }
-  return { command: "npx", args: ["-y", `${PACKAGE_NAME}@${version}`, ...tail], alwaysLoad: true };
+  return { command: process.execPath, args: [ownCliPath(), ...tail], alwaysLoad: true };
 }
 
 /** Refuse a key that was handed over as a value. Catching it here keeps the
