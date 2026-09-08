@@ -10,7 +10,7 @@
 
 **Retrieval subagents for Claude Sonnet. Up to 10x faster and 50% lower Anthropic bill.**
 
-Most of what Sonnet time on in agent sessions goes towards finding code rather than reasoning about it. SuperGrep farms that half off to fast subagents running small language models (SLMs): the retrieval, the fan-out, the fifty "go look at this" jobs a hard task spawns. No config needed. Sonnet keeps the reasoning and decides when to use them.
+Most of what Sonnet time on in agent sessions goes towards reading files rather than reasoning about them. SuperGrep farms that half off to fast subagents running small language models (SLMs): the retrieval, the fan-out, the fifty "go look at this" jobs a hard task spawns. No config needed. Sonnet keeps the reasoning and decides when to use them.
 
 ![SuperGrep: find, search and sql locally, ask and explore in the cloud, one index in both places](docs/subagent/architecture.svg)
 
@@ -25,23 +25,17 @@ index kept in both places.**
 | cloud | **`explore`** | A question that spans the repository. Small language models run the investigation in parallel against the same index, with deep context from it, and one grounded answer comes back with the facts it rests on, cited `path:line`. |
 | cloud | **`ask`** | One retrieval, returned as the rows it found rather than as prose, for when you want the facts and not a write-up. |
 
-The models are small on purpose. Deciding where to look next in a
-256,000-line repository is retrieval work, and a small model with deep
-context from the index can do it at a fraction of the cost and fifty at a
-time. What it is not is a reasoning model: it will not out-argue Sonnet
-about the code, and the numbers below are honest about where that shows.
-It is where Sonnet's exploration, retrieval and fan-out go.
+The models are small on purpose. Deciding where to look next in a 256,000-line repository is retrieval work, and a small model with deep
+context from the index can do it at a fraction of the cost and fifty at a time. What it is not is a reasoning model: it is meant to execute search tasks, and it is where Sonnet's exploration, retrieval and fan-out go.
 
 ### Sonnet chooses it on its own
 
-Nothing in the prompt names a tool. Given all five beside its own file tools,
-**76% of every call Sonnet makes is to SuperGrep, of its own choosing**, and
+Nothing in the prompt names a tool. Given all five beside its own file tools, **76% of every call Sonnet makes is to SuperGrep, of its own choosing**, and
 its first choice is always SuperGrep in every category of question:
 
 ![What Sonnet reaches for first, by question type](docs/subagent/first-choice.svg)
 
-It uses the whole surface rather than settling on one tool. Every call it made
-across the thirty-six questions, in order of how often:
+It uses the whole surface rather than settling on one tool. Every call it made across the thirty-six questions, in order of how often:
 
 | tool | calls | | tool | calls |
 |---|---|---|---|---|
@@ -51,37 +45,27 @@ across the thirty-six questions, in order of how often:
 | **`search`** | 11 | | `Bash` | 1 |
 | **`explore`** | 9 | | | |
 
-All five are load-bearing, and the twenty calls that are not SuperGrep are mostly
-`Read`: it reads a file *after* the index has told it which one, rather than
-instead of asking. That is the shape you want - the index does the finding,
-and the model still opens what it needs to quote.
+All five are load-bearing, and the twenty calls that are not SuperGrep are mostly `Read`: it reads a file *after* the index has told it which one, rather than
+instead of asking. That is the shape you want - the index does the finding, and the model still opens what it needs to quote.
 
 ## Code is the first corpus, not the only one
 
-SuperGrep looks across all the files a question needs, not just the source. Logs, test
-output, stack traces, CI output, configuration and docs go in beside the code,
-and the same five tools run over all of it: `find` for an exact stack frame,
-`search` for a failure you can only describe, `sql` to count and rank across a
+SuperGrep looks across all the files a question needs, not just the source. Logs, test output, stack traces, CI output, configuration and docs go in beside the code,
+and the same five tools run over all of it: `find` for an exact stack frame, `search` for a failure you can only describe, `sql` to count and rank across a
 run, `explore` for the question that spans several of them at once.
 
-That matters most where a frontier model is weakest. A log is the pathological
-case for a context window - large, repetitive, mostly irrelevant, and paid for
-again on every turn it stays in the transcript. An index collapses it to the
-spans that matter before Sonnet sees any of it. It is the same trade the cost
+That matters most where a frontier model is weakest. A log is the pathological case for a context window - large, repetitive, mostly irrelevant, and paid for
+again on every turn it stays in the transcript. An index collapses it to the spans that matter before Sonnet sees any of it. It is the same trade the cost
 table below measures on source code, on a corpus where the ratio is worse.
 
-So "why did this integration test start failing?" is one question over source,
-recent logs, test output, stack traces and config - and the retrieval, the
+So "why did this integration test start failing?" is one question over source, recent logs, test output, stack traces and config - and the retrieval, the
 fan-out and the fifty parallel investigations are the part that is farmed out.
 
 ## The numbers
 
-Real agent runs through the Claude Agent SDK: `claude-sonnet-4-6`, the same
-minimal prompt in every arm, on the [infino](https://github.com/infino-ai/infino)
-engine repository (about 256,000 lines of Rust the model has not memorized,
-which is the realistic case for private code). Thirty-six questions in five
-categories, one pass per arm, all three arms on one build, measured
-2026-09-07 - so the cost below and the judging further down score the same
+Real agent runs through the Claude Agent SDK: `claude-sonnet-4-6`, the same minimal prompt in every arm, on the [infino](https://github.com/infino-ai/infino)
+engine repository (about 256,000 lines of Rust the model has not memorized, which is the realistic case for private code). Thirty-six questions in five
+categories, one pass per arm, all three arms on one build, measured 2026-09-07 - so the cost below and the judging further down score the same
 answers. The harness, the questions, the judge and the chart script are in
 [`bench/`](bench/).
 
@@ -105,23 +89,17 @@ answers. The harness, the questions, the judge and the chart script are in
 
 ![Tool calls per pass](docs/subagent/calls-per-pass.svg)
 
-Against Sonnet's own Explore subagents, **your Sonnet bill falls 70%** - 3.4x
-lower - with 43% less main-agent context and under a quarter of the tool
-calls. With what the cloud tools cost you counted in, the **all-in bill falls
-58%**, so better than half. Against plain file tools it is 2.4x on the Sonnet
+Against Sonnet's own Explore subagents, **your Sonnet bill falls 70%** - 3.4x lower - with 43% less main-agent context and under a quarter of the tool
+calls. With what the cloud tools cost you counted in, the **all-in bill falls 58%**, so better than half. Against plain file tools it is 2.4x on the Sonnet
 bill and 1.7x all-in.
 
-**It earns its keep on fan-out.** The saving is not spread evenly across
-everything you ask: where it really pays is the hard task that spawns a fleet of "go
-look at this" jobs - that is where a fanning-out agent's bill actually goes,
-and it is the case SuperGrep is built for.
+**It earns its keep on fan-out.** The saving is not spread evenly across everything you ask: where it really pays is the hard task that spawns a fleet of "go
+look at this" jobs - that is where a fanning-out agent's bill actually goes, and it is the case SuperGrep is built for.
 
 ### Quality
 
-A blind judge - `claude-opus-5` with the repository checked out, both
-answers in random order - picks a winner per pair and counts the claims in
-each answer that the code does not support. It judges the answers from the
-runs in the cost table above, against each baseline in turn.
+A blind judge - `claude-opus-5` with the repository checked out, both answers in random order - picks a winner per pair and counts the claims in
+each answer that the code does not support. It judges the answers from the runs in the cost table above, against each baseline in turn.
 
 **Against Sonnet with file tools**, 36 pairs:
 
@@ -167,34 +145,27 @@ subagents.[^fifty]
 
 ## Install
 
-Node 20 or newer, macOS or Linux. The cloud tools are on this branch and
-not yet in the npm release, so build from the branch:
+Node 20 or newer, macOS or Linux. The cloud tools are on this branch and not yet in the npm release, so build from the branch:
 
 ```bash
 git clone -b feat/platform-backend https://github.com/infino-ai/code-context
 cd code-context && npm ci && npm run build
 ```
 
-You need two things from whoever runs your Infino platform instance: a
-**database URL** for the repository you want to index, `https://host/<database>`
-(one database per repository), and a **bearer key**, which goes in a file
-only you can read. Then register the server with Claude Code, with your
+You need two things from whoever runs your Infino platform instance: a **database URL** for the repository you want to index, `https://host/<database>`
+(one database per repository), and a **bearer key**, which goes in a file only you can read. Then register the server with Claude Code, with your
 paths:
 
 ```bash
 claude mcp add-json code-context -s user '{"command":"node","args":["/path/to/code-context/dist/cli.js","mcp","--db","https://host/<database>","--api-key-file","/path/to/key"],"alwaysLoad":true}'
 ```
 
-Open Claude Code in the repository and ask a question. The first local call
-builds the index inline and answers on the same call; the first `explore`
-loads the platform copy. `alwaysLoad` keeps the tools in Sonnet's view in
-sessions with many MCP servers.
+Open Claude Code in the repository and ask a question. The first local call builds the index inline and answers on the same call; the first `explore`
+loads the platform copy. `alwaysLoad` keeps the tools in Sonnet's view in sessions with many MCP servers.
 
-Without a database URL the same server runs the three local tools alone,
-which is what the npm release ships today and needs no account and no key.
+Without a database URL the same server runs the three local tools alone, which is what the npm release ships today and needs no account and no key.
 
-Everything else - the five tools in detail, the platform flags, the
-environment variables, the CLI, other MCP clients - is in
+Everything else - the five tools in detail, the platform flags, the environment variables, the CLI, other MCP clients - is in
 [docs/reference.md](docs/reference.md).
 
 > The package, the CLI (`cx`) and the MCP server are still named
