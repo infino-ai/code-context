@@ -37,6 +37,8 @@ export interface FindCmdOptions {
   ignoreCase?: boolean;
   /** Per-file counts instead of the matching lines, like `grep -c`. */
   count?: boolean;
+  /** Only lines inside a definition of the text, not every occurrence. */
+  declared?: boolean;
   limit?: string;
   json?: boolean;
   path?: string;
@@ -51,6 +53,7 @@ export async function findCmd(text: string, opts: FindCmdOptions): Promise<void>
     // empty listing; the raw string is converted here and validated there.
     const result = await find(handle, text, {
       ignoreCase: opts.ignoreCase,
+      declared: opts.declared,
       limit: opts.limit === undefined ? undefined : Number(opts.limit),
     });
     if (receiptEnabled()) {
@@ -71,7 +74,10 @@ export async function findCmd(text: string, opts: FindCmdOptions): Promise<void>
         console.error(yellow(`showing ${result.matches.length} of ${result.total} matches - raise --limit to see more`));
       }
     }
-    if (result.total === 0) console.error(yellow("no matches"));
+    if (result.declaredFrom !== undefined && result.total < result.declaredFrom) {
+      console.error(dim(`${result.total} declaring of ${result.declaredFrom} matching lines - drop --declared for all of them`));
+    }
+    if (result.total === 0) console.error(yellow(opts.declared ? "no declarations - drop --declared to see where it is used" : "no matches"));
   } catch (err) {
     die(err);
   }
