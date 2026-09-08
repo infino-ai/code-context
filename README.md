@@ -66,7 +66,8 @@ For files that don't fit on your laptop - write them out to Parquet files in obj
 ## The numbers
 
 Real agent runs through the Claude Agent SDK: `claude-sonnet-4-6`, the same minimal prompt in every arm, on the [infino](https://github.com/infino-ai/infino)
-engine repository (about 256,000 lines of Rust the model has not memorized, which is the realistic case for private code). Thirty-six questions in five
+engine repository (about 256,000 lines of Rust the model has not memorized - which is what makes it a retrieval test at all: on a repository already in the
+model's weights there is nothing for retrieval to do). Thirty-six questions in five
 categories, one pass per arm, all three arms on one build, measured 2026-09-07 - so the cost below and the judging further down score the same
 answers. The harness, the questions, the judge and the chart script are in
 [`bench/`](bench/).
