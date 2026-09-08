@@ -66,6 +66,15 @@ const HTTP_TOO_MANY_REQUESTS = 429;
 /** A write lost a race (retryable when it carries `Retry-After`) or a name
  * already exists (terminal, no `Retry-After`). */
 const HTTP_CONFLICT = 409;
+/** The key was not accepted: absent, malformed, unknown, or revoked. The
+ * platform does not distinguish between those, deliberately. Terminal - a
+ * retry with the same key gets the same answer. */
+const HTTP_UNAUTHORIZED = 401;
+/** The account cannot spend: its balance is gone, or it never had one because
+ * billing details were never completed. Terminal, and the one failure whose
+ * fix is neither a retry nor a different key - it is a person adding their
+ * details and a card - so callers with a user to tell say so specifically. */
+const HTTP_PAYMENT_REQUIRED = 402;
 
 /** The API version prefix every route lives under. */
 const API_PREFIX = "/v1";
@@ -179,6 +188,21 @@ export class HostedError extends Error {
    * user to tell should say so. */
   get atCapacity(): boolean {
     return this.status === HTTP_TOO_MANY_REQUESTS;
+  }
+
+  /** Whether the account is out of credit, or never completed the billing
+   * details that give it any. No retry and no other key fixes this: someone
+   * has to add a payment method to this account, so a caller with a user to
+   * tell says that instead of showing them a status code. */
+  get paymentRequired(): boolean {
+    return this.status === HTTP_PAYMENT_REQUIRED;
+  }
+
+  /** Whether the key itself was refused - absent, malformed, unknown or
+   * revoked. Distinct from `paymentRequired`: this one is fixed by signing in
+   * again, that one by paying. */
+  get unauthenticated(): boolean {
+    return this.status === HTTP_UNAUTHORIZED;
   }
 
   readonly status: number;

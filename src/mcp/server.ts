@@ -56,8 +56,54 @@ import {
   subagentMaxTurns,
   subagentMaxWallSecs,
 } from "../core/config.js";
+import { keyFilePath, readStoredAccount } from "../core/keystore.js";
 import { runExploreAgent, runRetrievalAgent } from "../core/retrieval-agent.js";
 import { readManifest, type Manifest } from "../core/manifest.js";
+
+/** The one refusal whose fix is a person rather than a retry: the account has
+ * nothing left to spend. It names the account to add the card to - this same
+ * one, not a new sign-up - where to do it, and what keeps working meanwhile,
+ * because the three local tools are unaffected and a model told only "402"
+ * concludes the whole server is down and stops using any of them. */
+export function outOfCreditSteps(): string {
+  const where = readStoredAccount()?.consoleUrl ?? "the Infino console";
+  return (
+    `this Infino account has no credit left. find, search and sql keep working - they run on the ` +
+    `local index and cost nothing - but ask and explore need a balance. To restore them, the ` +
+    `account's owner adds their billing details and a card to this same account at ${where} ` +
+    `(the key on this machine keeps working and nothing needs reinstalling), then retries`
+  );
+}
+
+/** A key the platform would not accept. Names the file, because a machine can
+ * hold a key for a different platform than the one this server points at. */
+export function keyRefusedSteps(): string {
+  return (
+    `the Infino key this server is using was refused - expired, revoked, or issued by a different ` +
+    `platform than the one configured. Run \`cx login\` to store a new one (it goes in ` +
+    `${keyFilePath()}, mode 600). find, search and sql are unaffected`
+  );
+}
+
+/** What to tell the model - and through it the person reading - when the
+ * platform refused a call for a reason no rephrasing will fix. Three of those
+ * matter and they have three unrelated fixes, so they get three sentences
+ * rather than one status code:
+ *
+ * - capacity (429): a wait. The client already backed off inside the call's
+ *   own budget, so a later call is all that is left.
+ * - an empty balance (402): a person adding a payment method - the one fix
+ *   not available to the agent at all, so it spells out the steps.
+ * - a refused key (401): a sign-in, naming the command that does it.
+ *
+ * Anything else keeps the server's own words, already in the message. */
+export function refusalHint(err: unknown): string {
+  if (!(err instanceof HostedError)) return "";
+  if (err.atCapacity) return " - the platform is at capacity right now; ask again in a moment";
+  if (err.paymentRequired) return ` - ${outOfCreditSteps()}`;
+  if (err.unauthenticated) return ` - ${keyRefusedSteps()}`;
+  return "";
+}
 import { localDb, newHostedMemo, platformLabel, platformTableReady, type IndexHandle } from "../core/context.js";
 import { HostedError } from "../core/hosted.js";
 import { find, search, runSql, jsonify, partialIndex } from "../core/searcher.js";
@@ -291,11 +337,6 @@ export async function serveMcp(rootPath?: string): Promise<void> {
     content: [{ type: "text" as const, text: message }],
     isError: true,
   });
-  /** What to tell the model when the platform refused a call for capacity
-   * (429) for the whole of its budget: the client already backed off and
-   * retried inside that budget; the answer may come on a later call. */
-  const busyHint = (err: unknown): string =>
-    err instanceof HostedError && err.atCapacity ? " - the platform is at capacity right now; ask again in a moment" : "";
   const noIndex = (ctx: RepoCtx) =>
     fail(`no index for ${ctx.root} yet - run \`cx index\` there once (keyword search is live in seconds).`);
 
@@ -324,7 +365,18 @@ export async function serveMcp(rootPath?: string): Promise<void> {
   const platformNotReady = async (tool: string, ctx: RepoCtx): Promise<ReturnType<typeof fail> | null> => {
     const missing = noPlatform(tool, ctx);
     if (missing) return missing;
-    if (await platformTableReady(ctx.hosted!, (ctx.hostedMemo ??= newHostedMemo()))) return null;
+    // This probe is a network call, so it fails the same ways the tool itself
+    // does - a refused key and an empty balance among them. It runs before the
+    // tool's own try/catch, so without this one an authentication or billing
+    // refusal escaped as a raw thrown HostedError and the model saw a stack
+    // trace instead of what to do about it.
+    let ready: boolean;
+    try {
+      ready = await platformTableReady(ctx.hosted!, (ctx.hostedMemo ??= newHostedMemo()));
+    } catch (err) {
+      return fail(`${tool} failed: ${(err as Error).message}${refusalHint(err)}`);
+    }
+    if (ready) return null;
     const label = platformLabel(ctx.hosted!);
     return fail(
       ctx.mutation || ctx.completion
@@ -645,7 +697,7 @@ export async function serveMcp(rootPath?: string): Promise<void> {
             ...(usage ? { usage } : {}),
           });
         } catch (err) {
-          return fail(`ask failed: ${(err as Error).message}${busyHint(err)}`);
+          return fail(`ask failed: ${(err as Error).message}${refusalHint(err)}`);
         }
       },
     );
@@ -716,7 +768,7 @@ export async function serveMcp(rootPath?: string): Promise<void> {
             ...(usage ? { usage } : {}),
           });
         } catch (err) {
-          return fail(`explore failed: ${(err as Error).message}${busyHint(err)}`);
+          return fail(`explore failed: ${(err as Error).message}${refusalHint(err)}`);
         }
       },
     );

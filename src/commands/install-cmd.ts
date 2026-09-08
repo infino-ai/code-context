@@ -18,6 +18,13 @@
 // out of a config that may be committed. Passing a key value to this command
 // is refused rather than quietly written.
 //
+// With no flags at all, this command uses the account `cx login` stored on
+// this machine: it registers the repository's own database if it is not there
+// yet, and writes an entry naming that database and nothing else. No key, and
+// no path under anybody's home directory - the server finds the key itself, so
+// the same `.mcp.json` works for every colleague who has signed in, and a
+// second repository is again one command with no arguments.
+//
 // Three rules hold throughout, carried over from the enforcement installer
 // this replaces: ownership is decided per server *name*, so other servers are
 // never rewritten or removed; the replace is a temp file plus rename beside
@@ -41,6 +48,10 @@ import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { bold, dim, green, yellow } from "../core/output.js";
 import { API_KEY_ENV } from "../core/config.js";
+import { HostedError } from "../core/hosted.js";
+import { createDatabase, databaseNameFor } from "../core/account-api.js";
+import { readStoredAccount, readStoredKey } from "../core/keystore.js";
+import { signInHint } from "./login-cmd.js";
 
 /** Package this command installs, and the pinned spelling `npx` resolves. */
 const PACKAGE_NAME = "@infino-ai/code-context";
@@ -61,6 +72,11 @@ const TMP_SUFFIX = ".cx-tmp";
 /** Depth of symlink hops followed before giving up, so a link cycle cannot
  * spin here forever. */
 const MAX_LINK_HOPS = 40;
+
+/** The key authenticated but may not address this database - its pattern
+ * excludes the name, or the account lacks the entitlement. A repeated
+ * decision, not a failed call. */
+const HTTP_FORBIDDEN = 403;
 
 export interface InstallCmdOptions {
   /** Remove our server entry instead of writing it. */
@@ -89,6 +105,17 @@ export interface InstallCmdOptions {
   coldStartSecs?: string;
   /** Print the entry that would be written and change nothing. */
   dryRun?: boolean;
+  /** Write a local-tools-only entry even when this machine has an account:
+   * for a repository whose contents must not leave it. */
+  localOnly?: boolean;
+}
+
+/** What the platform half of an install resolved to. */
+interface PlatformSetup {
+  /** The `--db` value to write, or undefined for a local-tools-only entry. */
+  db?: string;
+  /** Lines to print after the entry, explaining what was or was not set up. */
+  notes: string[];
 }
 
 interface ServerEntry {
@@ -323,7 +350,95 @@ function refuseInlineKey(opts: InstallCmdOptions): void {
   }
 }
 
-export function installCmd(opts: InstallCmdOptions, version: string): void {
+/** The platform half of an install, in one place because there are three ways
+ * to arrive at it and only one of them is a flag.
+ *
+ * `--db` given: exactly what was asked for, unchanged.
+ * No flags, an account stored: this repository's own database on that account,
+ *   registered here if it is not there yet. The entry names the database and
+ *   nothing else - not the key, not a path to it - because the server resolves
+ *   the key from the same stored account at startup. That is what makes the
+ *   config shareable and the second repository flag-free.
+ * No flags, no account: the three local tools, and the one line that says how
+ *   to get the other two.
+ *
+ * A create that fails does not always cancel the platform half. A network
+ * blip or a 5xx is transient and the entry is still the right one to write; a
+ * refused key or an unpayable account is not, and writing a database entry
+ * that can never answer would hand the user a config that fails every session
+ * with no clue why. So those write a local-only entry and say so. */
+async function resolvePlatform(
+  opts: InstallCmdOptions,
+  root: string,
+  deps: { fetch?: typeof fetch },
+): Promise<PlatformSetup> {
+  if (opts.db) return { db: opts.db, notes: [] };
+  if (opts.localOnly) {
+    return { notes: ["Local tools only (find / search / sql), as asked: nothing about this repository leaves it."] };
+  }
+
+  const account = readStoredAccount();
+  const apiKey = readStoredKey();
+  if (!account || apiKey === undefined) {
+    return { notes: [`Local tools only (find / search / sql). For ask and explore, ${signInHint()}`] };
+  }
+
+  const baseUrl = account.baseUrl.replace(/\/+$/, "");
+  const database = databaseNameFor(root);
+  const db = `${baseUrl}/${database}`;
+
+  if (opts.dryRun) {
+    return { db, notes: [`would register the database ${database} on ${baseUrl} if it is not there yet`] };
+  }
+
+  try {
+    const outcome = await createDatabase({ baseUrl, apiKey }, database, { fetch: deps.fetch });
+    return {
+      db,
+      notes: [
+        outcome === "created"
+          ? `registered the database ${database} on ${baseUrl} for this repository`
+          : `using the database ${database} already on ${baseUrl}`,
+      ],
+    };
+  } catch (err) {
+    return accountUnusable(err)
+      ? { notes: [`Local tools only (find / search / sql): ${unusableReason(err, baseUrl)}`] }
+      : {
+          db,
+          notes: [
+            `could not register the database ${database} on ${baseUrl}: ${(err as Error).message}`,
+            `The entry is written anyway - the first \`cx index\` retries. If it keeps failing, the database has to exist before ask and explore work.`,
+          ],
+        };
+  }
+}
+
+/** Whether a failed create means this account cannot serve this repository at
+ * all, as opposed to a call that happened to fail. A refused key, an account
+ * with no billing details, and a key whose pattern excludes this database are
+ * all decisions the platform will repeat; everything else may not be. */
+function accountUnusable(err: unknown): err is HostedError {
+  return err instanceof HostedError && (err.unauthenticated || err.paymentRequired || err.status === HTTP_FORBIDDEN);
+}
+
+/** Why the account cannot serve this repository, as a sentence naming the fix
+ * rather than the status code that carried it. */
+function unusableReason(err: HostedError, baseUrl: string): string {
+  if (err.paymentRequired) {
+    return `${baseUrl} has no billing details on file for this account, so it will not open a database. Add them and a card in the console, then re-run \`cx install\`.`;
+  }
+  if (err.unauthenticated) {
+    return `${baseUrl} refused the key stored on this machine. Run \`cx login --db ${baseUrl} < keyfile\` with a current one, then re-run \`cx install\`.`;
+  }
+  return `${baseUrl} will not let this key open a database for this repository (${err.message}). Re-run \`cx install\` once that is sorted.`;
+}
+
+export async function installCmd(
+  opts: InstallCmdOptions,
+  version: string,
+  deps: { fetch?: typeof fetch } = {},
+): Promise<void> {
   refuseInlineKey(opts);
   const root = resolve(opts.path ?? process.cwd());
   const configPath = opts.config ? resolve(expandHome(opts.config)) : join(root, PROJECT_CONFIG);
@@ -349,21 +464,21 @@ export function installCmd(opts: InstallCmdOptions, version: string): void {
     return;
   }
 
-  const entry = serverEntry(opts, version);
+  const setup = await resolvePlatform(opts, root, deps);
+  const entry = serverEntry({ ...opts, db: setup.db }, version);
   const existed = name in servers;
   const next: Config = { ...config, mcpServers: { ...servers, [name]: entry } };
 
   if (opts.dryRun) {
     console.log(`${dim(existed ? "would replace" : "would write")} ${bold(name)} in ${configPath}:`);
     console.log(JSON.stringify(entry, null, CONFIG_INDENT));
+    for (const note of setup.notes) console.log(dim(note));
     return;
   }
 
   writeConfig(configPath, next);
   console.log(`${green(existed ? "updated" : "installed")} ${bold(name)} in ${configPath}`);
   console.log(`  ${dim(entry.command)} ${dim(entry.args.join(" "))}`);
-  if (!opts.db) {
-    console.log(dim("Local tools only (find / search / sql). Add --db and --api-key-file for ask and explore."));
-  }
+  for (const note of setup.notes) console.log(dim(note));
   console.log(dim("Restart the client to pick the server up."));
 }

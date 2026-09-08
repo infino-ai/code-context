@@ -7,6 +7,7 @@ import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { parseHostedUrl, DEFAULT_TIMEOUT_MS, DEFAULT_COLD_START_SECS, type HostedTarget } from "./hosted.js";
 import { isAnalyzer, type Analyzer } from "./analyzer.js";
+import { keyFilePath, readStoredKey } from "./keystore.js";
 
 /** Directory name of the on-disk index, created in the repo root: the local
  * catalog, the two manifests, the file state, the usage ledger and build
@@ -23,7 +24,8 @@ export const INDEX_DIR_NAME = ".infino";
 // layer below reads that object through the accessor functions. Nothing here
 // reads the environment except the API key, the one value that must never be
 // an argument - argv is visible to every process on the machine - so it comes
-// from a file named by --api-key-file, or from INFINO_API_KEY.
+// from a file named by --api-key-file, from INFINO_API_KEY, or from this
+// machine's own stored account (keystore.ts), in that order.
 
 /** The environment variable holding the bearer key when --api-key-file is not
  * given. The engine's remote binding, the ask harness and the platform all
@@ -153,20 +155,39 @@ function optionalPositiveIntFlag(flag: string, raw: string | undefined): number 
 }
 
 /** Resolve the platform settings from the command line, or null when --db was
- * not given (no platform database: the local index alone). Reads the key from
- * --api-key-file, else from INFINO_API_KEY in `env`; a database with neither
- * is refused here rather than failing on the first request. Any other platform
- * flag without --db is a usage error rather than a silently ignored option. */
-export function hostedSettingsFromFlags(flags: HostedFlags, env: NodeJS.ProcessEnv = process.env): HostedSettings | null {
+ * not given (no platform database: the local index alone).
+ *
+ * The key comes from the first of three sources that has one, most explicit
+ * first: `--api-key-file`, then INFINO_API_KEY in `env`, then this machine's
+ * stored account (`~/.infino/key`, written by `cx login`). The store is last
+ * so a flag or an environment variable always wins - a CI job or a one-off
+ * against another platform must not silently pick up the developer's own
+ * account - and it exists at all so that, once signed in, nothing has to name
+ * a key again: `cx install` in a new repository is one command with no flags.
+ *
+ * A database with no key from any of the three is refused here rather than
+ * failing on the first request. Any other platform flag without --db is a
+ * usage error rather than a silently ignored option. */
+export function hostedSettingsFromFlags(
+  flags: HostedFlags,
+  env: NodeJS.ProcessEnv = process.env,
+  storedKey: () => string | undefined = readStoredKey,
+): HostedSettings | null {
   if (flags.db === undefined || flags.db === "") {
     const stray = HOSTED_ONLY_FLAGS.find(([key]) => flags[key] !== undefined);
     if (stray) throw new Error(`${stray[1]} needs --db <url>: it configures the platform database`);
     return null;
   }
   const { baseUrl, database } = parseHostedUrl(flags.db);
-  const apiKey = flags.apiKeyFile !== undefined ? readFileSync(flags.apiKeyFile, "utf8").trim() : (env[API_KEY_ENV] ?? "");
+  const apiKey =
+    flags.apiKeyFile !== undefined
+      ? readFileSync(flags.apiKeyFile, "utf8").trim()
+      : (env[API_KEY_ENV] ?? storedKey() ?? "");
   if (apiKey.length === 0) {
-    throw new Error(`--db needs a key: pass --api-key-file <path> or set ${API_KEY_ENV} - the platform is bearer-only`);
+    throw new Error(
+      `--db needs a key, and this machine has none: run \`cx login --db ${baseUrl}\` to store one ` +
+        `(it goes in ${keyFilePath()}, mode 600), or pass --api-key-file <path>, or set ${API_KEY_ENV}`,
+    );
   }
   const providerRaw = (flags.embedProvider ?? DEFAULT_HOSTED_EMBED_PROVIDER).toLowerCase();
   if (providerRaw !== "local" && providerRaw !== "platform") {

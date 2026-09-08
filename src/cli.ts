@@ -16,6 +16,7 @@
 import { Command } from "commander";
 import { indexCmd, type IndexCmdOptions } from "./commands/index-cmd.js";
 import { installCmd, type InstallCmdOptions } from "./commands/install-cmd.js";
+import { loginCmd, type LoginCmdOptions } from "./commands/login-cmd.js";
 import { findCmd, searchCmd, sqlCmd, statusCmd, usageCmd } from "./commands/query-cmds.js";
 import {
   DEFAULT_SEARCH_K,
@@ -83,9 +84,12 @@ Examples:
           FROM bm25_search('chunks','content','vector index', 300) \\
           GROUP BY path ORDER BY lines DESC LIMIT 10"
   cx mcp                              serve the three local MCP tools (find/search/sql) over stdio
-  cx install                          write the MCP entry into .mcp.json so a client picks it up
+  cx login --db https://host < key    store this machine's account once (key at mode 600)
+  cx install                          write the MCP entry into .mcp.json - with an account stored,
+                                      this also registers the repo's database and enables all five
+                                      tools, with no flags and no key in the config
   cx install --db https://host/<database> --api-key-file ~/.infino/key
-                                      the same, with ask and explore enabled for whoever opens the repo
+                                      the same, naming the database and key explicitly instead
   cx index --db https://host/<database> --api-key-file ~/.infino/key
                                       index the repo locally AND load it into the platform database
   cx mcp --db https://host/<database> --api-key-file ~/.infino/key
@@ -167,6 +171,31 @@ program
   .option("-C, --path <dir>", "repo root (default: current directory)")
   .action(usageCmd);
 
+program
+  .command("login")
+  .description("store this machine's Infino account once, so nothing after it needs a flag")
+  .option("--db <url>", "the platform to sign in to, https://host")
+  .option("--api-key-file <path>", "file holding the API key (default: read it from standard input)")
+  .option("--console-url <url>", "where a human manages billing on this platform, shown when the account runs out of credit")
+  .option("--show", "report the stored account and change nothing")
+  .option("--logout", "forget the stored key (the platform URL is kept: it is not a secret)")
+  .addHelpText(
+    "after",
+    `
+The key is never an argument - argv is readable by every process on this
+machine - so it comes from a file or from standard input:
+
+  cx login --db https://host < keyfile
+  pbpaste | cx login --db https://host
+  cx login --db https://host --api-key-file ~/Downloads/key.txt
+
+It is stored at mode 600 and used automatically from then on: \`cx install\`
+in any repository needs no flags, and no config file ever names a key.`,
+  )
+  .action(async (opts: LoginCmdOptions) => {
+    await loginCmd(opts);
+  });
+
 hostedOptions(
   program
     .command("install")
@@ -175,11 +204,12 @@ hostedOptions(
     .option("--name <name>", "name of the server entry (default code-context)")
     .option("--local", "force an entry that runs this build, when the default would write npx")
     .option("--npx", "force an npx entry pinned to this version, when the default would run this build")
+    .option("--local-only", "write a local-tools-only entry even when this machine has an account")
     .option("--uninstall", "remove the server entry instead of writing it")
     .option("--dry-run", "print the entry that would be written and change nothing")
     .option("-C, --path <dir>", "repo root (default: current directory)"),
-).action((opts: InstallCmdOptions) => {
-  installCmd(opts, CLI_VERSION);
+).action(async (opts: InstallCmdOptions) => {
+  await installCmd(opts, CLI_VERSION);
 });
 
 hostedOptions(

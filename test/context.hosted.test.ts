@@ -166,8 +166,27 @@ describe("platform settings", () => {
   });
 
   it("refuses --db with no key rather than failing on the first request", () => {
-    expect(() => hostedSettingsFromFlags({ db: URL }, {})).toThrow(new RegExp(`--api-key-file <path> or set ${API_KEY_ENV}`));
+    // The third source is passed explicitly as empty: a developer running the
+    // suite with a real ~/.infino/key must not make this pass.
+    expect(() => hostedSettingsFromFlags({ db: URL }, {}, () => undefined)).toThrow(/this machine has none/);
+    expect(() => hostedSettingsFromFlags({ db: URL }, {}, () => undefined)).toThrow(/cx login/);
     expect(isHosted()).toBe(false);
+  });
+
+  it("falls back to the stored account key, behind the flag and the environment", () => {
+    const stored = () => "inf_from_store";
+    // Nothing else given: the store supplies it, which is what makes
+    // `cx install` need no flags.
+    expect(hostedSettingsFromFlags({ db: URL }, {}, stored)?.target.apiKey).toBe("inf_from_store");
+    // The environment is more explicit than the store, and wins - a CI job
+    // must not silently pick up the developer's own account.
+    expect(hostedSettingsFromFlags({ db: URL }, { [API_KEY_ENV]: KEY }, stored)?.target.apiKey).toBe(KEY);
+    // The flag is more explicit still.
+    const file = join(root, "flagkey");
+    writeFileSync(file, "inf_from_file\n");
+    expect(hostedSettingsFromFlags({ db: URL, apiKeyFile: file }, { [API_KEY_ENV]: KEY }, stored)?.target.apiKey).toBe(
+      "inf_from_file",
+    );
   });
 
   it("refuses a plaintext URL for a remote host and allows loopback", () => {
