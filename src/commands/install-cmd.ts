@@ -418,7 +418,27 @@ async function resolvePlatform(
     return await firstRun(opts, root, deps);
   }
 
-  const baseUrl = account.baseUrl.replace(/\/+$/, "");
+  // `--platform` names where to GET an account, so only `firstRun` above reads
+  // it. With one already stored, a DIFFERENT host named here is a
+  // contradiction rather than a preference, and the old behaviour was the
+  // worst of both: the flag was dropped, the repository was registered on the
+  // stored host, and the command reported success - so a `--platform
+  // <staging>` on a machine signed in to prod pointed the repository at prod
+  // and said nothing. Refuse, and name both hosts.
+  const named = (opts.platform ?? process.env[PLATFORM_URL_ENV] ?? "").replace(/\/+$/, "");
+  const storedHost = account.baseUrl.replace(/\/+$/, "");
+  if (named !== "" && named !== storedHost) {
+    return {
+      notes: [
+        `Nothing was installed: --platform names ${named}, but this machine is signed in to ${storedHost}.`,
+        `--platform only gets a NEW account, on a first install - it cannot move an existing one, and ignoring it would register this repository on ${storedHost} while looking like it did what you asked.`,
+        `To use ${named}: sign in to it with a key for it (${signInHint()}), or \`cx login --logout\` first to start over there.`,
+        `To use the account you already have: \`cx install\`, with no --platform.`,
+      ],
+    };
+  }
+
+  const baseUrl = storedHost;
   const database = databaseNameFor(root);
   const db = `${baseUrl}/${database}`;
 

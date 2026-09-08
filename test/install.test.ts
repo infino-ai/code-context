@@ -325,6 +325,32 @@ describe("cx install: no flags, with an account stored", () => {
     expect(JSON.stringify(entry)).not.toContain("inf_deadbeef");
   });
 
+  it("refuses when --platform names a different host than the stored account", async () => {
+    // The bug this pins: --platform was read only on the no-account path, so
+    // with an account stored it was silently dropped and the repository was
+    // registered on the STORED host. Passing a staging URL on a machine signed
+    // in to prod looked like it worked and pointed somewhere else entirely.
+    signIn("https://platform.example");
+    const { impl, calls } = platform(201);
+    await installCmd({ path: root, platform: "https://staging.example" }, VERSION, { fetch: impl });
+
+    // Nothing was registered anywhere, and no platform entry was written.
+    expect(calls).toHaveLength(0);
+    const entry = read(configIn(root)).mcpServers["code-context"];
+    expect(entry.args).not.toContain("--db");
+  });
+
+  it("accepts --platform naming the host already signed in to, trailing slash and all", async () => {
+    signIn("https://platform.example");
+    const { impl, calls } = platform(201);
+    await installCmd({ path: root, platform: "https://platform.example/" }, VERSION, { fetch: impl });
+
+    // Same host, so it is not a contradiction: the ordinary path runs.
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toBe("https://platform.example/v1/databases");
+    expect(read(configIn(root)).mcpServers["code-context"].args).toContain("--db");
+  });
+
   it("treats a database that already exists as success, not an error", async () => {
     signIn("https://platform.example");
     const { impl } = platform(409, JSON.stringify({ message: "database already exists" }));
