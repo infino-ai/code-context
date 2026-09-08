@@ -25,12 +25,12 @@
 // `line` from both gets text from one and a number from the other.
 //
 // Both sides also answer "where is this name DEFINED" rather than "where does
-// it appear", over the same `symbol` column, and the two flags are shaped
-// differently on purpose - the client takes a boolean because it knows its own
-// schema, the platform takes the column's name because its find is generic.
-// Two shapes for one question is exactly the kind of pair that drifts, so the
-// filtered answers are compared to each other and each is checked as a sound
-// narrowing of its own unfiltered answer.
+// it appear", over the same `symbol` column, through a parameter both call
+// `defines`. Only its type differs, and it has to: the client knows the column
+// because it writes the index, the platform's find is generic over any table
+// and has to be told. One name and two types is exactly the kind of pair that
+// drifts, so the filtered answers are compared to each other and each is
+// checked as a sound narrowing of its own unfiltered answer.
 //
 // Two limits, not one: the platform's route defaults to 500 and the retrieval
 // loop's own find tool defaults to 100, and the loop's take is clamped to 500
@@ -57,13 +57,13 @@ import { BENCH_DB_URL, BENCH_KEY_FILE } from "./lanes.mjs";
  * client's own copy is module-private to the search and index paths; both
  * sides of this comparison read the same column of the same table. */
 const CONTENT_COLUMN = "content";
-/** The column holding the definitions each chunk declares. Both sides filter
- * on it to answer "where is this name DEFINED", and they name it differently
- * by design: the client knows its own schema, so its flag is a boolean
- * (`declared`), while the platform's find is generic over any table and has
- * to be told which column carries the names (`defines`). Same column, same
- * question, two shapes - which is exactly why the parity check has to cover
- * it rather than trust that they agree. */
+/** The column holding the definitions each chunk declares. Both sides call
+ * the parameter `defines` and answer the same question over this column; only
+ * the type differs, and it has to: the client writes this index and knows the
+ * column, so a boolean is enough, while the platform's find is generic over
+ * any table and has to be told which column carries the names. One name, two
+ * types - which is exactly why the parity check covers it rather than trusting
+ * that they agree. */
 const SYMBOL_COLUMN = "symbol";
 
 /** The limit both sides are asked for: the client's own ceiling, so neither
@@ -117,7 +117,7 @@ const answer = (total, files, byFile, ordered, truncated = false, before = null)
   lines: new Set(ordered),
   truncated,
   /** Matched lines before the declaration filter, when one was applied:
-   * `declaredFrom` on the client, `defined_from` on the platform. `null`
+   * `definedFrom` on the client, `defined_from` on the platform. `null`
    * when the answer was unfiltered. */
   before,
 });
@@ -239,17 +239,17 @@ export function countInFile(text, literal) {
   return out;
 }
 
-/** The client's find over the local index. `declared` asks it for the lines
+/** The client's find over the local index. `defines` asks it for the lines
  * inside a definition of the literal rather than every occurrence. */
-async function clientFind(handle, literal, declared = false) {
-  const r = await find(handle, literal, { limit: LIMIT, ...(declared ? { declared: true } : {}) });
+async function clientFind(handle, literal, defines = false) {
+  const r = await find(handle, literal, { limit: LIMIT, ...(defines ? { defines: true } : {}) });
   return answer(
     r.total,
     r.files,
     new Map(r.byFile.map((f) => [f.path, f.count])),
     r.matches.map((m) => `${m.path}:${m.line}`),
     r.truncated === true,
-    r.declaredFrom ?? null,
+    r.definedFrom ?? null,
   );
 }
 

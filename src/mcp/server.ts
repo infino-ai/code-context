@@ -434,7 +434,7 @@ export async function serveMcp(rootPath?: string): Promise<void> {
         "Every line in the repository containing an exact string, like grep -n: complete and " +
         "unranked, with the repo-wide total and per-file counts (byFile, the grep -c answer). " +
         "Literal text within one line, case-sensitive unless ignoreCase. Use it where you would " +
-        "grep: every use or definition of an identifier, an error message, a config key. Set declared " +
+        "grep: every use or definition of an identifier, an error message, a config key. Set defines " +
         "to get only where a name is defined rather than everywhere it appears. Not for a " +
         "file you already know - Read that file. For meaning or 'how does X work' use search; for " +
         "rankings use sql. The result includes a 'usage' field, a one-line receipt of tokens " +
@@ -448,13 +448,13 @@ export async function serveMcp(rootPath?: string): Promise<void> {
           .boolean()
           .optional()
           .describe("Match regardless of letter case. Default false: case-sensitive, like grep."),
-        declared: z
+        defines: z
           .boolean()
           .optional()
           .describe(
             "Keep only lines inside a definition of the query - where the name is declared, not every " +
               "place it is used. Answers 'where is X defined' in one call instead of reading use sites " +
-              "until one turns out to be the declaration. The result reports declaredFrom, how many " +
+              "until one turns out to be the declaration. The result reports definedFrom, how many " +
               "matching lines there were before the filter.",
           ),
         limit: z
@@ -473,7 +473,7 @@ export async function serveMcp(rootPath?: string): Promise<void> {
           ),
       },
     },
-    async ({ query, ignoreCase, declared, limit, path }) => {
+    async ({ query, ignoreCase, defines, limit, path }) => {
       let ctx: RepoCtx;
       try {
         ctx = repoFor(path);
@@ -491,7 +491,7 @@ export async function serveMcp(rootPath?: string): Promise<void> {
       if (!autoIndexed) maybeAutoSync(ctx); // a fresh build is already current
       try {
         const t0 = performance.now();
-        const result = await find(handle, query, { ignoreCase, declared, limit });
+        const result = await find(handle, query, { ignoreCase, defines, limit });
         let usage: string | undefined;
         if (receiptOn) {
           const entry = findEntry(result);

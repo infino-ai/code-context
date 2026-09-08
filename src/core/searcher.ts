@@ -229,10 +229,11 @@ export interface FindResult {
   truncated?: boolean;
   /** Present when the index omitted files over the cap - results may be incomplete. */
   partial?: PartialIndex;
-  /** Set when `declared` narrowed the result: how many matching lines there
+  /** Set when `defines` narrowed the result: how many matching lines there
    * were before the filter, so the caller can see what it skipped rather than
-   * mistake a narrow answer for a rare name. */
-  declaredFrom?: number;
+   * mistake a narrow answer for a rare name. Named as the platform route's
+   * `defined_from`, which reports the same thing. */
+  definedFrom?: number;
 }
 
 export interface FindOptions {
@@ -240,10 +241,15 @@ export interface FindOptions {
   ignoreCase?: boolean;
   /** Maximum matches returned: a positive integer, clamped to MAX_FIND_LIMIT. */
   limit?: number;
-  /** Keep only matches inside a chunk that *declares* the query - the handful
-   * of places a name is defined, rather than every place it appears. See
-   * `declaresName` for exactly what that means and what it cannot see. */
-  declared?: boolean;
+  /** Keep only matches inside a chunk that *defines* the query - the handful
+   * of places a name is declared, rather than every place it appears. See
+   * `definesName` for exactly what that means and what it cannot see.
+   *
+   * Named as the platform route's `defines`, which answers the same question
+   * over the same column. A boolean here and a column name there: this side
+   * writes the index and knows the column, while the platform's find is
+   * generic over any table and has to be told. */
+  defines?: boolean;
 }
 
 /** Does this chunk's `symbol` column declare `name`?
@@ -260,7 +266,7 @@ export interface FindOptions {
  * line could be a recursive call inside the body it defines. Narrowing to the
  * declaring chunk is the useful part; pinning the statement would need the
  * per-line definition rows, which the index does not carry. */
-export function declaresName(symbolColumn: string | undefined, name: string, ignoreCase = false): boolean {
+export function definesName(symbolColumn: string | undefined, name: string, ignoreCase = false): boolean {
   if (!symbolColumn) return false;
   const fold = (s: string) => (ignoreCase ? s.toLowerCase() : s);
   const wanted = fold(name.trim());
@@ -368,7 +374,7 @@ export async function find(handle: IndexHandle, query: string, opts: FindOptions
   for (const row of candidates) {
     const path = String(row.path);
     const symbol = row.symbol ? String(row.symbol) : undefined;
-    const declares = declaresName(symbol, query, ignoreCase);
+    const declares = definesName(symbol, query, ignoreCase);
     for (const m of matchLines(String(row.content), Number(row.start_line), query, ignoreCase)) {
       const key = `${path} ${m.line}`;
       if (declares) declaring.add(key);
@@ -385,10 +391,10 @@ export async function find(handle: IndexHandle, query: string, opts: FindOptions
   all.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : a.line - b.line));
 
   const matched = all.length;
-  const rows = opts.declared ? all.filter((m) => declaring.has(`${m.path} ${m.line}`)) : all;
+  const rows = opts.defines ? all.filter((m) => declaring.has(`${m.path} ${m.line}`)) : all;
 
   // Per-file counts over every match, not the cut list: `grep -c` in one call.
-  // Counted after the declared filter so the counts describe what was returned.
+  // Counted after the defines filter so the counts describe what was returned.
   const counts = new Map<string, number>();
   for (const m of rows) counts.set(m.path, (counts.get(m.path) ?? 0) + 1);
   const byFile: FindFileCount[] = [...counts]
@@ -404,7 +410,7 @@ export async function find(handle: IndexHandle, query: string, opts: FindOptions
     byFile,
     ...(rows.length > limit ? { truncated: true } : {}),
     ...(partial ? { partial } : {}),
-    ...(opts.declared ? { declaredFrom: matched } : {}),
+    ...(opts.defines ? { definedFrom: matched } : {}),
   };
 }
 
