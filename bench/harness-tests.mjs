@@ -40,7 +40,7 @@ import {
   recordedQueries,
   innerMaxTurns,
 } from "./lanes.mjs";
-import { compareFind, countInFile, projectionInvariance, fileOrder } from "./find-parity.mjs";
+import { compareFind, countInFile, declaredNarrows, projectionInvariance, fileOrder } from "./find-parity.mjs";
 import { warmHosted, splitDbUrl, DEFAULT_RETRY_AFTER_SECS } from "./warm-hosted.mjs";
 import { indexArgs, runIndexBuild, hostOf } from "./load-hosted.mjs";
 import { snowflakeSettings, CHUNK_COLUMNS } from "./snowflake-rest.mjs";
@@ -616,6 +616,40 @@ test("compareFind reports the totals, the per-file counts and the lines only one
   const extra = compareFind(agree, side(4, 3, [["a.rs", 2], ["b.rs", 1], ["c.rs", 1]], ["a.rs:1", "a.rs:9", "b.rs:4", "c.rs:7"]));
   assert.deepEqual(extra.onlyPlatform, ["c.rs:7"]);
   assert.deepEqual(extra.byFile, [{ path: "c.rs", client: null, platform: 1 }]);
+});
+
+test("declaredNarrows checks a declaration filter against the same side's unfiltered answer", () => {
+  const side = (total, lines, truncated = false, before = null) => ({ total, lines: new Set(lines), truncated, before });
+  const all = side(6, ["a.rs:1", "a.rs:3", "a.rs:4", "a.rs:5", "b.rs:2", "b.rs:9"]);
+  // the intended shape: one declaration out of six occurrences, and the
+  // pre-filter count it reports is the unfiltered total
+  const ok = declaredNarrows(all, side(1, ["a.rs:1"], false, 6));
+  assert.equal(ok.same, true);
+  assert.deepEqual(ok.extra, []);
+  assert.equal(ok.beforeMatches, true);
+  assert.equal(ok.unfilteredTotal, 6);
+  // a filter cannot invent a line: one absent from the unfiltered answer
+  // means the filter changed which rows were considered
+  const invented = declaredNarrows(all, side(2, ["a.rs:1", "c.rs:7"], false, 6));
+  assert.equal(invented.same, false);
+  assert.deepEqual(invented.extra, ["c.rs:7"]);
+  // the count taken at the wrong point - before the overlap dedupe rather
+  // than after it - makes "1 of N" incomparable with the unfiltered total
+  const miscounted = declaredNarrows(all, side(1, ["a.rs:1"], false, 8));
+  assert.equal(miscounted.same, false);
+  assert.equal(miscounted.beforeMatches, false);
+  assert.equal(miscounted.before, 8);
+  // an unfiltered answer cut at the limit cannot vouch for membership: the
+  // filter may keep a line the limit cut off, so only the count is asserted
+  const cut = declaredNarrows(side(600, ["a.rs:1"], true), side(1, ["a.rs:400"], false, 600));
+  assert.equal(cut.subsetChecked, false);
+  assert.equal(cut.same, true);
+  // but a bad count is still a bad count when the unfiltered answer was cut
+  assert.equal(declaredNarrows(side(600, ["a.rs:1"], true), side(1, ["a.rs:400"], false, 599)).same, false);
+  // no filter applied: nothing to check, and no false alarm
+  const none = declaredNarrows(all, side(6, [...all.lines]));
+  assert.equal(none.same, true);
+  assert.equal(none.beforeMatches, null);
 });
 
 test("projectionInvariance holds the totals and counts always, and the lines only when nothing was cut", () => {

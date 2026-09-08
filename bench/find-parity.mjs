@@ -24,6 +24,14 @@
 // Both are published contracts and neither should be renamed; anyone reading
 // `line` from both gets text from one and a number from the other.
 //
+// Both sides also answer "where is this name DEFINED" rather than "where does
+// it appear", over the same `symbol` column, and the two flags are shaped
+// differently on purpose - the client takes a boolean because it knows its own
+// schema, the platform takes the column's name because its find is generic.
+// Two shapes for one question is exactly the kind of pair that drifts, so the
+// filtered answers are compared to each other and each is checked as a sound
+// narrowing of its own unfiltered answer.
+//
 // Two limits, not one: the platform's route defaults to 500 and the retrieval
 // loop's own find tool defaults to 100, and the loop's take is clamped to 500
 // however large a k it asks for. So the effective range the inner model lives
@@ -49,6 +57,14 @@ import { BENCH_DB_URL, BENCH_KEY_FILE } from "./lanes.mjs";
  * client's own copy is module-private to the search and index paths; both
  * sides of this comparison read the same column of the same table. */
 const CONTENT_COLUMN = "content";
+/** The column holding the definitions each chunk declares. Both sides filter
+ * on it to answer "where is this name DEFINED", and they name it differently
+ * by design: the client knows its own schema, so its flag is a boolean
+ * (`declared`), while the platform's find is generic over any table and has
+ * to be told which column carries the names (`defines`). Same column, same
+ * question, two shapes - which is exactly why the parity check has to cover
+ * it rather than trust that they agree. */
+const SYMBOL_COLUMN = "symbol";
 
 /** The limit both sides are asked for: the client's own ceiling, so neither
  * cuts before the other and the returned lines are comparable up to it. */
@@ -93,13 +109,17 @@ const REFEREE_FILES = 6;
  * before any limit, the distinct files, the per-file counts, the set of
  * `path:line` the side returned, that set in the order it was returned, and
  * whether the limit cut it. */
-const answer = (total, files, byFile, ordered, truncated = false) => ({
+const answer = (total, files, byFile, ordered, truncated = false, before = null) => ({
   total,
   files,
   byFile,
   ordered,
   lines: new Set(ordered),
   truncated,
+  /** Matched lines before the declaration filter, when one was applied:
+   * `declaredFrom` on the client, `defined_from` on the platform. `null`
+   * when the answer was unfiltered. */
+  before,
 });
 
 /** What differs between two find answers: the totals, the file counts, the
@@ -177,6 +197,38 @@ export function fileOrder(keys) {
   return { ordered: true };
 }
 
+/** Whether a declaration-filtered answer is a sound narrowing of the same
+ * side's unfiltered one. Two properties, and they fail differently:
+ *
+ * - every line it returns was in the unfiltered answer, because filtering
+ *   can only remove lines. A line appearing only under the filter means the
+ *   filter changed which rows were considered, not just which were kept.
+ * - the pre-filter count it reports equals the unfiltered total, so
+ *   "1 declaring of 214 matching" can be checked against the 214 the same
+ *   side gives with no filter. A mismatch there is the count being taken at
+ *   the wrong point - before the overlap dedupe rather than after it, say -
+ *   which makes the two numbers incomparable even when both are right.
+ *
+ * Checked per side rather than across sides, because the two implementations
+ * are allowed to differ in shape but neither is allowed to be internally
+ * inconsistent. Pure, so it is testable without a platform. */
+export function declaredNarrows(all, declared) {
+  const extra = [...declared.lines].filter((k) => !all.lines.has(k)).sort();
+  const beforeMatches = declared.before === null ? null : declared.before === all.total;
+  return {
+    extra,
+    before: declared.before,
+    unfilteredTotal: all.total,
+    beforeMatches,
+    // A cut unfiltered answer cannot vouch for the filtered one's membership:
+    // the filter may legitimately keep a line the unfiltered answer's limit
+    // cut off. The count contract still holds, since both totals are counted
+    // before any limit.
+    subsetChecked: !all.truncated,
+    same: (all.truncated || extra.length === 0) && beforeMatches !== false,
+  };
+}
+
 /** The 1-based numbers of the lines of `text` that contain `literal`: the
  * referee's count, case-sensitive like find's default. */
 export function countInFile(text, literal) {
@@ -187,15 +239,17 @@ export function countInFile(text, literal) {
   return out;
 }
 
-/** The client's find over the local index. */
-async function clientFind(handle, literal) {
-  const r = await find(handle, literal, { limit: LIMIT });
+/** The client's find over the local index. `declared` asks it for the lines
+ * inside a definition of the literal rather than every occurrence. */
+async function clientFind(handle, literal, declared = false) {
+  const r = await find(handle, literal, { limit: LIMIT, ...(declared ? { declared: true } : {}) });
   return answer(
     r.total,
     r.files,
     new Map(r.byFile.map((f) => [f.path, f.count])),
     r.matches.map((m) => `${m.path}:${m.line}`),
     r.truncated === true,
+    r.declaredFrom ?? null,
   );
 }
 
@@ -205,7 +259,7 @@ async function clientFind(handle, literal) {
  * always passed: the route dedupes only when it knows which column places a
  * line, and the loop's own tool supplies it, so passing it is what makes this
  * comparison the one the inner model lives with. */
-async function platformFind(dbUrl, key, literal, projection = PROJECTION, limit = LIMIT) {
+async function platformFind(dbUrl, key, literal, projection = PROJECTION, limit = LIMIT, declared = false) {
   const base = dbUrl.replace(/\/[^/]+$/, "");
   const db = dbUrl.slice(dbUrl.lastIndexOf("/") + 1);
   const res = await fetch(`${base}/v1/find/${db}`, {
@@ -219,6 +273,7 @@ async function platformFind(dbUrl, key, literal, projection = PROJECTION, limit 
       group_by: "path",
       line_base: "start_line",
       projection,
+      ...(declared ? { defines: SYMBOL_COLUMN } : {}),
     }),
   });
   const text = await res.text();
@@ -231,6 +286,7 @@ async function platformFind(dbUrl, key, literal, projection = PROJECTION, limit 
     new Map((body.groups ?? []).map((g) => [g.value, g.lines])),
     lines.map((r) => `${r.columns.path}:${r.file_line}`),
     body.truncated === true,
+    body.defined_from ?? null,
   );
 }
 
@@ -253,7 +309,7 @@ async function main(argv) {
   const wanted = terms.length ? terms : DEFAULT_TERMS;
 
   console.log(`find parity: ${indexDir} against ${dbUrl.replace(/\/\/.*@/, "//")}, projection ${PROJECTION.join(",")}, limits ${LIMIT} and ${LOOP_LIMIT}`);
-  console.log("term             client tot/files  platform tot/files  parity   projections  counts-only  file order (by projection)");
+  console.log("term             client tot/files  platform tot/files  parity   projections  counts-only  declared      file order (by projection)");
   let disagreed = 0;
   /** Terms whose contract also held at the loop's own limit. Counted and
    * reported even when nothing went wrong: a check that speaks only on
@@ -264,6 +320,8 @@ async function main(argv) {
     let platform;
     let byProjection;
     let countsOnly;
+    let clientDeclared;
+    let platformDeclared;
     try {
       client = await clientFind(handle, literal);
       platform = await platformFind(dbUrl, key, literal);
@@ -272,6 +330,8 @@ async function main(argv) {
         byProjection.push({ label: projection.join(","), answer: await platformFind(dbUrl, key, literal, projection) });
       }
       countsOnly = await platformFind(dbUrl, key, literal, PROJECTION, COUNTS_ONLY_LIMIT);
+      clientDeclared = await clientFind(handle, literal, true);
+      platformDeclared = await platformFind(dbUrl, key, literal, PROJECTION, LIMIT, true);
     } catch (err) {
       console.log(`${literal.padEnd(15)}  error: ${err.message}`);
       disagreed++;
@@ -290,11 +350,32 @@ async function main(argv) {
     // the projected columns.
     const orders = [{ label: "client", result: fileOrder(client.ordered) }, ...byProjection.map((p) => ({ label: p.label, result: fileOrder(p.answer.ordered) }))];
     const disordered = orders.filter((o) => !o.result.ordered);
+    // "Where is this name defined" asked of both sides. The two agree on the
+    // answer, and each is a sound narrowing of its own unfiltered answer.
+    const declaredDiff = compareFind(clientDeclared, platformDeclared);
+    const clientNarrows = declaredNarrows(client, clientDeclared);
+    const platformNarrows = declaredNarrows(platform, platformDeclared);
+    const declaredOk = declaredDiff.same && clientNarrows.same && platformNarrows.same;
     console.log(
       `${literal.padEnd(15)}  ${String(client.total).padStart(5)}/${String(client.files).padEnd(5)}  ${String(platform.total).padStart(5)}/${String(platform.files).padEnd(5)}  ` +
         `${(diff.same ? "same" : "DIFFERS").padEnd(8)} ${(invariance.same ? "invariant" : "VARIES").padEnd(12)} ${(countsOk ? `${countsOnly.total}/${countsOnly.files}` : "WRONG").padEnd(12)} ` +
+        `${(declaredOk ? `${clientDeclared.total} of ${clientNarrows.unfilteredTotal}` : "DIFFERS").padEnd(13)} ` +
         `${disordered.length === 0 ? "all in order" : `${disordered.length} of ${orders.length} NOT in order: ${disordered.map((o) => o.label).join(" | ")}`}`,
     );
+    if (!declaredOk) {
+      disagreed++;
+      if (declaredDiff.total) console.log(`    declared: client ${declaredDiff.total.client}, platform ${declaredDiff.total.platform}`);
+      if (declaredDiff.onlyClient.length) console.log(`    declared lines only the client returned: ${declaredDiff.onlyClient.slice(0, 8).join("  ")}`);
+      if (declaredDiff.onlyPlatform.length) console.log(`    declared lines only the platform returned: ${declaredDiff.onlyPlatform.slice(0, 8).join("  ")}`);
+      for (const [side, narrows] of [["client", clientNarrows], ["platform", platformNarrows]]) {
+        if (narrows.beforeMatches === false) {
+          console.log(`    ${side} reports ${narrows.before} matching before the filter, but its own unfiltered total is ${narrows.unfilteredTotal}`);
+        }
+        if (narrows.subsetChecked && narrows.extra.length) {
+          console.log(`    ${side} returned ${narrows.extra.length} declared line(s) absent from its unfiltered answer: ${narrows.extra.slice(0, 8).join("  ")}`);
+        }
+      }
+    }
     if (disordered.length && platform.truncated) {
       console.log(`    the answer is cut at ${LIMIT} of ${platform.total}, so an order that is not positional makes the cut an arbitrary ${LIMIT}, not the first ${LIMIT}`);
       for (const o of disordered.slice(0, 3)) console.log(`    ${o.label}: ${o.result.after} returned before ${o.result.before} (position ${o.result.at})`);
