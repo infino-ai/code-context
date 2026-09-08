@@ -57,11 +57,6 @@ the next sync rather than papered over. What you get in exchange is the
 `ask` and `explore` tools, which run on the platform and return facts
 and grounded answers instead of the coding agent crawling the repo itself.
 
-### It is built for largely append-and-edit source trees
-
-The index is a derived artifact you rebuild from the working tree, not a
-system of record. It is read-only through queries; you never mutate it
-through SQL. Rebuild it with `cx index`.
 
 ### Very large or hostile repos
 
