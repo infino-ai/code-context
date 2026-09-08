@@ -118,6 +118,7 @@ hostedOptions(
     .option("-w, --watch", "keep watching the tree and sync on changes")
     .option("--no-embed", "keyword index only - skip the vector stage")
     .option("--max-files <n>", `cap on files indexed - a tree over it indexes partially and says so (default ${DEFAULT_CAPS.maxFiles})`)
+    .option("--no-ignore", "index gitignored files and directories too (or CX_NO_IGNORE=1, which cx mcp also honours)")
     .option("--json", "machine-readable stats"),
 )
   .option(

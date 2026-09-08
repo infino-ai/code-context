@@ -167,6 +167,12 @@ export interface IndexOptions {
    * platform table is keyword-only. The local index always embeds locally. */
   embedProvider?: EmbedProvider;
   caps?: IndexCaps;
+  /** Whether the walk honours `.gitignore` (default true). A workspace whose
+   * sibling repos are gitignored, a generated docs tree, a vendored dependency
+   * somebody greps: all are worth indexing, and `.gitignore` says "do not
+   * version-control", not "do not search". Off indexes them too; the walker's
+   * own skip list (`.git`, `node_modules`, build output) applies either way. */
+  respectGitignore?: boolean;
   /** Platform table only: the FTS analyzer its `content` index is created
    * with, when the caller asks for one (--analyzer). Absent, a build keeps
    * the analyzer the table already has, per the platform manifest, and a
@@ -203,6 +209,12 @@ export interface IndexStats {
   chunks: number;
   /** Candidate files left out because the repo exceeded the file cap. */
   truncatedFiles?: number;
+  /** Directories `.gitignore` kept out of this walk, outermost-only. Present
+   * only when there were any: a coverage gap the caller cannot see is the
+   * thing this reports, so the tools and `cx index` say so rather than
+   * letting a whole subtree - a sibling repo, a generated tree - go missing
+   * in silence. */
+  ignoredDirs?: string[];
   /** The file cap in effect for this build (context for `truncatedFiles`). */
   maxFiles: number;
   languages: Record<string, number>;
@@ -264,7 +276,7 @@ export async function indexRepoStaged(opts: IndexOptions): Promise<StagedIndexRu
 
   const scanned = await scanToSpill(opts, caps);
   const db = opts.db;
-  const { spill, files, chunkCount, languages, fileState, truncatedFiles } = scanned;
+  const { spill, files, chunkCount, languages, fileState, truncatedFiles, ignoredDirs } = scanned;
 
   // --- stage 1: swap in the keyword table -------------------------------------
   // One synchronous block (drop → create → append waves; sync spill reads, no
@@ -284,6 +296,7 @@ export async function indexRepoStaged(opts: IndexOptions): Promise<StagedIndexRu
       files,
       chunks: chunkCount,
       ...(truncatedFiles > 0 ? { truncatedFiles } : {}),
+      ...(ignoredDirs.length > 0 ? { ignoredDirs } : {}),
       maxFiles: caps.maxFiles,
       languages,
       vectors: embedder ? "building" : "none",
@@ -386,6 +399,8 @@ interface Scanned {
   languages: Record<string, number>;
   fileState: FileState;
   truncatedFiles: number;
+  /** Directories `.gitignore` kept out of the walk (see `WalkResult`). */
+  ignoredDirs: string[];
 }
 
 /** Walk the tree and spool every chunk to the spill. The whole tree spools
@@ -396,11 +411,13 @@ async function scanToSpill(opts: IndexOptions, caps: IndexCaps): Promise<Scanned
   const { root, indexDirPath, onPhase, onProgress } = opts;
 
   onPhase?.("scan");
-  const walked = walkRepo(root).filter(
+  const scan = walkRepo(root, { respectGitignore: opts.respectGitignore });
+  const walked = scan.files.filter(
     (f) => shouldIndexFile(f.path) && f.size <= caps.maxFileBytes,
   );
   const taken = walked.slice(0, caps.maxFiles);
   const truncatedFiles = walked.length - taken.length;
+  const ignoredDirs = scan.ignoredDirs;
 
   onPhase?.("chunk");
   mkdirSync(indexDirPath, { recursive: true });
@@ -447,7 +464,7 @@ async function scanToSpill(opts: IndexOptions, caps: IndexCaps): Promise<Scanned
     spill.release(); // previous index untouched - just clean up and surface
     throw err;
   }
-  return { spill, files, chunkCount, languages, fileState, truncatedFiles };
+  return { spill, files, chunkCount, languages, fileState, truncatedFiles, ignoredDirs };
 }
 
 // --- the platform load -------------------------------------------------------------------
@@ -880,6 +897,10 @@ export interface SyncResult {
   /** Files still left un-indexed because the tree exceeds the file cap (0 when
    * the whole tree fits). Recomputed each sync so it tracks a growing repo. */
   truncatedFiles: number;
+  /** Directories `.gitignore` kept out of this sync's walk, outermost-only.
+   * Recomputed each sync, like `truncatedFiles`, so a `.gitignore` edit that
+   * newly hides a subtree is reported the next time round. */
+  ignoredDirs?: string[];
   vectors: VectorState;
   tookMs: number;
   /** Present when a platform database is configured: the platform-side cost
@@ -993,9 +1014,11 @@ export async function syncRepo(opts: IndexOptions): Promise<SyncOutcome> {
 
   // --- diff -------------------------------------------------------------------
   onPhase?.("scan");
-  const walked = walkRepo(root).filter((f) => shouldIndexFile(f.path) && f.size <= caps.maxFileBytes);
+  const scan = walkRepo(root, { respectGitignore: opts.respectGitignore });
+  const walked = scan.files.filter((f) => shouldIndexFile(f.path) && f.size <= caps.maxFileBytes);
   const candidates = walked.slice(0, caps.maxFiles);
   const truncatedFiles = walked.length - candidates.length;
+  const ignoredDirs = scan.ignoredDirs.length > 0 ? { ignoredDirs: scan.ignoredDirs } : {};
   // Content is re-read at chunk time rather than cached here: a branch switch
   // can change thousands of files, and holding every changed buffer is
   // exactly the whole-repo materialization this module avoids.
@@ -1029,6 +1052,7 @@ export async function syncRepo(opts: IndexOptions): Promise<SyncOutcome> {
       files: manifest.files,
       chunks: manifest.chunks,
       truncatedFiles,
+      ...ignoredDirs,
       vectors: manifest.vectors,
       tookMs: Math.round(performance.now() - t0),
     };
@@ -1157,6 +1181,7 @@ export async function syncRepo(opts: IndexOptions): Promise<SyncOutcome> {
       files: nextManifest.files,
       chunks: nextManifest.chunks,
       truncatedFiles,
+      ...ignoredDirs,
       vectors: nextManifest.vectors,
       tookMs: Math.round(performance.now() - t0),
       ...(hostedStats ? { hosted: hostedStats } : {}),

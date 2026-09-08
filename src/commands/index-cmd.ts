@@ -27,6 +27,8 @@ export interface IndexCmdOptions {
   full?: boolean;
   watch?: boolean;
   maxFiles?: string;
+  /** commander's `--no-ignore` lands here as `ignore: false`. */
+  ignore?: boolean;
   json?: boolean;
 }
 
@@ -64,6 +66,41 @@ export function capWarning(truncatedFiles: number, maxFiles: number): string {
   ].join("\n");
 }
 
+/** Directories listed by name in the ignore warning before it summarises. */
+const IGNORED_DIRS_SHOWN = 6;
+
+/** The `.gitignore` warning, for the same reason `capWarning` exists: a walk
+ * that silently dropped a subtree makes every search over the index quietly
+ * wrong, and the reader cannot tell. `.gitignore` means "do not
+ * version-control" and not "do not search", so a gitignored sibling repo, a
+ * generated docs tree or a vendored dependency somebody greps all disappear
+ * from the index with nothing said. Printed on every build and every sync
+ * while anything is being skipped, because a `.gitignore` edit that newly
+ * hides a tree looks like any other sync. */
+export function ignoreWarning(ignoredDirs: string[]): string {
+  const shown = ignoredDirs.slice(0, IGNORED_DIRS_SHOWN);
+  const rest = ignoredDirs.length - shown.length;
+  const list = shown.join(", ") + (rest > 0 ? `, and ${fmtCount(rest)} more` : "");
+  return [
+    yellow(`! ${fmtCount(ignoredDirs.length)} ${ignoredDirs.length === 1 ? "directory was" : "directories were"} NOT indexed - .gitignore excludes ${ignoredDirs.length === 1 ? "it" : "them"}`),
+    yellow(`  ${list}`),
+    yellow("  nothing inside them is searchable: a missing match is not proof it is absent"),
+    yellow("  index them too and re-index:  cx index --no-ignore   (or CX_NO_IGNORE=1)"),
+  ].join("\n");
+}
+
+/** Whether this run honours `.gitignore`: `--no-ignore` decides when given,
+ * otherwise `CX_NO_IGNORE` (set to anything, like `CX_NO_EMBED`).
+ *
+ * The environment variable is not a convenience. `cx mcp` serves and re-syncs
+ * the same index and takes no such flag, so without it a tree indexed under
+ * `--no-ignore` would be diffed away again by the server's next auto-sync -
+ * the files read as deleted, because the walk stopped being able to see them. */
+function respectGitignore(opts: IndexCmdOptions): boolean {
+  if (opts.ignore === false) return false;
+  return !process.env.CX_NO_IGNORE;
+}
+
 export async function indexCmd(path: string | undefined, opts: IndexCmdOptions): Promise<void> {
   const target = openForIndexing(path);
   const { root, dir, db, hosted } = target;
@@ -91,6 +128,7 @@ export async function indexCmd(path: string | undefined, opts: IndexCmdOptions):
     embedProvider: provider,
     analyzer,
     caps,
+    respectGitignore: respectGitignore(opts),
     onPhase: (p) => {
       phase = p;
       if (!opts.json) progressLine(dim(`${PHASES[p]}…`));
@@ -170,6 +208,7 @@ export async function indexCmd(path: string | undefined, opts: IndexCmdOptions):
     // Last, so it is what is still on screen when the run ends. Everything
     // above it is a ✓, and the cap is the part of this index that is not one.
     if (final.truncatedFiles) console.log(capWarning(final.truncatedFiles, final.maxFiles));
+    if (final.ignoredDirs?.length) console.log(ignoreWarning(final.ignoredDirs));
   };
 
   await once();
@@ -237,4 +276,5 @@ function printSync(outcome: SyncResult, maxFiles: number, json?: boolean): void 
   // is up to date, and while the tree is over the cap it is up to date and
   // incomplete at the same time.
   if (outcome.truncatedFiles) console.log(capWarning(outcome.truncatedFiles, maxFiles));
+  if (outcome.ignoredDirs?.length) console.log(ignoreWarning(outcome.ignoredDirs));
 }

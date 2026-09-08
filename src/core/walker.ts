@@ -32,17 +32,43 @@ export interface WalkedFile {
   mtimeMs: number;
 }
 
+export interface WalkOptions {
+  /** Whether `.gitignore` files are honoured (default true). Off indexes
+   * gitignored content too; `SKIP_DIRS` still applies either way. */
+  respectGitignore?: boolean;
+}
+
+export interface WalkResult {
+  files: WalkedFile[];
+  /** Directories left out because a `.gitignore` matched them, root-relative
+   * and outermost-only (the walk does not descend, so each entry stands for
+   * its whole subtree). Empty when nothing was ignored, or when the walk was
+   * asked not to honour `.gitignore`. `SKIP_DIRS` prunes are deliberately NOT
+   * here: `.git` and `node_modules` are the normal state of every walk and
+   * reporting them would bury the ones that matter. */
+  ignoredDirs: string[];
+}
+
 /** Yield candidate files under `root`, gitignore-aware, sorted shallow-first
  * (a README or top-level src file beats a deeply nested one when a cap
- * truncates). */
-export function walkRepo(root: string): WalkedFile[] {
+ * truncates), plus the directories `.gitignore` kept out.
+ *
+ * The ignored list exists because `.gitignore` means "do not version-control"
+ * and not "do not search": a workspace whose sibling repos are gitignored, a
+ * generated docs tree, a vendored dependency somebody greps - all are worth
+ * indexing, and dropping them silently turns "no match" into a wrong answer
+ * the caller cannot see. The walk still honours `.gitignore` by default; it
+ * just stops being quiet about it. */
+export function walkRepo(root: string, options: WalkOptions = {}): WalkResult {
   const files: WalkedFile[] = [];
-  walk(root, "", [], files);
+  const ignoredDirs: string[] = [];
+  walk(root, "", [], files, options.respectGitignore !== false, ignoredDirs);
   files.sort((a, b) => {
     const depth = a.path.split("/").length - b.path.split("/").length;
     return depth !== 0 ? depth : a.path.localeCompare(b.path);
   });
-  return files;
+  ignoredDirs.sort();
+  return { files, ignoredDirs };
 }
 
 function loadGitignore(dir: string, base: string): IgnoreLayer | undefined {
@@ -65,8 +91,15 @@ function isIgnored(relPath: string, isDir: boolean, layers: IgnoreLayer[]): bool
   return false;
 }
 
-function walk(dir: string, rel: string, layers: IgnoreLayer[], acc: WalkedFile[]): void {
-  const layer = loadGitignore(dir, rel);
+function walk(
+  dir: string,
+  rel: string,
+  layers: IgnoreLayer[],
+  acc: WalkedFile[],
+  respectGitignore: boolean,
+  ignoredDirs: string[],
+): void {
+  const layer = respectGitignore ? loadGitignore(dir, rel) : undefined;
   const active = layer ? [...layers, layer] : layers;
 
   let entries;
@@ -81,8 +114,11 @@ function walk(dir: string, rel: string, layers: IgnoreLayer[], acc: WalkedFile[]
     const childRel = rel === "" ? name : `${rel}/${name}`;
     if (entry.isDirectory()) {
       if (SKIP_DIRS.has(name.toLowerCase())) continue;
-      if (isIgnored(childRel, true, active)) continue;
-      walk(join(dir, name), childRel, active, acc);
+      if (isIgnored(childRel, true, active)) {
+        ignoredDirs.push(childRel);
+        continue;
+      }
+      walk(join(dir, name), childRel, active, acc, respectGitignore, ignoredDirs);
     } else if (entry.isFile()) {
       if (isIgnored(childRel, false, active)) continue;
       let stat;
