@@ -215,6 +215,11 @@ export interface IndexStats {
    * letting a whole subtree - a sibling repo, a generated tree - go missing
    * in silence. */
   ignoredDirs?: string[];
+  /** Files not chunked because their content was byte-identical to another
+   * file already chunked - the shallower path wins. A second checkout of the
+   * same repository (an agent worktree) is almost entirely this. Present only
+   * when there were any. */
+  duplicateFiles?: number;
   /** The file cap in effect for this build (context for `truncatedFiles`). */
   maxFiles: number;
   languages: Record<string, number>;
@@ -276,7 +281,7 @@ export async function indexRepoStaged(opts: IndexOptions): Promise<StagedIndexRu
 
   const scanned = await scanToSpill(opts, caps);
   const db = opts.db;
-  const { spill, files, chunkCount, languages, fileState, truncatedFiles, ignoredDirs } = scanned;
+  const { spill, files, chunkCount, languages, fileState, truncatedFiles, ignoredDirs, duplicateFiles } = scanned;
 
   // --- stage 1: swap in the keyword table -------------------------------------
   // One synchronous block (drop → create → append waves; sync spill reads, no
@@ -297,6 +302,7 @@ export async function indexRepoStaged(opts: IndexOptions): Promise<StagedIndexRu
       chunks: chunkCount,
       ...(truncatedFiles > 0 ? { truncatedFiles } : {}),
       ...(ignoredDirs.length > 0 ? { ignoredDirs } : {}),
+      ...(duplicateFiles > 0 ? { duplicateFiles } : {}),
       maxFiles: caps.maxFiles,
       languages,
       vectors: embedder ? "building" : "none",
@@ -401,6 +407,90 @@ interface Scanned {
   truncatedFiles: number;
   /** Directories `.gitignore` kept out of the walk (see `WalkResult`). */
   ignoredDirs: string[];
+  /** Candidate files whose content was byte-identical to one already chunked
+   * in this walk, and so were not chunked again. */
+  duplicateFiles: number;
+}
+
+/** Walk order, restated so a canonical choice does not depend on a map's key
+ * order: shallowest first, then lexicographic - the same rule `walkRepo` sorts
+ * by, so the path the build chunked is the path a later sync agrees on. */
+function shallowFirst(a: string, b: string): number {
+  const depth = a.split("/").length - b.split("/").length;
+  return depth !== 0 ? depth : a.localeCompare(b);
+}
+
+/** The paths that actually carry chunks: one per distinct content, the
+ * shallowest. Every other path holding that content was skipped at chunk time,
+ * so it has no rows in either table.
+ *
+ * This is what makes an incremental sync correct in the presence of duplicate
+ * content. The raw diff is per path, and a path is not the unit the index is
+ * keyed on once duplicates collapse: deleting the shallowest copy of a file
+ * that also exists in a worktree does not remove that content from the tree,
+ * it PROMOTES the surviving copy - which has no rows yet, is byte-identical to
+ * what it was, and would therefore look unchanged to a per-path diff. Diffing
+ * canonical sets instead makes the promotion an addition and the demotion a
+ * deletion, which is exactly what the tables need. */
+function canonicalPaths(files: Record<string, FileEntry>): Set<string> {
+  const seenHashes = new Set<string>();
+  const canonical = new Set<string>();
+  for (const path of Object.keys(files).sort(shallowFirst)) {
+    const hash = files[path].hash;
+    if (!hash || seenHashes.has(hash)) continue;
+    seenHashes.add(hash);
+    canonical.add(path);
+  }
+  return canonical;
+}
+
+/** Paths that may hold rows: the canonical ones, plus any a failed sync marked
+ * unapplied. An unapplied path's row state is by definition unknown - that is
+ * what the marker means - and the apply deletes before it appends, so treating
+ * it as possibly-present is both safe and what makes a retry re-apply it.
+ *
+ * They need naming separately because `canonicalPaths` cannot include them:
+ * every unapplied entry carries the same empty hash, so they would all collide
+ * on it and only the first would come back. */
+function pathsThatMayHoldRows(files: Record<string, FileEntry>): Set<string> {
+  const paths = canonicalPaths(files);
+  for (const [path, entry] of Object.entries(files)) {
+    if (entry.hash === UNAPPLIED_ENTRY.hash) paths.add(path);
+  }
+  return paths;
+}
+
+/** The per-path diff re-expressed over the paths that carry chunks.
+ *
+ * Three ways a canonical path needs work, and they need different signals, so
+ * neither one alone is enough:
+ *
+ *   - it is new to the tree, or a failed sync left it unapplied → its content
+ *     is not in the tables, or may not be;
+ *   - its content changed → the hash moved, which is the ordinary case;
+ *   - its content did NOT change but it was not canonical before → a shallower
+ *     copy went away and this one was PROMOTED. The hash is identical, so a
+ *     hash comparison cannot see it; only canonical membership can. Miss this
+ *     and deleting one of two identical files removes that content from the
+ *     index while a copy of the file is still sitting in the tree. */
+function effectiveDiff(
+  prev: FileState,
+  next: FileState,
+): { added: string[]; changed: string[]; deleted: string[] } {
+  const beforeCanonical = canonicalPaths(prev.files);
+  const beforeRows = pathsThatMayHoldRows(prev.files);
+  const after = canonicalPaths(next.files);
+  const added: string[] = [];
+  const changed: string[] = [];
+  const deleted: string[] = [];
+  for (const path of after) {
+    const before = prev.files[path];
+    if (!before) added.push(path);
+    else if (before.hash !== next.files[path].hash) changed.push(path);
+    else if (!beforeCanonical.has(path)) added.push(path);
+  }
+  for (const path of beforeRows) if (!after.has(path)) deleted.push(path);
+  return { added, changed, deleted };
 }
 
 /** Walk the tree and spool every chunk to the spill. The whole tree spools
@@ -427,6 +517,14 @@ async function scanToSpill(opts: IndexOptions, caps: IndexCaps): Promise<Scanned
   const fileState = emptyFileState();
   let files = 0;
   let chunkCount = 0;
+  // Content already chunked in this walk, hash → the path it was chunked
+  // under. `taken` is shallow-first, so the first path to carry a hash is the
+  // shallowest one and becomes canonical: a file shared with an agent worktree
+  // or a second checkout is indexed under the main tree's path, and the copy
+  // costs nothing. Only files a branch actually changed differ in content, and
+  // those are chunked normally under their own path.
+  const canonical = new Map<string, string>();
+  let duplicateFiles = 0;
   try {
     const chunkWriter = guardedWriter(spill.chunksPath);
     try {
@@ -438,13 +536,21 @@ async function scanToSpill(opts: IndexOptions, caps: IndexCaps): Promise<Scanned
           continue; // racing deletes are fine - index what's readable
         }
         // Every readable candidate is fingerprinted (binary ones too, so a later
-        // sync's stat walk doesn't keep rediscovering them as "added").
+        // sync's stat walk doesn't keep rediscovering them as "added"). A
+        // duplicate is fingerprinted for the same reason: the sync has to know
+        // it was seen and decided about, not treat it as new every time.
+        const hash = hashContent(buf);
         fileState.files[taken[i].path] = {
           size: taken[i].size,
           mtimeMs: taken[i].mtimeMs,
-          hash: hashContent(buf),
+          hash,
         };
         if (looksBinary(buf)) continue;
+        if (canonical.has(hash)) {
+          duplicateFiles++;
+          continue;
+        }
+        canonical.set(hash, taken[i].path);
         const fileChunks = await chunkFile(taken[i].path, buf.toString("utf8"));
         if (fileChunks.length === 0) continue;
         files++;
@@ -464,7 +570,7 @@ async function scanToSpill(opts: IndexOptions, caps: IndexCaps): Promise<Scanned
     spill.release(); // previous index untouched - just clean up and surface
     throw err;
   }
-  return { spill, files, chunkCount, languages, fileState, truncatedFiles, ignoredDirs };
+  return { spill, files, chunkCount, languages, fileState, truncatedFiles, ignoredDirs, duplicateFiles };
 }
 
 // --- the platform load -------------------------------------------------------------------
@@ -1029,8 +1135,13 @@ export async function syncRepo(opts: IndexOptions): Promise<SyncOutcome> {
       return undefined;
     }
   });
+  // The per-path diff tells us which FILES moved; the tables are keyed on the
+  // paths that carry chunks, which is one path per distinct content. Re-express
+  // it over those, so a duplicate never costs a chunk and a promoted copy is
+  // not mistaken for an unchanged one.
+  const effective = effectiveDiff(prev, diff.next);
 
-  if (diff.added.length === 0 && diff.changed.length === 0 && diff.deleted.length === 0) {
+  if (effective.added.length === 0 && effective.changed.length === 0 && effective.deleted.length === 0) {
     writeFileState(indexDirPath, diff.next); // refresh stat fingerprints
     // Files added or removed *beyond* the cap never show up in the diff (the
     // candidate list is already capped), so the truncation count can change
@@ -1065,7 +1176,7 @@ export async function syncRepo(opts: IndexOptions): Promise<SyncOutcome> {
     let chunksAdded = 0;
     const chunkWriter = guardedWriter(spill.chunksPath);
     try {
-      for (const path of [...diff.added, ...diff.changed]) {
+      for (const path of [...effective.added, ...effective.changed]) {
         let buf: Buffer;
         try {
           buf = readFileSync(join(root, path));
@@ -1104,7 +1215,7 @@ export async function syncRepo(opts: IndexOptions): Promise<SyncOutcome> {
     // runs; the local block is one synchronous stretch, so same-process
     // readers never see the deletes without the appends.
     onPhase?.("commit-text");
-    const touched = [...diff.added, ...diff.changed, ...diff.deleted];
+    const touched = [...effective.added, ...effective.changed, ...effective.deleted];
     const predicates = stalePredicates(touched);
     const platformApply = hosted
       ? applyPlatformDiff(
@@ -1173,9 +1284,9 @@ export async function syncRepo(opts: IndexOptions): Promise<SyncOutcome> {
 
     return {
       action: "synced",
-      filesAdded: diff.added.length,
-      filesChanged: diff.changed.length,
-      filesDeleted: diff.deleted.length,
+      filesAdded: effective.added.length,
+      filesChanged: effective.changed.length,
+      filesDeleted: effective.deleted.length,
       chunksAdded,
       chunksRemoved,
       files: nextManifest.files,
