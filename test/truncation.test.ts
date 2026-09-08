@@ -12,7 +12,7 @@ import { connect, type Connection } from "@infino-ai/infino";
 import { indexRepo, syncRepo } from "../src/core/indexer.js";
 import { readManifest, type Manifest } from "../src/core/manifest.js";
 import { search, partialIndex } from "../src/core/searcher.js";
-import { capWarning } from "../src/commands/index-cmd.js";
+import { capWarning, collapseIgnored, ignoreWarning, parseWarning } from "../src/commands/index-cmd.js";
 import type { IndexHandle } from "../src/core/context.js";
 import type { Embedder } from "../src/core/embedder.js";
 
@@ -77,6 +77,72 @@ describe("the cap warning", () => {
     const lines = capWarning(123_451, 500_000).split("\n");
     const advice = lines.find((l) => l.includes("--max-files"))!;
     expect(advice).not.toMatch(/\d,\d/);
+  });
+});
+
+describe("the gitignore warning", () => {
+  it("collapses a run of siblings into their parent, and leads with the shallow entries", () => {
+    // The shape measured on a real workspace: two entries that matter, buried
+    // among hundreds of leftover test temp directories under one parent.
+    const noise = Array.from({ length: 40 }, (_, i) => `wt-a/optimizer/tmp/.tmp${i}/acme/logs`);
+    const collapsed = collapseIgnored(["infino", "claude-plans", ...noise]);
+    // Shallowest first, so the sibling repositories are what a reader sees.
+    expect(collapsed[0]).toBe("claude-plans");
+    expect(collapsed[1]).toBe("infino");
+    // Forty entries, each with its OWN immediate parent, became one line -
+    // named at the deepest ancestor that actually covers them, so it says
+    // where they are instead of blaming the whole worktree.
+    expect(collapsed).toContain("wt-a/optimizer/tmp/ (40 directories)");
+    expect(collapsed).toHaveLength(3);
+  });
+
+  it("keeps an unrelated sibling out of the collapsed group", () => {
+    // The group collapses at .../tmp, so a directory elsewhere under the same
+    // worktree stays on its own line rather than disappearing into the count.
+    const noise = Array.from({ length: 5 }, (_, i) => `wt-a/optimizer/tmp/.tmp${i}/acme/logs`);
+    const collapsed = collapseIgnored([...noise, "wt-a/src/generated"]);
+    expect(collapsed).toContain("wt-a/src/generated");
+    expect(collapsed).toContain("wt-a/optimizer/tmp/ (5 directories)");
+  });
+
+  it("leaves a couple of siblings alone rather than collapsing them", () => {
+    const collapsed = collapseIgnored(["a/one", "a/two"]);
+    expect(collapsed).toEqual(["a/one", "a/two"]);
+  });
+
+  it("never collapses top-level entries into a bare slash", () => {
+    const collapsed = collapseIgnored(["one", "two", "three", "four"]);
+    expect(collapsed).toEqual(["four", "one", "three", "two"]);
+  });
+
+  it("names what was skipped, what it costs, and how to include it", () => {
+    const w = ignoreWarning(["infino", "claude-plans"]);
+    expect(w).toContain("2 directories were NOT indexed");
+    expect(w).toContain("claude-plans, infino");
+    expect(w).toContain("not proof it is absent");
+    expect(w).toContain("--no-ignore");
+    expect(w).toContain("CX_NO_IGNORE=1");
+  });
+});
+
+describe("the parse warning", () => {
+  it("says the chunks are degraded, not just that a parse failed", () => {
+    const w = parseWarning(20, false);
+    expect(w).toContain("20 files could not be parsed");
+    expect(w).toContain("fixed line windows");
+    expect(w).toContain("carry no symbol");
+    // Without the breaker, the blast radius is the failing files alone.
+    expect(w).not.toContain("EVERY file");
+  });
+
+  it("says so loudly when the breaker took the rest of the run down with it", () => {
+    const w = parseWarning(20, true);
+    expect(w).toContain("EVERY file after that point");
+    expect(w).toContain("re-index");
+  });
+
+  it("uses the singular for one file", () => {
+    expect(parseWarning(1, false)).toContain("1 file could not be parsed and was chunked");
   });
 });
 

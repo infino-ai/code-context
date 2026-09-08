@@ -67,7 +67,7 @@ import { StringDecoder } from "node:string_decoder";
 import { IndexSpec, type Connection, type OptimizeOptions, type RowRecord } from "@infino-ai/infino";
 import { APPEND_BATCH, EMBED_BATCH, TABLE, DEFAULT_CAPS, DEFAULT_HOSTED_EMBED_PROVIDER, type IndexCaps, type EmbedProvider } from "./config.js";
 import { walkRepo } from "./walker.js";
-import { shouldIndexFile, chunkFile, looksBinary, embedText, type Chunk } from "./chunker.js";
+import { shouldIndexFile, chunkFile, looksBinary, embedText, takeParseFailures, type Chunk } from "./chunker.js";
 import {
   readManifest,
   writeManifest,
@@ -220,6 +220,14 @@ export interface IndexStats {
    * same repository (an agent worktree) is almost entirely this. Present only
    * when there were any. */
   duplicateFiles?: number;
+  /** Files whose parse failed and were chunked as fixed windows instead of at
+   * syntactic boundaries: coarser spans, and no symbol on the chunk, so every
+   * search over them is worse. Present only when there were any. */
+  parseFailures?: number;
+  /** Set when the parse breaker tripped, which takes every file after it down
+   * the fixed-window path as well - so the degradation is not confined to the
+   * files that failed. */
+  parseBreakerTripped?: boolean;
   /** The file cap in effect for this build (context for `truncatedFiles`). */
   maxFiles: number;
   languages: Record<string, number>;
@@ -281,7 +289,18 @@ export async function indexRepoStaged(opts: IndexOptions): Promise<StagedIndexRu
 
   const scanned = await scanToSpill(opts, caps);
   const db = opts.db;
-  const { spill, files, chunkCount, languages, fileState, truncatedFiles, ignoredDirs, duplicateFiles } = scanned;
+  const {
+    spill,
+    files,
+    chunkCount,
+    languages,
+    fileState,
+    truncatedFiles,
+    ignoredDirs,
+    duplicateFiles,
+    parseFailures,
+    parseBreakerTripped,
+  } = scanned;
 
   // --- stage 1: swap in the keyword table -------------------------------------
   // One synchronous block (drop → create → append waves; sync spill reads, no
@@ -303,6 +322,8 @@ export async function indexRepoStaged(opts: IndexOptions): Promise<StagedIndexRu
       ...(truncatedFiles > 0 ? { truncatedFiles } : {}),
       ...(ignoredDirs.length > 0 ? { ignoredDirs } : {}),
       ...(duplicateFiles > 0 ? { duplicateFiles } : {}),
+      ...(parseFailures > 0 ? { parseFailures } : {}),
+      ...(parseBreakerTripped ? { parseBreakerTripped } : {}),
       maxFiles: caps.maxFiles,
       languages,
       vectors: embedder ? "building" : "none",
@@ -410,6 +431,11 @@ interface Scanned {
   /** Candidate files whose content was byte-identical to one already chunked
    * in this walk, and so were not chunked again. */
   duplicateFiles: number;
+  /** Files whose parse failed, and so were chunked as fixed windows. */
+  parseFailures: number;
+  /** Whether the parse breaker tripped, taking every later file in this run
+   * down the fixed-window path too. */
+  parseBreakerTripped: boolean;
 }
 
 /** Walk order, restated so a canonical choice does not depend on a map's key
@@ -570,7 +596,19 @@ async function scanToSpill(opts: IndexOptions, caps: IndexCaps): Promise<Scanned
     spill.release(); // previous index untouched - just clean up and surface
     throw err;
   }
-  return { spill, files, chunkCount, languages, fileState, truncatedFiles, ignoredDirs, duplicateFiles };
+  const parse = takeParseFailures();
+  return {
+    spill,
+    files,
+    chunkCount,
+    languages,
+    fileState,
+    truncatedFiles,
+    ignoredDirs,
+    duplicateFiles,
+    parseFailures: parse.failures,
+    parseBreakerTripped: parse.breakerTripped,
+  };
 }
 
 // --- the platform load -------------------------------------------------------------------

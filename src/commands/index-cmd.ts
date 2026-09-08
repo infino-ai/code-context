@@ -66,8 +66,106 @@ export function capWarning(truncatedFiles: number, maxFiles: number): string {
   ].join("\n");
 }
 
-/** Directories listed by name in the ignore warning before it summarises. */
+/** Entries listed by name in the ignore warning before it summarises. */
 const IGNORED_DIRS_SHOWN = 6;
+
+/** Siblings under one parent past which the warning names the parent and a
+ * count instead of every child. Two is not a crowd; a run of them is. */
+const COLLAPSE_SIBLINGS_AT = 3;
+
+/** Collapse runs of ignored siblings into their parent.
+ *
+ * Measured need: a real workspace produced ~750 ignored directories, almost
+ * all of them leftover test temp dirs like
+ * `wt-write-tokens/optimizer/tmp/.tmpzWhPmW/acme/logs`, among which the two
+ * that mattered - a gitignored sibling repository and the plans checkout -
+ * were indistinguishable. A warning nobody can read is a warning that does
+ * not work, which was the whole complaint it exists to answer. */
+export function collapseIgnored(dirs: string[]): string[] {
+  // Every proper ancestor of every entry, with how many entries it covers.
+  const covered = new Map<string, number>();
+  for (const dir of dirs) {
+    const parts = dir.split("/");
+    for (let i = 1; i < parts.length; i++) {
+      const ancestor = parts.slice(0, i).join("/");
+      covered.set(ancestor, (covered.get(ancestor) ?? 0) + 1);
+    }
+  }
+
+  // The DEEPEST ancestor covering enough entries, per entry. Deepest, not
+  // shallowest, and that is the difference between a useful line and a useless
+  // one: the real flood is `<worktree>/optimizer/tmp/.tmpXXXX/acme/logs`, where
+  // every entry has its own immediate parent, so grouping by parent collapses
+  // nothing - while collapsing to the shallowest ancestor would report
+  // `<worktree>/` and hide which part of it was skipped. The deepest ancestor
+  // that covers the group lands on `<worktree>/optimizer/tmp/`, which says
+  // where they are, and leaves an unrelated sibling elsewhere under that
+  // worktree listed on its own.
+  const chosenFor = new Map<string, string>();
+  const loose: string[] = [];
+  for (const dir of dirs) {
+    const parts = dir.split("/");
+    let chosen: string | undefined;
+    for (let i = parts.length - 1; i >= 1; i--) {
+      const ancestor = parts.slice(0, i).join("/");
+      if ((covered.get(ancestor) ?? 0) >= COLLAPSE_SIBLINGS_AT) {
+        chosen = ancestor;
+        break;
+      }
+    }
+    if (chosen === undefined) loose.push(dir);
+    else chosenFor.set(dir, chosen);
+  }
+
+  // Dissolve a group that turned out not to be one. An ancestor can cover
+  // enough entries in total while a particular entry is the only one that
+  // landed on it - a lone `wt-a/src/generated` beside forty `wt-a/optimizer/
+  // tmp/...` entries picks `wt-a`, because nothing deeper covers it, and
+  // reporting `wt-a/ (1 directory)` would hide the one path a reader needed.
+  // A group is a group at the threshold or not at all.
+  const members = new Map<string, string[]>();
+  for (const [dir, ancestor] of chosenFor) {
+    members.set(ancestor, [...(members.get(ancestor) ?? []), dir]);
+  }
+  const out = [...loose];
+  for (const [ancestor, group] of members) {
+    if (group.length >= COLLAPSE_SIBLINGS_AT) {
+      out.push(`${ancestor}/ (${fmtCount(group.length)} directories)`);
+    } else {
+      out.push(...group);
+    }
+  }
+  // Shallowest first: a top-level sibling repository is the entry worth
+  // reading, and a deep cluster of temp directories is not.
+  return out.sort((a, b) => {
+    const depth = a.split("/").length - b.split("/").length;
+    return depth !== 0 ? depth : a.localeCompare(b);
+  });
+}
+
+/** What a failed parse costs, said out loud. A file chunked by fixed windows
+ * instead of its syntax has boundaries that fall mid-function and carries no
+ * symbol, so `find --defines`, the ranked searches and the embed header are
+ * all worse over it - and the tree-sitter runtime's own account of the failure
+ * is a bare `Aborted()` on stderr with no path and no count. The breaker
+ * arm matters more than the count: it takes every later file down the same
+ * path, so the degradation is not confined to the files that actually failed. */
+export function parseWarning(parseFailures: number, breakerTripped: boolean): string {
+  const lines = [
+    yellow(
+      `! ${fmtCount(parseFailures)} ${parseFailures === 1 ? "file" : "files"} could not be parsed and ` +
+        `${parseFailures === 1 ? "was" : "were"} chunked as fixed line windows instead of at syntactic boundaries`,
+    ),
+    yellow("  those chunks carry no symbol and their boundaries fall wherever the window ends"),
+  ];
+  if (breakerTripped) {
+    lines.push(
+      yellow("  and the parser was switched off part-way: EVERY file after that point took the same path,"),
+      yellow("  not only the ones that failed - re-index to get syntactic chunking back over them"),
+    );
+  }
+  return lines.join("\n");
+}
 
 /** The `.gitignore` warning, for the same reason `capWarning` exists: a walk
  * that silently dropped a subtree makes every search over the index quietly
@@ -78,8 +176,9 @@ const IGNORED_DIRS_SHOWN = 6;
  * while anything is being skipped, because a `.gitignore` edit that newly
  * hides a tree looks like any other sync. */
 export function ignoreWarning(ignoredDirs: string[]): string {
-  const shown = ignoredDirs.slice(0, IGNORED_DIRS_SHOWN);
-  const rest = ignoredDirs.length - shown.length;
+  const collapsed = collapseIgnored(ignoredDirs);
+  const shown = collapsed.slice(0, IGNORED_DIRS_SHOWN);
+  const rest = collapsed.length - shown.length;
   const list = shown.join(", ") + (rest > 0 ? `, and ${fmtCount(rest)} more` : "");
   return [
     yellow(`! ${fmtCount(ignoredDirs.length)} ${ignoredDirs.length === 1 ? "directory was" : "directories were"} NOT indexed - .gitignore excludes ${ignoredDirs.length === 1 ? "it" : "them"}`),
@@ -209,6 +308,7 @@ export async function indexCmd(path: string | undefined, opts: IndexCmdOptions):
     // above it is a ✓, and the cap is the part of this index that is not one.
     if (final.truncatedFiles) console.log(capWarning(final.truncatedFiles, final.maxFiles));
     if (final.ignoredDirs?.length) console.log(ignoreWarning(final.ignoredDirs));
+    if (final.parseFailures) console.log(parseWarning(final.parseFailures, final.parseBreakerTripped ?? false));
   };
 
   await once();

@@ -244,12 +244,39 @@ let parser: TSParser | null = null;
 
 // Adversarial inputs (parser stress fixtures, generated code) can abort the
 // WASM runtime, and a post-abort runtime is undefined behavior - sometimes
-// every later call throws fast, sometimes it busy-loops. Count failures and
-// permanently fall back to fixed windows once the runtime looks unhealthy;
-// losing syntactic cuts on the tail of a hostile corpus is fine, hanging
+// every later call throws fast, sometimes it busy-loops. So there is a
+// breaker: past a run of failures, stop parsing and take fixed windows for the
+// rest. Losing syntactic cuts on the tail of a hostile corpus is fine, hanging
 // an index run is not.
+//
+// The breaker counts CONSECUTIVE failures, not cumulative ones, and that
+// distinction is the whole point. A cumulative count latches: twenty bad files
+// scattered through a large tree would disable syntactic chunking for every
+// file after them, so a workspace with a handful of parser fixtures in it
+// would quietly index tens of thousands of source files as fixed windows -
+// measured on a real 8,752-file workspace, where exactly twenty aborts were
+// enough to trip it. Twenty in a row means the runtime is broken; twenty
+// spread out means twenty bad files. A success resets the run.
+let consecutiveParseFailures = 0;
+const MAX_CONSECUTIVE_PARSE_FAILURES = 20;
+
+/** Files whose parse failed this run, and whether the breaker ever tripped.
+ * Reported by the indexer rather than kept here: a file chunked by fixed
+ * windows instead of its syntax has coarser boundaries and no symbol, which
+ * degrades every search over it, and a run that degrades has to say so. The
+ * WASM runtime also prints its own `Aborted()` to stderr on the way out, with
+ * no path and no count - these are what make that legible. */
 let parseFailures = 0;
-const MAX_PARSE_FAILURES = 20;
+let parseBreakerTripped = false;
+
+/** Read the parse-failure tally and reset it for the next run. */
+export function takeParseFailures(): { failures: number; breakerTripped: boolean } {
+  const taken = { failures: parseFailures, breakerTripped: parseBreakerTripped };
+  parseFailures = 0;
+  parseBreakerTripped = false;
+  consecutiveParseFailures = 0;
+  return taken;
+}
 
 function getRuntime() {
   if (!runtime) {
@@ -285,7 +312,10 @@ function getLanguage(grammar: string): Promise<unknown | null> {
 async function syntacticDefs(lang: string, content: string): Promise<DefSite[] | undefined> {
   const grammar = TS_GRAMMAR[lang];
   if (!grammar || content.length > PARSE_CAP_BYTES) return undefined;
-  if (parseFailures >= MAX_PARSE_FAILURES) return undefined;
+  if (consecutiveParseFailures >= MAX_CONSECUTIVE_PARSE_FAILURES) {
+    parseBreakerTripped = true;
+    return undefined;
+  }
   const language = await getLanguage(grammar);
   if (!language) return undefined;
   try {
@@ -304,9 +334,11 @@ async function syntacticDefs(lang: string, content: string): Promise<DefSite[] |
     const defs = DEF_TYPES[grammar];
     const sites: DefSite[] = [];
     collectDefs(tree.rootNode, defs, [], sites, 0);
+    consecutiveParseFailures = 0; // the runtime is healthy again
     return sites.sort((a, b) => a.row - b.row);
   } catch {
     parseFailures++;
+    consecutiveParseFailures++;
     parser = null; // a failed parser instance is not trusted again
     return undefined;
   }
