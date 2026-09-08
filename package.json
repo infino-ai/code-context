@@ -52,19 +52,19 @@
   },
   "dependencies": {
     "@huggingface/transformers": "^4.2.0",
-    "@infino-ai/infino": "^0.5.2",
+    "@infino-ai/infino": "^0.5.10",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@vscode/tree-sitter-wasm": "^0.3.1",
     "apache-arrow": "17.0.0",
     "commander": "^15.0.0",
-    "ignore": "^7.0.6",
+    "ignore": "^7.0.8",
     "undici": "^8.10.2",
-    "zod": "^4.4.3"
+    "zod": "^4.5.4"
   },
   "devDependencies": {
     "@types/node": "^26",
     "typescript": "^7",
-    "vitest": "^4"
+    "vitest": "^5"
   },
   "overrides": {
     "sharp": "^0.35.3",
