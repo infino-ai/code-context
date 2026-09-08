@@ -6,7 +6,7 @@
 
 </div>
 
-# SuperGrep
+# SuperGrep by Infino
 
 **Retrieval subagents for Claude Sonnet. Up to 10x faster and 50% lower Anthropic bill.**
 
