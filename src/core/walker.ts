@@ -12,6 +12,18 @@ import { INDEX_DIR_NAME } from "./config.js";
 
 // Vendored/generated directories skipped wherever they appear, gitignored or
 // not - indexing them helps no one and bloats every search.
+//
+// Agent worktrees under `.claude/worktrees/` are deliberately NOT here, and
+// the reason is worth writing down because adding them looks like an obvious
+// win. They are full second checkouts, so walking them duplicates the whole
+// tree - a fifth of one real index, measured - and every search then returns
+// the same code once per checkout. But a worktree holds a live branch, which
+// is the code most worth searching, and skipping it hides exactly that.
+//
+// So the duplication is a known cost here, not a solved problem: the fix
+// belongs at chunk time, by content, so identical files are chunked once and
+// only the files a branch actually changed add rows. Until that lands, a
+// repository with agent worktrees indexes each shared file once per checkout.
 const SKIP_DIRS = new Set([
   ".git", ".hg", ".svn", INDEX_DIR_NAME,
   "node_modules", "vendor", "dist", "build", "target", "out",

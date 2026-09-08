@@ -73,6 +73,31 @@ const OVERLAP_LINES = 10;
 // Files larger than this skip tree-sitter (parse cost) and use fixed windows.
 const PARSE_CAP_BYTES = 512 * 1024;
 
+// --- log-family record boundaries --------------------------------------------
+//
+// A log's unit is a record, and a record is often many lines: the message, then
+// the stack trace under it. Fixed windows cut at line 60 whatever is there, so
+// a trace gets split across two chunks and neither one holds the frame plus the
+// message that explains it. That is the pathological case for retrieval - the
+// query names the exception and the answer needs the frames.
+//
+// So logs get their own break rows, exactly as markdown does: break at record
+// starts and let `packSegments` group them, which never splits a segment unless
+// it alone exceeds MAX_LINES. A record and its trace stay together.
+
+/** Line shapes that begin a new record. A leading timestamp is the dominant
+ * signal across formats; a leading level covers the ones that print no time. */
+const LOG_RECORD_START =
+  /^\s{0,3}(?:[[(<]\s*)?(?:\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}|\d{2}:\d{2}:\d{2}[.,]?\d*\b|[A-Z][a-z]{2}\s{1,2}\d{1,2}\s\d{2}:\d{2}:\d{2}|(?:TRACE|DEBUG|INFO|WARN|WARNING|ERROR|FATAL|PANIC|CRITICAL)\b)/;
+
+/** The level named in a record's first line, used as the chunk's symbol so a
+ * hit says what it is and `sql` can filter on it. */
+const LOG_LEVEL = /\b(TRACE|DEBUG|INFO|WARN|WARNING|ERROR|FATAL|PANIC|CRITICAL)\b/;
+
+/** Characters of a record's first line scanned for a level: a level appears in
+ * the prefix, and scanning a whole 4 MB single-line record would not. */
+const LOG_LEVEL_SCAN_CHARS = 200;
+
 // Extension → language tag. Doubles as the indexing allowlist.
 const EXT_LANG: Record<string, string> = {
   md: "md", mdx: "md", rst: "rst", txt: "txt", adoc: "adoc", tex: "tex",
@@ -402,6 +427,39 @@ function markdownDefs(lines: string[]): DefSite[] {
   return sites;
 }
 
+/** Log family: break at record starts, so a record and the stack trace under it
+ * stay in one chunk.
+ *
+ * `jsonl` is the easy half - one record per line, and no line is a
+ * continuation, so every non-blank line is a break and `packSegments` groups
+ * whole records up to the target size. Plain logs are the interesting half: a
+ * line is a record start when it opens with a timestamp or a level, and
+ * everything else - indented frames, `at ...`, `Caused by:`, a bare traceback
+ * header - is a continuation of the record above it, which is exactly what
+ * keeps a trace attached to its message.
+ *
+ * A file with no recognisable record start yields no sites, and `chunkFile`
+ * falls back to fixed windows the way it does for an unparsed source file. */
+function logDefs(lines: string[], lang: string): DefSite[] {
+  const sites: DefSite[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.trim() === "") continue;
+    if (lang !== "jsonl" && !LOG_RECORD_START.test(line)) continue;
+    const level = line.slice(0, LOG_LEVEL_SCAN_CHARS).match(LOG_LEVEL);
+    sites.push({
+      row: i,
+      // The level is the one part of a record worth carrying as a symbol: it is
+      // what a reader filters on, and it is absent often enough that guessing
+      // something else would be noise.
+      name: level ? level[1].toUpperCase() : "",
+      kind: "record",
+      scope: "",
+    });
+  }
+  return sites;
+}
+
 /** The primary symbol/kind/scope for a chunk: the definition sites that *start*
  * within the chunk's line range. A continuation window of a large definition
  * has none, and that's fine - it just carries no symbol. */
@@ -433,6 +491,11 @@ export async function chunkFile(path: string, content: string): Promise<Chunk[]>
   if (lang === "md") {
     defs = markdownDefs(lines);
     spans = packSegments(lines, defs.map((d) => d.row));
+  } else if (lang === "log" || lang === "jsonl") {
+    // No grammar for either, so tree-sitter has nothing to offer; record
+    // boundaries are the structure. With none found, fall through to windows.
+    defs = logDefs(lines, lang);
+    spans = defs.length > 0 ? packSegments(lines, defs.map((d) => d.row)) : fixedWindows(lines, 1);
   } else {
     defs = await syntacticDefs(lang, content);
     spans = defs && defs.length > 0 ? packSegments(lines, defs.map((d) => d.row)) : fixedWindows(lines, 1);

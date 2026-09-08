@@ -149,6 +149,69 @@ describe("chunkFile", () => {
     const chunks = await chunkFile("data.toml", content);
     expect(chunks.every((c) => c.symbol === undefined)).toBe(true);
   });
+
+  it("keeps a log record and the stack trace under it in one chunk", async () => {
+    // The case fixed windows get wrong: the query names the exception and the
+    // answer needs the frames, so a cut between them costs the answer.
+    const trace = (n: number) =>
+      [
+        `2026-09-08T14:${String(n).padStart(2, "0")}:00.123Z ERROR api.gateway request failed`,
+        "java.lang.IllegalStateException: pool exhausted",
+        ...Array.from({ length: 24 }, (_, f) => `\tat com.infino.Pool.acquire(Pool.java:${f + 1})`),
+        "Caused by: java.net.SocketTimeoutException: connect timed out",
+      ].join("\n");
+    const log = [0, 1, 2, 3].map(trace).join("\n") + "\n";
+
+    const chunks = await chunkFile("var/log/api.log", log);
+    // Every chunk that holds the exception line also holds frames from it, and
+    // no chunk starts mid-trace.
+    const holding = chunks.filter((c) => c.content.includes("pool exhausted"));
+    expect(holding.length).toBeGreaterThan(0);
+    for (const c of holding) {
+      expect(c.content).toContain("at com.infino.Pool.acquire");
+      expect(c.content).toContain("Caused by:");
+    }
+    for (const c of chunks) {
+      expect(c.content.trimStart().startsWith("at com.infino")).toBe(false);
+    }
+  });
+
+  it("carries the log level as the chunk's symbol", async () => {
+    const log = [
+      "2026-09-08T14:00:00Z INFO api.gateway listening on 9110",
+      "2026-09-08T14:00:01Z ERROR api.gateway mint failed",
+      "  dispatch failure",
+    ].join("\n");
+    const chunks = await chunkFile("api.log", log);
+    expect(chunks[0].lang).toBe("log");
+    // Both records land in one chunk at this size, so the symbol names both
+    // levels found in it - what a reader filters on.
+    expect(chunks[0].symbol).toContain("ERROR");
+  });
+
+  it("never splits a jsonl record across chunks", async () => {
+    // One record per line and no continuations, so every line is a boundary
+    // and a chunk is always a whole number of records.
+    const rows = Array.from(
+      { length: 200 },
+      (_, i) => JSON.stringify({ ts: `2026-09-08T14:00:${String(i % 60).padStart(2, "0")}Z`, level: "info", seq: i }),
+    );
+    const chunks = await chunkFile("events.ndjson", rows.join("\n") + "\n");
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const c of chunks) {
+      for (const line of c.content.split("\n")) {
+        if (line.trim() === "") continue;
+        expect(() => JSON.parse(line)).not.toThrow();
+      }
+    }
+  });
+
+  it("falls back to fixed windows for a log with no recognisable records", async () => {
+    const content = Array.from({ length: 150 }, (_, i) => `unstructured blather ${i}`).join("\n");
+    const chunks = await chunkFile("weird.log", content);
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((c) => c.symbol === undefined)).toBe(true);
+  });
 });
 
 describe("embedText", () => {

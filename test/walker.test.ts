@@ -54,6 +54,20 @@ describe("walkRepo", () => {
     expect(paths.some((p) => p.startsWith(".git/"))).toBe(false);
   });
 
+  it("walks agent worktrees rather than skipping them", () => {
+    // A worktree holds a live branch, which is the code most worth searching.
+    // The duplication a second checkout brings is handled by content dedup at
+    // chunk time, not by hiding the tree - so the walk must surface it, and
+    // shallow-first ordering must put the main checkout's copy first so it is
+    // the one that gets chunked.
+    file("src/app.ts");
+    file(".claude/worktrees/wt-a/src/app.ts");
+    const paths = walkRepo(root).files.map((f) => f.path);
+    expect(paths).toContain("src/app.ts");
+    expect(paths).toContain(".claude/worktrees/wt-a/src/app.ts");
+    expect(paths.indexOf("src/app.ts")).toBeLessThan(paths.indexOf(".claude/worktrees/wt-a/src/app.ts"));
+  });
+
   it("sorts shallow-first so caps keep the important files", () => {
     file("deep/nested/far/away.ts");
     file("README.md");
