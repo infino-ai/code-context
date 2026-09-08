@@ -29,6 +29,8 @@ export interface IndexCmdOptions {
   maxFiles?: string;
   /** commander's `--no-ignore` lands here as `ignore: false`. */
   ignore?: boolean;
+  /** `--include <glob>`, repeatable: re-admit gitignored paths. */
+  include?: string[];
   json?: boolean;
 }
 
@@ -200,6 +202,23 @@ function respectGitignore(opts: IndexCmdOptions): boolean {
   return !process.env.CX_NO_IGNORE;
 }
 
+/** Patterns that re-admit gitignored paths: `--include`, repeatable, else
+ * `CX_INCLUDE` as a comma-separated list.
+ *
+ * The env var exists for the same reason `CX_NO_IGNORE` does and not for
+ * convenience: the server's auto-sync re-walks with whatever it can see, so a
+ * tree admitted by a flag the server never receives is deleted again on the
+ * next sync. `.cxignore` needs no equivalent - it is a file, so both the
+ * command and the server read it. */
+function includePatterns(opts: IndexCmdOptions): string[] {
+  if (opts.include && opts.include.length > 0) return opts.include;
+  const env = process.env.CX_INCLUDE ?? "";
+  return env
+    .split(",")
+    .map((p) => p.trim())
+    .filter((p) => p !== "");
+}
+
 export async function indexCmd(path: string | undefined, opts: IndexCmdOptions): Promise<void> {
   const target = openForIndexing(path);
   const { root, dir, db, hosted } = target;
@@ -228,6 +247,7 @@ export async function indexCmd(path: string | undefined, opts: IndexCmdOptions):
     analyzer,
     caps,
     respectGitignore: respectGitignore(opts),
+    include: includePatterns(opts),
     onPhase: (p) => {
       phase = p;
       if (!opts.json) progressLine(dim(`${PHASES[p]}…`));

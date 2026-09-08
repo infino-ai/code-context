@@ -110,6 +110,73 @@ describe("walkRepo", () => {
     expect(walkRepo(root).ignoredDirs).toEqual([]);
   });
 
+  it(".cxignore excludes from search without touching what git tracks", () => {
+    // The distinction the file exists for: a committed fixture directory is
+    // tracked by git and is still not worth searching, and .gitignore cannot
+    // say that without also untracking it.
+    file(".cxignore", "fixtures/\n*.golden\n");
+    file("fixtures/huge.json");
+    file("expected.golden");
+    file("src/app.ts");
+
+    const walked = walkRepo(root);
+    const paths = walked.files.map((f) => f.path);
+    expect(paths).toContain("src/app.ts");
+    expect(paths.some((p) => p.startsWith("fixtures/"))).toBe(false);
+    expect(paths).not.toContain("expected.golden");
+    // Not reported as a coverage gap: the caller wrote it down, and warning
+    // about it every run would train them to ignore the warning that matters.
+    expect(walked.ignoredDirs).toEqual([]);
+  });
+
+  it("keeps .cxignore in force with .gitignore turned off", () => {
+    file(".gitignore", "engine/\n");
+    file(".cxignore", "fixtures/\n");
+    file("engine/src/lib.rs");
+    file("fixtures/huge.json");
+    file("src/app.ts");
+
+    const paths = walkRepo(root, { respectGitignore: false }).files.map((f) => f.path);
+    // --no-ignore is about git's opinion, not the caller's.
+    expect(paths).toContain("engine/src/lib.rs");
+    expect(paths.some((p) => p.startsWith("fixtures/"))).toBe(false);
+  });
+
+  it("--include re-admits one gitignored tree without admitting the rest", () => {
+    file(".gitignore", "engine/\nplatform/\nbuilt-docs/\n");
+    file("engine/src/lib.rs");
+    file("platform/gateway.rs");
+    file("built-docs/index.html");
+    file("src/app.ts");
+
+    const walked = walkRepo(root, { include: ["engine/"] });
+    const paths = walked.files.map((f) => f.path);
+    expect(paths).toContain("engine/src/lib.rs");
+    expect(paths.some((p) => p.startsWith("platform/"))).toBe(false);
+    // And the ones still excluded are still reported, so the remaining gap is
+    // visible rather than looking solved.
+    expect(walked.ignoredDirs).toEqual(["built-docs", "platform"]);
+  });
+
+  it("--include cannot re-admit what .cxignore excluded", () => {
+    // Precedence that has to hold: git's opinion is overridable, the caller's
+    // own is not.
+    file(".gitignore", "fixtures/\n");
+    file(".cxignore", "fixtures/\n");
+    file("fixtures/huge.json");
+    file("src/app.ts");
+
+    const paths = walkRepo(root, { include: ["fixtures/"] }).files.map((f) => f.path);
+    expect(paths.some((p) => p.startsWith("fixtures/"))).toBe(false);
+  });
+
+  it("--include cannot re-admit the never-useful directories", () => {
+    file("node_modules/pkg/index.js");
+    file("src/app.ts");
+    const paths = walkRepo(root, { include: ["node_modules/"] }).files.map((f) => f.path);
+    expect(paths.some((p) => p.startsWith("node_modules/"))).toBe(false);
+  });
+
   it("indexes gitignored trees when asked not to honour .gitignore", () => {
     file(".gitignore", "engine/\n");
     file("engine/src/lib.rs");

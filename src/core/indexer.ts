@@ -173,6 +173,10 @@ export interface IndexOptions {
    * version-control", not "do not search". Off indexes them too; the walker's
    * own skip list (`.git`, `node_modules`, build output) applies either way. */
   respectGitignore?: boolean;
+  /** Patterns that re-admit paths `.gitignore` excluded (see `WalkOptions`).
+   * The narrow form of `respectGitignore: false`: one gitignored sibling
+   * repository or generated tree, rather than all of them. */
+  include?: string[];
   /** Platform table only: the FTS analyzer its `content` index is created
    * with, when the caller asks for one (--analyzer). Absent, a build keeps
    * the analyzer the table already has, per the platform manifest, and a
@@ -527,7 +531,7 @@ async function scanToSpill(opts: IndexOptions, caps: IndexCaps): Promise<Scanned
   const { root, indexDirPath, onPhase, onProgress } = opts;
 
   onPhase?.("scan");
-  const scan = walkRepo(root, { respectGitignore: opts.respectGitignore });
+  const scan = walkRepo(root, { respectGitignore: opts.respectGitignore, include: opts.include });
   const walked = scan.files.filter(
     (f) => shouldIndexFile(f.path) && f.size <= caps.maxFileBytes,
   );
@@ -1158,7 +1162,7 @@ export async function syncRepo(opts: IndexOptions): Promise<SyncOutcome> {
 
   // --- diff -------------------------------------------------------------------
   onPhase?.("scan");
-  const scan = walkRepo(root, { respectGitignore: opts.respectGitignore });
+  const scan = walkRepo(root, { respectGitignore: opts.respectGitignore, include: opts.include });
   const walked = scan.files.filter((f) => shouldIndexFile(f.path) && f.size <= caps.maxFileBytes);
   const candidates = walked.slice(0, caps.maxFiles);
   const truncatedFiles = walked.length - candidates.length;

@@ -121,6 +121,12 @@ hostedOptions(
     .option("--no-embed", "keyword index only - skip the vector stage")
     .option("--max-files <n>", `cap on files indexed - a tree over it indexes partially and says so (default ${DEFAULT_CAPS.maxFiles})`)
     .option("--no-ignore", "index gitignored files and directories too (or CX_NO_IGNORE=1, which cx mcp also honours)")
+    .option(
+      "--include <glob>",
+      "re-admit one gitignored path instead of all of them; repeatable (or CX_INCLUDE as a comma-separated list). A .cxignore file excludes from search without touching git, and needs no flag",
+      (v: string, acc: string[]) => [...acc, v],
+      [] as string[],
+    )
     .option("--json", "machine-readable stats"),
 )
   .option(
