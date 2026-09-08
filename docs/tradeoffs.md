@@ -1,9 +1,8 @@
-# Tradeoffs and honest limits
+# Tradeoffs
 
-SuperGrep is a ranked retrieval layer, not a do-everything code tool. The
-honest boundaries:
+SuperGrep is a ranked retrieval layer, not a do-everything code tool. 
 
-### The quality gap is real, and it is not close
+### Small language models do not reason the same as large language models
 
 A blind judge - `claude-opus-5` with the repository checked out - scores
 SuperGrep's answers against Sonnet's own tools on the same thirty-six
@@ -12,11 +11,11 @@ this symbol) and known-file (what does this file do), with no more
 unsupported claims than the baseline. It loses aggregation, comprehension and
 by-meaning, in both comparisons, with more unsupported claims overall - **9
 wins, 9 ties, 18 losses** against plain file tools; **7, 7, 21** against
-Sonnet's own Explore subagents. A model that reads the files writes an answer
+Sonnet's own Explore subagents. So SuperGreps answers are slightly worse, according
+to an Opus judge, than Sonnet alone. This does not mean that answers will appear
+worse in production, but worth flagging. A model that reads the files writes an answer
 with more of the code in it, and this judge rewards that. The full tables and
-categories are in the [README](../README.md#quality). What SuperGrep buys is
-cost and speed on the questions it wins outright, not parity on the ones it
-does not.
+categories are in the [README](../README.md#quality). 
 
 ### It does not do structural code intelligence
 
@@ -25,23 +24,6 @@ symbol-precise references. It ranks and retrieves content and aggregates by
 relevance. Tools that resolve structure (LSP servers, graph indexes) are
 complementary: MCP servers stack, so run both when you need both.
 
-### Pinpoint lookups are the smaller win
-
-Naming the one file a known symbol lives in is a single grep's job, and
-`find` does that job from the index: every matching line as `path:line`, per
-file counts, no file scanned. A grep hit still needs a follow-up read before
-it is a cited line; a `find` hit already is one, so on exact lookups the
-saving is the reads that never happen, not a change in what gets found.
-Measured against the grep path on eight such questions: -35% tokens, -17%
-dollars, -38% tool calls, with answer quality level under a blind judge (both
-arms held `find` and neither the file's content, so this is not the whole-
-surface comparison above). Ranked `search` is the wrong tool there: it
-returns chunks that carry their content, which is what pays off on "how does
-X work" and whole-repo questions and is dead weight when all you need is a
-path. The large savings are still on questions that span the repo, and each
-additional tool has a standing cost of about a thousand prompt tokens per
-turn plus the occasional wrong pick.
-
 ### The first index of a repo pays a one-time vector cost
 
 Keyword search is live in seconds, but the vector stage embeds every chunk
@@ -49,7 +31,7 @@ once with a local model, which takes on the order of a minute or two per few
 thousand chunks on a laptop. It runs in the background and only happens once;
 incremental syncs afterward re-embed only changed files.
 
-### Semantic ranking waits for vectors
+### Semantic ranking waits for vectors to be created
 
 Until the vector stage finishes, search is keyword-ranked (BM25) and says so.
 That is a graceful degrade, not a failure, but meaning-only queries with no
