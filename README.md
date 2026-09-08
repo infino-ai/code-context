@@ -48,7 +48,7 @@ It uses the whole surface rather than settling on one tool. Every call it made a
 All five are load-bearing, and the twenty calls that are not SuperGrep are mostly `Read`: it reads a file *after* the index has told it which one, rather than
 instead of asking. That is the shape you want - the index does the finding, and the model still opens what it needs to quote.
 
-## Code is the first corpus, not the only one
+## Go beyond code - index your entire laptop or any corpus
 
 SuperGrep looks across all the files a question needs, not just the source. Logs, test output, stack traces, CI output, configuration and docs go in beside the code,
 and the same five tools run over all of it: `find` for an exact stack frame, `search` for a failure you can only describe, `sql` to count and rank across a
@@ -60,6 +60,8 @@ table below measures on source code, on a corpus where the ratio is worse.
 
 So "why did this integration test start failing?" is one question over source, recent logs, test output, stack traces and config - and the retrieval, the
 fan-out and the fifty parallel investigations are the part that is farmed out.
+
+If you have files you need to access that don't fit on your laptop - write them out to Parquet files in object storage and point SuperGrep at them without ever loading them onto your laptop. You can search them together with your code or laptop files.
 
 ## The numbers
 
