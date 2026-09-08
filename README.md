@@ -10,7 +10,7 @@
 
 **Retrieval subagents for Claude Sonnet. Up to 10x faster and 50% lower Anthropic bill.**
 
-Most of what Sonnet time on in agent sessions goes towards reading files rather than reasoning about them. SuperGrep farms that half off to fast subagents running small language models (SLMs): the retrieval, the fan-out, the fifty "go look at this" jobs a hard task spawns. No config needed. Sonnet keeps the reasoning and decides when to use them.
+Most of what Claude spends time on in agent sessions goes towards reading files rather than reasoning about them. SuperGrep farms that half off to fast subagents running small language models (SLMs): the retrieval, the fan-out, the fifty "go look at this" jobs a hard task spawns. No config needed. Sonnet keeps the reasoning and decides when to use them.
 
 ![SuperGrep: find, search and sql locally, ask and explore in the cloud, one index in both places](docs/subagent/architecture.svg)
 
