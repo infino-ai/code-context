@@ -46,13 +46,29 @@ describe("the notice", () => {
 
   it("says which tools do not upload, and that no is a working outcome", () => {
     const text = consentNotice(PLATFORM, "my-repo", "/home/me/code");
-    expect(text).toContain("find, search and sql do not");
-    expect(text).toContain("send nothing anywhere");
+    expect(text).toContain("find, search and sql do not upload anything");
     expect(text).toContain("keep working if you say no");
   });
 
   it("tells someone whose code it is not to decline", () => {
     expect(consentNotice(PLATFORM, "r", "/r")).toContain("not yours to upload");
+  });
+
+  it("says an account will be created, and what it does and does not involve", () => {
+    // The second thing being agreed to on a first install. Somebody who would
+    // say yes to indexing might still not want an account made for them, so it
+    // is disclosed in the same breath rather than assumed from the first yes.
+    const text = consentNotice(PLATFORM, "my-repo", "/home/me/code", true);
+    expect(text).toContain("created for you");
+    expect(text).toContain("no email, no password and no card");
+    expect(text).toContain("free credit");
+    expect(text).toContain("readable only by you");
+    // And that running out is not an automatic renewal.
+    expect(text).toContain("a choice, not a renewal");
+  });
+
+  it("says nothing about an account when this machine already has one", () => {
+    expect(consentNotice(PLATFORM, "r", "/r")).not.toContain("created for you");
   });
 });
 

@@ -206,6 +206,7 @@ hostedOptions(
     .option("--npx", "force an npx entry pinned to this version, when the default would run this build")
     .option("--local-only", "write a local-tools-only entry even when this machine has an account")
     .option("--yes", "agree to uploading this repository's contents without being asked (for scripts with no terminal)")
+    .option("--platform <url>", "platform to ask for a free account on a first install, https://host (or CX_PLATFORM_URL)")
     .option("--uninstall", "remove the server entry instead of writing it")
     .option("--dry-run", "print the entry that would be written and change nothing")
     .option("-C, --path <dir>", "repo root (default: current directory)"),

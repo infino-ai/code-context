@@ -49,8 +49,8 @@ import { fileURLToPath } from "node:url";
 import { bold, dim, green, yellow } from "../core/output.js";
 import { API_KEY_ENV } from "../core/config.js";
 import { HostedError } from "../core/hosted.js";
-import { createDatabase, databaseNameFor } from "../core/account-api.js";
-import { readStoredAccount, readStoredKey } from "../core/keystore.js";
+import { createDatabase, databaseNameFor, requestTrial, type Trial } from "../core/account-api.js";
+import { readStoredAccount, readStoredKey, writeStoredAccount, writeStoredKey } from "../core/keystore.js";
 import { askUploadConsent, hasUploadConsent, recordUploadConsent, type ConsentDeps, type ConsentOutcome } from "../core/consent.js";
 import { signInHint } from "./login-cmd.js";
 
@@ -78,6 +78,28 @@ const MAX_LINK_HOPS = 40;
  * excludes the name, or the account lacks the entitlement. A repeated
  * decision, not a failed call. */
 const HTTP_FORBIDDEN = 403;
+
+/** This client's address has already taken its free trial. */
+const HTTP_CONFLICT = 409;
+
+/** This platform does not offer free accounts. Not a fault - a deployment
+ * decision, and the client says so rather than reporting an error. */
+const HTTP_NOT_IMPLEMENTED = 501;
+
+/** Where a first install asks for an account.
+ *
+ * Deliberately unset in the source. A no-flag install has to know where to go,
+ * and that address is the one thing that cannot be derived from anything on
+ * the machine - so it is named by `--platform`, or by CX_PLATFORM_URL, or it
+ * is not named and the install stays local. Shipping a default here would mean
+ * a published client contacts one particular host, and creates an account
+ * there, for anyone who runs `cx install` with no arguments: a release
+ * decision, not a source default. Set it at release. */
+const DEFAULT_PLATFORM_URL: string | undefined = undefined;
+
+/** Environment override for the platform a first install asks, for a shell
+ * installing into several repositories against one stack. */
+const PLATFORM_URL_ENV = "CX_PLATFORM_URL";
 
 export interface InstallCmdOptions {
   /** Remove our server entry instead of writing it. */
@@ -112,6 +134,9 @@ export interface InstallCmdOptions {
   /** Agree to uploading this repository's contents without being asked, for a
    * script or a CI job that has no terminal to answer on. */
   yes?: boolean;
+  /** The platform a first install asks for a free account, when this machine
+   * has none. Overrides CX_PLATFORM_URL. */
+  platform?: string;
 }
 
 /** Injected for tests: the platform, and the person at the terminal. */
@@ -390,7 +415,7 @@ async function resolvePlatform(
   const account = readStoredAccount();
   const apiKey = readStoredKey();
   if (!account || apiKey === undefined) {
-    return { notes: [`Local tools only (find / search / sql). For ask and explore, ${signInHint()}`] };
+    return await firstRun(opts, root, deps);
   }
 
   const baseUrl = account.baseUrl.replace(/\/+$/, "");
@@ -439,6 +464,109 @@ async function resolvePlatform(
           ],
         };
   }
+}
+
+/** The first install on a machine with no account: ask, then get one.
+ *
+ * This is the only path that creates an account, so the question comes before
+ * the request and covers both halves - an account will be made, and this
+ * repository's contents will be uploaded. A no, or no terminal, leaves a
+ * working local-only install and no account anywhere.
+ *
+ * Three answers from the platform are ordinary rather than broken, and each
+ * one leaves the local tools working:
+ *
+ * - `501`: this platform does not offer a trial. Nothing is wrong; a key has
+ *   to come from somewhere else, so say where.
+ * - `409`: this address has already had its free trial. Also not broken -
+ *   sign in to the account it made.
+ * - anything else: report it as the failure it is, and do not pretend a
+ *   local-only install was what was asked for.
+ */
+async function firstRun(
+  opts: InstallCmdOptions,
+  root: string,
+  deps: InstallDeps,
+): Promise<PlatformSetup> {
+  const named = opts.platform ?? process.env[PLATFORM_URL_ENV] ?? DEFAULT_PLATFORM_URL;
+  if (named === undefined || named === "") {
+    return {
+      notes: [
+        `Local tools only (find / search / sql). ask and explore need an Infino account, and this build names no platform to get one from.`,
+        `Point it at one: \`cx install --platform https://host\` (or set ${PLATFORM_URL_ENV}). Or, with a key already, ${signInHint()}`,
+      ],
+    };
+  }
+  const baseUrl = named.replace(/\/+$/, "");
+  const database = databaseNameFor(root);
+
+  if (opts.dryRun) {
+    return { db: `${baseUrl}/${database}`, notes: [`would ask ${baseUrl} for a free account and register ${database}`] };
+  }
+
+  const consent = opts.yes
+    ? "granted"
+    : await askUploadConsent(baseUrl, database, root, { ...deps.consent, newAccount: true });
+  if (consent === "declined") {
+    return { notes: ["Local tools only (find / search / sql), as you asked: no account was created and nothing left this machine."] };
+  }
+  if (consent === "no-terminal") {
+    return {
+      notes: [
+        `Local tools only (find / search / sql): ask and explore need an Infino account, and creating one uploads this repository's contents - there is no terminal here to ask.`,
+        `Re-run \`cx install\` from a terminal, or pass --yes to agree without being asked.`,
+      ],
+    };
+  }
+
+  let trial: Trial;
+  try {
+    trial = await requestTrial(baseUrl, database, { fetch: deps.fetch });
+  } catch (err) {
+    return { notes: trialRefusalNotes(err, baseUrl) };
+  }
+
+  const keyPath = writeStoredKey(trial.apiKey);
+  writeStoredAccount({
+    baseUrl,
+    ...(trial.consoleUrl ? { consoleUrl: trial.consoleUrl } : {}),
+    storedAt: new Date().toISOString(),
+    uploadConsentAt: new Date().toISOString(),
+  });
+
+  return {
+    db: `${baseUrl}/${trial.database}`,
+    notes: [
+      `created a free Infino account on ${baseUrl} with ${formatCredit(trial.creditCents)} of credit`,
+      `  key   ${keyPath} (mode 600) - no email, no password, no card`,
+      `  db    ${trial.database}`,
+      `Every other repository is now one flag-free \`cx install\`.`,
+    ],
+  };
+}
+
+/** Cents as a person reads money, so a receipt does not say "1000". */
+function formatCredit(cents: number): string {
+  return `$${(cents / 100).toFixed(2)}`;
+}
+
+/** What to print when a trial was not granted. Each of the three cases has a
+ * different next step, and none of them is "something went wrong". */
+function trialRefusalNotes(err: unknown, baseUrl: string): string[] {
+  const local = "Local tools only (find / search / sql)";
+  if (err instanceof HostedError && err.status === HTTP_NOT_IMPLEMENTED) {
+    return [`${local}: ${baseUrl} does not offer free accounts.`, `For ask and explore, ${signInHint()}`];
+  }
+  if (err instanceof HostedError && err.status === HTTP_CONFLICT) {
+    return [
+      `${local}: this machine's network has already used its free trial on ${baseUrl}.`,
+      `For ask and explore, ${signInHint()}`,
+    ];
+  }
+  return [
+    `${local}: could not get an account from ${baseUrl} - ${(err as Error).message}`,
+    `Re-run \`cx install\` to try again, or ${signInHint()}`,
+  ];
 }
 
 /** `--yes`: a script agreeing on its user's behalf. Recorded like any other

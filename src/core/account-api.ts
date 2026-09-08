@@ -53,6 +53,48 @@ export interface AccountDatabase {
 /** Whether `createDatabase` had to make it, or found it already there. */
 export type CreateOutcome = "created" | "exists";
 
+/** What a trial gave us: a key, the database it registered, the credit on the
+ * account, and where a human manages it. */
+export interface Trial {
+  apiKey: string;
+  database: string;
+  creditCents: number;
+  consoleUrl?: string;
+}
+
+/** Ask a platform for a trial account: `POST /v1/trial`, the one route that
+ * answers without a credential. Returns a bearer key, a registered database
+ * and a credit balance.
+ *
+ * Two refusals are ordinary rather than exceptional and callers are expected
+ * to read them off the status: `501` means this platform does not offer a
+ * trial (nothing is wrong, it just has to be asked for another way), and `409`
+ * means this machine's address has already had one. */
+export async function requestTrial(
+  baseUrl: string,
+  database: string,
+  opts: AccountApiOptions = {},
+): Promise<Trial> {
+  const body = await unauthenticatedCall(
+    "trial",
+    baseUrl,
+    "/trial",
+    JSON.stringify({ database }),
+    opts,
+  );
+  const parsed = JSON.parse(body) as Record<string, unknown>;
+  const apiKey = parsed.api_key;
+  if (typeof apiKey !== "string" || apiKey === "") {
+    throw new HostedError("trial", 0, `no api_key in the trial response: ${body.slice(0, 200)}`);
+  }
+  return {
+    apiKey,
+    database: typeof parsed.database === "string" && parsed.database !== "" ? parsed.database : database,
+    creditCents: typeof parsed.credit_cents === "number" ? parsed.credit_cents : 0,
+    ...(typeof parsed.console_url === "string" && parsed.console_url !== "" ? { consoleUrl: parsed.console_url } : {}),
+  };
+}
+
 /** The account's databases. Doubles as the key check: it is the lightest
  * authenticated call on the account plane, and its failure statuses are the
  * ones a person needs to hear about - 401 the key, 402 the billing details. */
@@ -105,6 +147,39 @@ export function databaseNameFor(root: string): string {
   const base = root.replace(/[/\\]+$/, "").split(/[/\\]/).pop() ?? "";
   const mapped = base.replace(/[^A-Za-z0-9_-]/g, "-").replace(/^[_-]+/, "").slice(0, MAX_DATABASE_NAME);
   return mapped === "" ? "repo" : mapped;
+}
+
+/** A request that carries no credential, because it is asking for one. The
+ * only such route is the trial; everything else on this plane is a bearer
+ * call. Kept separate from `accountCall` so no authenticated request can end
+ * up here by accident and no header of ours travels unauthenticated. */
+async function unauthenticatedCall(
+  op: string,
+  baseUrl: string,
+  path: string,
+  body: string,
+  opts: AccountApiOptions,
+): Promise<string> {
+  const fetchImpl = opts.fetch ?? fetch;
+  const timeoutMs = opts.timeoutMs ?? ACCOUNT_TIMEOUT_MS;
+  const url = `${baseUrl.replace(/\/+$/, "")}${API_PREFIX}${path}`;
+  let response: Response;
+  try {
+    response = await fetchImpl(url, {
+      method: "POST",
+      headers: { accept: "application/json", "content-type": "application/json" },
+      body,
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch (err) {
+    const timedOut = err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError");
+    throw new HostedError(op, 0, timedOut ? `no response within ${timeoutMs} ms` : `request failed: ${(err as Error).message}`, {
+      cause: err,
+    });
+  }
+  const text = await response.text();
+  if (!response.ok) throw new HostedError(op, response.status, serverMessage(response.status, text));
+  return text;
 }
 
 /** One account-plane request. Shares HostedError with the data plane so a

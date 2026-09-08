@@ -25,12 +25,17 @@
 
 import { createInterface } from "node:readline";
 import { bold, dim, yellow } from "./output.js";
-import { readStoredAccount, writeStoredAccount } from "./keystore.js";
+import { keyFilePath, readStoredAccount, writeStoredAccount } from "./keystore.js";
 
 /** What is disclosed before anything is uploaded. Written to be read once, by
- * someone who did not go looking for it. */
-export function consentNotice(baseUrl: string, database: string, root: string): string {
-  return [
+ * someone who did not go looking for it.
+ *
+ * `newAccount` adds the second thing being agreed to when this machine has no
+ * account yet: one will be created. That is a separate fact from the upload
+ * and it belongs in the same breath - somebody who would say yes to indexing
+ * might still not want an account made for them. */
+export function consentNotice(baseUrl: string, database: string, root: string, newAccount = false): string {
+  const lines = [
     `${bold("The cloud tools upload this repository's contents.")}`,
     ``,
     `  ask and explore run on ${baseUrl}, over a copy of the index kept there.`,
@@ -38,12 +43,25 @@ export function consentNotice(baseUrl: string, database: string, root: string): 
     `  itself, not just names or metrics - into the database ${bold(database)}.`,
     `  Every later sync sends what changed.`,
     ``,
-    `  find, search and sql do not. They read the index on this disk and`,
-    `  send nothing anywhere, and they keep working if you say no.`,
+  ];
+  if (newAccount) {
+    lines.push(
+      `  This machine has no Infino account, so one will be ${bold("created for you")} -`,
+      `  no email, no password and no card - with free credit to start on. Its`,
+      `  key is stored at ${keyFilePath()}, readable only by you.`,
+      `  When the credit runs out, ask and explore stop and say so; adding`,
+      `  billing details then is a choice, not a renewal you have agreed to.`,
+      ``,
+    );
+  }
+  lines.push(
+    `  find, search and sql do not upload anything. They read the index on`,
+    `  this disk, and they keep working if you say no.`,
     ``,
     dim(`  If this code is not yours to upload, say no. You can enable it later`),
     dim(`  with \`cx install\`, or never, and the local tools are unaffected.`),
-  ].join("\n");
+  );
+  return lines.join("\n");
 }
 
 /** Whether this machine has already agreed. */
@@ -70,6 +88,8 @@ export interface ConsentDeps {
   interactive?: boolean;
   /** Clock, so a test can assert the recorded timestamp. */
   now?: () => Date;
+  /** Whether agreeing also creates an account, which the notice must say. */
+  newAccount?: boolean;
 }
 
 /** Obtain consent for uploading `root` to `database` on `baseUrl`, printing
@@ -90,13 +110,19 @@ export async function askUploadConsent(
   const interactive = deps.interactive ?? (process.stdin.isTTY === true && process.stdout.isTTY === true);
   if (!interactive) return "no-terminal";
 
-  console.log(consentNotice(baseUrl, database, root));
+  console.log(consentNotice(baseUrl, database, root, deps.newAccount === true));
   console.log("");
-  const answer = (await (deps.ask ?? promptStdin)("Upload this repository's contents to Infino? [y/N] ")).trim().toLowerCase();
+  const question = deps.newAccount === true
+    ? "Create a free Infino account and upload this repository's contents? [y/N] "
+    : "Upload this repository's contents to Infino? [y/N] ";
+  const answer = (await (deps.ask ?? promptStdin)(question)).trim().toLowerCase();
   if (answer !== "y" && answer !== "yes") {
     console.log(yellow("Not uploading."));
     return "declined";
   }
+  // Recorded only when there is an account to record it against. With none
+  // yet, the caller records it after provisioning - so a trial that fails
+  // does not leave consent on file for an account that never existed.
   recordUploadConsent((deps.now ?? (() => new Date()))().toISOString());
   return "granted";
 }

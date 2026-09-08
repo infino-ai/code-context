@@ -161,14 +161,30 @@ Once cloned, in the directory you want to search:
 node /path/to/code-context/dist/cli.js install
 ```
 
-Open Claude Code there and ask a question.
+Open Claude Code there and ask a question. That is `find`, `search` and `sql`, with no account and no key.
 
-If you already have an Infino account, you can add a **database URL** for the repository and a **bearer key** in a protected file. If you do not yet have an account, SuperGrep will create a free account for you (with your permission) and store the data securely under ~/.infino. Please login and rotate your keys before you run SuperGrep in prod.
+For `ask` and `explore`, name the platform. If you do not yet have an account, SuperGrep will create a free account for you - it asks first, and tells you that the files' contents are uploaded - and stores the key under `~/.infino/key`, mode 600, readable only by you. No email, no password, no card. It registers this repository's database and enables all five tools:
+
+```bash
+node /path/to/code-context/dist/cli.js install --platform https://host
+```
+
+Every repository after that is the same command with no arguments at all: the stored key is found automatically, and no config file ever holds a key or a path to one. When the free credit runs out, `ask` and `explore` say so and tell you to add billing details and a card to the same account; the local three keep working throughout.
+
+If you already have an Infino account, sign in once instead - the key comes from a file or standard input, never from an argument:
+
+```bash
+node /path/to/code-context/dist/cli.js login --db https://host < keyfile
+```
+
+Or name the database and key explicitly, per repository:
 
 ```bash
 node /path/to/code-context/dist/cli.js install \
   --db https://host/<database> --api-key-file ~/.infino/key
 ```
+
+Please login and rotate your keys before you run SuperGrep in prod.
 
 ## Learn more
 

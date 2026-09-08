@@ -13,7 +13,7 @@
 // install` with no flags would pick up a real key and try to register a
 // database on a real platform - the suite would pass or fail depending on
 // whose laptop it ran on, and it would make network calls nobody asked for.
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -466,6 +466,148 @@ describe("cx install: nothing is uploaded without consent", () => {
     });
     expect(asked).toBe(false);
     expect(existsSync(configIn(root))).toBe(false);
+  });
+});
+
+describe("cx install: the first install on a machine with no account", () => {
+  const PLATFORM = "https://platform.example";
+
+  /** A platform whose /v1/trial answers `status` with `body`. */
+  const trialPlatform = (status: number, body: unknown) => {
+    const calls: Array<{ url: string; auth: string | null; body: string | undefined }> = [];
+    const impl = (async (url: string | URL | Request, init?: RequestInit) => {
+      calls.push({
+        url: String(url),
+        auth: new Headers(init?.headers as HeadersInit).get("authorization"),
+        body: init?.body === undefined ? undefined : String(init.body),
+      });
+      return new Response(typeof body === "string" ? body : JSON.stringify(body), { status });
+    }) as unknown as typeof fetch;
+    return { impl, calls };
+  };
+
+  const granted = (database: string) => ({
+    api_key: "inf_trial_abcdefghijklmnop",
+    database,
+    credit_cents: 1000,
+    console_url: "https://console.example",
+  });
+
+  const said = () => (console.log as unknown as { mock: { calls: unknown[][] } }).mock.calls.map((c) => String(c[0])).join("\n");
+  const dbOf = (dir: string) => {
+    const args: string[] = read(configIn(dir)).mcpServers["code-context"].args;
+    return args.includes("--db") ? args[args.indexOf("--db") + 1] : undefined;
+  };
+  const yes = { interactive: true, ask: async () => "y" };
+
+  it("asks for an account, stores the key at 0600, and enables all five tools", async () => {
+    const database = root.split("/").pop()!.replace(/[^A-Za-z0-9_-]/g, "-");
+    const { impl, calls } = trialPlatform(200, granted(database));
+    await installCmd({ path: root, platform: PLATFORM }, VERSION, { fetch: impl, consent: yes });
+
+    // One unauthenticated call: it is asking for the credential it does not have.
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toBe(`${PLATFORM}/v1/trial`);
+    expect(calls[0].auth).toBeNull();
+    expect(calls[0].body).toBe(JSON.stringify({ database }));
+
+    expect(readFileSync(join(accountDir, "key"), "utf8").trim()).toBe("inf_trial_abcdefghijklmnop");
+    expect(statSync(join(accountDir, "key")).mode & 0o777).toBe(0o600);
+    const stored = JSON.parse(readFileSync(join(accountDir, "account.json"), "utf8"));
+    expect(stored.baseUrl).toBe(PLATFORM);
+    // Kept because the out-of-credit message needs somewhere to send people.
+    expect(stored.consoleUrl).toBe("https://console.example");
+    expect(stored.uploadConsentAt).toBeTruthy();
+
+    expect(dbOf(root)).toBe(`${PLATFORM}/${database}`);
+    // The key is in its own file, never in a config that gets committed.
+    expect(JSON.stringify(read(configIn(root)))).not.toContain("inf_trial");
+  });
+
+  it("reports the credit as money, not as cents", async () => {
+    const { impl } = trialPlatform(200, granted("repo"));
+    await installCmd({ path: root, platform: PLATFORM }, VERSION, { fetch: impl, consent: yes });
+    expect(said()).toContain("$10.00 of credit");
+  });
+
+  it("creates nothing when the answer is no", async () => {
+    const { impl, calls } = trialPlatform(200, granted("repo"));
+    await installCmd({ path: root, platform: PLATFORM }, VERSION, {
+      fetch: impl,
+      consent: { interactive: true, ask: async () => "n" },
+    });
+    expect(calls).toEqual([]);
+    expect(existsSync(join(accountDir, "key"))).toBe(false);
+    expect(dbOf(root)).toBeUndefined();
+  });
+
+  it("creates nothing when there is no terminal to ask", async () => {
+    const { impl, calls } = trialPlatform(200, granted("repo"));
+    await installCmd({ path: root, platform: PLATFORM }, VERSION, {
+      fetch: impl,
+      consent: { interactive: false },
+    });
+    expect(calls).toEqual([]);
+    expect(existsSync(join(accountDir, "key"))).toBe(false);
+  });
+
+  it("stays local, and says what to do, when the platform offers no trial", async () => {
+    const { impl } = trialPlatform(501, { error: "this deployment does not offer a no-signup trial" });
+    await installCmd({ path: root, platform: PLATFORM }, VERSION, { fetch: impl, consent: yes });
+    expect(dbOf(root)).toBeUndefined();
+    expect(said()).toContain("does not offer free accounts");
+    expect(existsSync(join(accountDir, "key"))).toBe(false);
+  });
+
+  it("stays local, and says so plainly, when this address already had its trial", async () => {
+    const { impl } = trialPlatform(409, { error: "already used its free-trial allowance" });
+    await installCmd({ path: root, platform: PLATFORM }, VERSION, { fetch: impl, consent: yes });
+    expect(dbOf(root)).toBeUndefined();
+    expect(said()).toContain("already used its free trial");
+  });
+
+  it("does not claim a local-only install was intended when the call simply failed", async () => {
+    const { impl } = trialPlatform(500, { error: "boom" });
+    await installCmd({ path: root, platform: PLATFORM }, VERSION, { fetch: impl, consent: yes });
+    expect(said()).toContain("could not get an account");
+    expect(said()).toContain("try again");
+  });
+
+  it("stores no consent when the trial was refused, since there is no account to consent for", async () => {
+    const { impl } = trialPlatform(501, { error: "no trial here" });
+    await installCmd({ path: root, platform: PLATFORM }, VERSION, { fetch: impl, consent: yes });
+    expect(existsSync(join(accountDir, "account.json"))).toBe(false);
+  });
+
+  it("names no platform of its own, and says how to name one", async () => {
+    // Shipping a default here would mean a published client contacts one
+    // particular host, and creates an account there, for anyone who runs
+    // `cx install` with no arguments.
+    const { impl, calls } = trialPlatform(200, granted("repo"));
+    await installCmd({ path: root }, VERSION, { fetch: impl, consent: yes });
+    expect(calls).toEqual([]);
+    expect(said()).toContain("--platform");
+    expect(said()).toContain("CX_PLATFORM_URL");
+  });
+
+  it("takes the platform from the environment too", async () => {
+    process.env.CX_PLATFORM_URL = PLATFORM;
+    try {
+      const { impl, calls } = trialPlatform(200, granted("repo"));
+      await installCmd({ path: root }, VERSION, { fetch: impl, consent: yes });
+      expect(calls).toHaveLength(1);
+      expect(calls[0].url).toBe(`${PLATFORM}/v1/trial`);
+    } finally {
+      delete process.env.CX_PLATFORM_URL;
+    }
+  });
+
+  it("--dry-run asks for nothing", async () => {
+    const { impl, calls } = trialPlatform(200, granted("repo"));
+    await installCmd({ path: root, platform: PLATFORM, dryRun: true }, VERSION, { fetch: impl, consent: yes });
+    expect(calls).toEqual([]);
+    expect(existsSync(configIn(root))).toBe(false);
+    expect(existsSync(join(accountDir, "key"))).toBe(false);
   });
 });
 
