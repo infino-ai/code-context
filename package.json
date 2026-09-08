@@ -56,13 +56,13 @@
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@vscode/tree-sitter-wasm": "^0.3.1",
     "commander": "^15.0.0",
-    "ignore": "^7.0.6",
-    "zod": "^4.4.3"
+    "ignore": "^7.0.8",
+    "zod": "^4.5.4"
   },
   "devDependencies": {
     "@types/node": "^26",
     "typescript": "^7",
-    "vitest": "^4"
+    "vitest": "^5"
   },
   "overrides": {
     "sharp": "^0.35.3",
