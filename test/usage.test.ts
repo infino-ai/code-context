@@ -113,6 +113,36 @@ describe("find receipt", () => {
     expect(entry.matches).toBe(3);
     expect(entry.wholeFileTokens).toBeUndefined();
   });
+
+  it("prices the per-file counts in count mode, not the list it did not print", () => {
+    // Measured live at "~21.4k tokens" for 49 lines of counts, because the
+    // receipt was pricing the whole match list. The point of a receipt is that
+    // it is the thing that was returned.
+    const many = {
+      ...found,
+      total: 400,
+      files: 49,
+      byFile: Array.from({ length: 49 }, (_, i) => ({ path: `f${i}.ts`, count: 8 })),
+      matches: Array.from({ length: 400 }, (_, i) => ({
+        path: `f${i % 49}.ts`,
+        line: i,
+        text: "a fairly long matching line of source, as they tend to be",
+      })),
+    };
+    const counted = findEntry(many, true);
+    const listed = findEntry(many, false);
+    expect(counted.returnedTokens).toBeLessThan(listed.returnedTokens);
+    // The repo-wide total is still the total either way - it is what was
+    // counted, not what was printed.
+    expect(counted.matches).toBe(400);
+  });
+
+  it("claims no locations in count mode", () => {
+    // A per-file count is not a place to jump to, and putting one line number
+    // per file in the ledger would record a location the caller never saw.
+    const entry = findEntry(found, true);
+    expect(entry.hits).toBeUndefined();
+  });
 });
 
 describe("sql receipt", () => {

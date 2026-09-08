@@ -69,7 +69,7 @@ program
     "Local code search for AI coding agents - an index in plain files under .infino/.\n" +
       "Keyword search seconds after `cx index`; semantic and hybrid search when vectors\n" +
       "finish backfilling; SQL with relevance-ranked aggregation over the whole repo.\n" +
-      "With --db the same index is also kept on an infino-platform database, where the\n" +
+      "With --db the same index is also kept on an Infino database in the cloud, where the\n" +
       "ask and explore tools run.",
   )
   .version(CLI_VERSION)

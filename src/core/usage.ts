@@ -114,14 +114,25 @@ export function searchEntry(result: SearchResult, root: string): UsageEntry {
 
 /** A find returns one line per match, so what it cost is the serialized
  * matches themselves; the whole-file counterfactual is search's and does not
- * apply - grep never read the files whole either. */
-export function findEntry(result: FindResult): UsageEntry {
+ * apply - grep never read the files whole either.
+ *
+ * `counted` is the `-c` / count mode, where the caller gets the per-file
+ * counts and NOT the match list. Pricing the list there overstated the cost by
+ * the whole payload that was never printed - measured at "~21.4k tokens" for
+ * 49 lines of counts - and a receipt is only worth having if it is the thing
+ * that was returned. The mode has to be passed in because the result carries
+ * both shapes and cannot know which the caller rendered. */
+export function findEntry(result: FindResult, counted = false): UsageEntry {
+  const returned = counted ? jsonify(result.byFile) : jsonify(result.matches);
   return {
     ts: new Date().toISOString(),
     tool: "find",
     query: result.query,
-    returnedTokens: estTokens(jsonify(result.matches)),
-    hits: result.matches.map((m) => ({ path: m.path, startLine: m.line, endLine: m.line })),
+    returnedTokens: estTokens(returned),
+    // The places a caller would jump to. In count mode there are none: a
+    // per-file count is not a location, and claiming one line per file would
+    // put a line number on the receipt that the caller never saw.
+    ...(counted ? {} : { hits: result.matches.map((m) => ({ path: m.path, startLine: m.line, endLine: m.line })) }),
     matches: result.total,
   };
 }

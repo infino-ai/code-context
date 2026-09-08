@@ -60,7 +60,9 @@ export async function findCmd(text: string, opts: FindCmdOptions): Promise<void>
       limit: opts.limit === undefined ? undefined : Number(opts.limit),
     });
     if (receiptEnabled()) {
-      const entry = findEntry(result);
+      // `--count` prints the per-file counts and not the match list, so the
+      // receipt prices those.
+      const entry = findEntry(result, opts.count === true);
       recordUsage(handle.dir, entry);
       console.error(dim(formatReceipt(entry)));
     }

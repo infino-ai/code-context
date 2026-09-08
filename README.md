@@ -8,7 +8,9 @@
 
 # SuperGrep
 
-**Retrieval subagents for Claude Sonnet. Up to 10x faster and 50% lower Anthropic bill.**
+**Retrieval subagents for Claude Sonnet. Up to 10x faster and 50% lower Anthropic bill - on the questions that fan out.**
+
+Where it does not win: a blind judge prefers plain file tools on the questions that need a mechanism explained in prose. The [quality tables](#quality) are below, per category, with the losses in them. What SuperGrep wins is cost, latency and locating things.
 
 Much of what Claude spends time on during agent sessions is reading files rather than reasoning about them. SuperGrep routes file operations to fast subagents running small language models (SLMs): the lookup, the fan-out, the fifty "go look at this" jobs a hard task spawns. No config needed. Sonnet keeps the reasoning and decides when to use them.
 
@@ -31,7 +33,9 @@ context from the index can do it at a fraction of the cost and fifty at a time. 
 ### Sonnet chooses it on its own
 
 When offered SuperGrep tools alongside its own file tools, **Sonnet chooses to use SuperGrep 76% of the time**, and
-its first choice is always SuperGrep in every category of question:
+its first move is a SuperGrep tool on **33 of the 36 questions** - every ranking question, every how-does-it-work
+question, and seven of the eight lookups. The three it opened elsewhere were one pinpoint question (`Grep`) and two
+where the file was already named (`Glob`, `Read`):
 
 ![What Sonnet reaches for first, by question type](docs/subagent/first-choice.svg)
 
@@ -48,15 +52,18 @@ It uses the whole surface rather than settling on one tool. Every call it made a
 All five are load-bearing, and the twenty calls that are not SuperGrep are mostly `Read`: it reads a file *after* the index has told it which one, rather than
 instead of asking. That is the shape you want - the index does the finding, and the model still opens what it needs to quote.
 
-## Go beyond code - index your entire laptop or any corpus
+## Beyond code: logs, traces and any corpus
 
-SuperGrep looks across all the files a question needs, not just the source. Logs, test output, stack traces, CI output, configuration and docs go in beside the code,
-and the same five tools run over all of it: `find` for an exact stack frame, `search` for a failure you can only describe, `sql` to count and rank across a
-run, `explore` for the question that spans several of them at once.
+**Not measured yet, and worth saying so before the argument for it.** Every number on this page is from source code. No log corpus has been benchmarked and no
+judge has scored an answer over one, so what follows is a direction the evidence points at rather than a result.
 
-That matters most where a frontier model is weakest. A log is the pathological case for a context window - large, repetitive, mostly irrelevant, and paid for
-again on every turn it stays in the transcript. An index collapses it to the spans that matter before Sonnet sees any of it. It is the same trade the cost
-table below measures on source code, on a corpus where the ratio is worse.
+SuperGrep indexes more than source. Logs, test output, stack traces, CI output, configuration and docs go in beside the code - `.log`, `.out`, `.err`, `.jsonl`
+and `.ndjson` are indexed at record boundaries, so a stack trace stays with the message that explains it - and the same five tools run over all of it: `find` for
+an exact stack frame, `search` for a failure you can only describe, `sql` to count and rank across a run, `explore` for the question that spans several at once.
+
+The argument is that this is where a frontier model is weakest. A log is the pathological case for a context window - large, repetitive, mostly irrelevant, and
+paid for again on every turn it stays in the transcript. An index collapses it to the spans that matter before Sonnet sees any of it. That is the same trade the
+cost table below measures on source code, on a corpus where the ratio should be worse - "should" being the part nobody has run yet.
 
 So "why did this integration test start failing?" is one question over source, recent logs, test output, stack traces and config - and the retrieval, the
 fan-out and the fifty parallel investigations are the part that is farmed out.
@@ -134,17 +141,19 @@ its turn limit and is left out rather than counted):
 
 ### Fanout
 
-When a questions spawns several agents at once, with one exploration each. Of course, this always depends on workload so YMMV.
+When a question spawns several agents at once, with one exploration each. This depends on the workload, so YMMV.
 
 **Ten at once: 10 of 10 in 31 s**, against Sonnet's ten Explore subagents at
-316 s. Ten times faster.
+316 s. Ten times faster. That one is measured.
 
-**Fifty at once: 31 s**, against **1,218 s** for fifty Sonnet Explore
-subagents.[^fifty]
+**Fifty at once** has never been run. Projecting from the ten-wide burst and
+one exploration's measured token cost puts it near the same 31 s against
+**1,218 s** for fifty Sonnet Explore subagents - but it is arithmetic, not a
+result, and the capacity to test it has not been available.[^fifty]
 
 ![Parallel exploration](docs/subagent/fanout.svg)
 
-[^fifty]: From the measured time and token cost of one exploration.
+[^fifty]: Projected from the measured time and token cost of one exploration, not run at fifty wide. The ask it implies is a token rate rather than a slot count - roughly 13M tokens a minute against the 500k-a-minute window the measured runs had - which is why it has not been tested.
 
 ## Install
 
@@ -200,7 +209,7 @@ node /path/to/code-context/dist/cli.js install \
   --db https://host/<database> --api-key-file ~/.infino/key
 ```
 
-Please login and rotate your keys before you run SuperGrep in prod.
+**Before you point this at anything that matters:** sign in with your own account rather than staying on the anonymous trial key, and rotate the key afterwards. A trial key has no email behind it, so there is no way to recover or revoke it as yourself.
 
 ## Indexing it yourself
 
