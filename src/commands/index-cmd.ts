@@ -45,6 +45,25 @@ const WATCH_DEBOUNCE_MS = 2000;
 /** Languages listed in the summary line. */
 const LANGUAGES_SHOWN = 8;
 
+/** The file cap's warning, worded in one place because both a build and a sync
+ * have to say it and it has to say the same thing. A count alone reads as a
+ * statistic; what the reader needs is that the index is now incomplete, that
+ * searches over it will be too, and the one number to change. Printed on every
+ * build and every sync while the tree is over the cap - it is not a
+ * first-run notice, because the run that adds the file that crosses the cap
+ * looks like any other sync. */
+export function capWarning(truncatedFiles: number, maxFiles: number): string {
+  // The suggested cap is the whole tree as it stands, not a round number: it
+  // is the one value that indexes everything, and it is pasteable, which is
+  // why it goes in unformatted (`--max-files 623,451` parses as NaN).
+  const wholeTree = maxFiles + truncatedFiles;
+  return [
+    yellow(`! ${fmtCount(truncatedFiles)} files were NOT indexed - the tree is over the ${fmtCount(maxFiles)}-file cap`),
+    yellow("  every search over this index is incomplete: a missing match is not proof it is absent"),
+    yellow(`  raise the cap and re-index:  cx index --max-files ${wholeTree}   (or CX_MAX_FILES=${wholeTree})`),
+  ].join("\n");
+}
+
 export async function indexCmd(path: string | undefined, opts: IndexCmdOptions): Promise<void> {
   const target = openForIndexing(path);
   const { root, dir, db, hosted } = target;
@@ -100,7 +119,7 @@ export async function indexCmd(path: string | undefined, opts: IndexCmdOptions):
       const outcome = await syncRepo(baseOpts);
       if (outcome.action !== "rebuild-required") {
         progressDone();
-        printSync(outcome, opts.json);
+        printSync(outcome, caps.maxFiles, opts.json);
         return;
       }
       if (!opts.json && outcome.reason !== "no prior index state") {
@@ -119,9 +138,6 @@ export async function indexCmd(path: string | undefined, opts: IndexCmdOptions):
       progressDone();
       const t = run.text;
       console.log(green("✓") + ` keyword search live - ${fmtCount(t.chunks)} chunks from ${fmtCount(t.files)} files in ${fmtMs(t.indexMs)}`);
-      if (t.truncatedFiles) {
-        console.log(yellow(`! ${fmtCount(t.truncatedFiles)} files over the ${fmtCount(caps.maxFiles)}-file cap were skipped (raise with --max-files)`));
-      }
     }
     const final = await run.completion;
     await buildEmb?.dispose?.()?.catch(() => undefined);
@@ -151,6 +167,9 @@ export async function indexCmd(path: string | undefined, opts: IndexCmdOptions):
       .map(([lang, n]) => `${lang} ${fmtCount(n)}`)
       .join(" · ");
     if (langs) console.log(dim(`chunks by language: ${langs}`));
+    // Last, so it is what is still on screen when the run ends. Everything
+    // above it is a ✓, and the cap is the part of this index that is not one.
+    if (final.truncatedFiles) console.log(capWarning(final.truncatedFiles, final.maxFiles));
   };
 
   await once();
@@ -169,7 +188,7 @@ export async function indexCmd(path: string | undefined, opts: IndexCmdOptions):
       try {
         const outcome = await syncRepo(baseOpts);
         progressDone();
-        if (outcome.action === "synced") printSync(outcome, opts.json);
+        if (outcome.action === "synced") printSync(outcome, caps.maxFiles, opts.json);
       } catch (err) {
         console.error(yellow(`sync failed: ${(err as Error).message}`));
       } finally {
@@ -194,24 +213,28 @@ function hostedCost(stats: { hosted?: IndexStats["hosted"] }): string {
   return dim(` (${appends}${h.writeTokens !== undefined ? `, ${h.writeTokens} write tokens` : ""})`);
 }
 
-function printSync(outcome: SyncResult, json?: boolean): void {
+function printSync(outcome: SyncResult, maxFiles: number, json?: boolean): void {
   if (json) {
     console.log(JSON.stringify(outcome, null, 2));
     return;
   }
   if (outcome.action === "noop") {
     console.log(green("✓") + ` index up to date - ${fmtCount(outcome.chunks)} chunks from ${fmtCount(outcome.files)} files ${dim(`(checked in ${fmtMs(outcome.tookMs)})`)}`);
-    return;
+  } else {
+    const parts = [
+      outcome.filesAdded ? `${fmtCount(outcome.filesAdded)} added` : "",
+      outcome.filesChanged ? `${fmtCount(outcome.filesChanged)} changed` : "",
+      outcome.filesDeleted ? `${fmtCount(outcome.filesDeleted)} deleted` : "",
+    ].filter(Boolean);
+    console.log(
+      green("✓") +
+        ` synced in ${fmtMs(outcome.tookMs)} - ${parts.join(", ")} ` +
+        dim(`(+${fmtCount(outcome.chunksAdded)}/-${fmtCount(outcome.chunksRemoved)} chunks, ${fmtCount(outcome.chunks)} total${outcome.vectors === "ready" ? ", vectors current" : ""}${outcome.hosted ? ", platform table too" : ""})`) +
+        hostedCost(outcome),
+    );
   }
-  const parts = [
-    outcome.filesAdded ? `${fmtCount(outcome.filesAdded)} added` : "",
-    outcome.filesChanged ? `${fmtCount(outcome.filesChanged)} changed` : "",
-    outcome.filesDeleted ? `${fmtCount(outcome.filesDeleted)} deleted` : "",
-  ].filter(Boolean);
-  console.log(
-    green("✓") +
-      ` synced in ${fmtMs(outcome.tookMs)} - ${parts.join(", ")} ` +
-      dim(`(+${fmtCount(outcome.chunksAdded)}/-${fmtCount(outcome.chunksRemoved)} chunks, ${fmtCount(outcome.chunks)} total${outcome.vectors === "ready" ? ", vectors current" : ""}${outcome.hosted ? ", platform table too" : ""})`) +
-      hostedCost(outcome),
-  );
+  // Last, for the same reason as on a build: a sync's ✓ reads as an index that
+  // is up to date, and while the tree is over the cap it is up to date and
+  // incomplete at the same time.
+  if (outcome.truncatedFiles) console.log(capWarning(outcome.truncatedFiles, maxFiles));
 }

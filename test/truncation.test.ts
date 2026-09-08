@@ -12,6 +12,7 @@ import { connect, type Connection } from "@infino-ai/infino";
 import { indexRepo, syncRepo } from "../src/core/indexer.js";
 import { readManifest, type Manifest } from "../src/core/manifest.js";
 import { search, partialIndex } from "../src/core/searcher.js";
+import { capWarning } from "../src/commands/index-cmd.js";
 import type { IndexHandle } from "../src/core/context.js";
 import type { Embedder } from "../src/core/embedder.js";
 
@@ -56,6 +57,26 @@ describe("partialIndex", () => {
     });
     expect(p!.note).toContain("3 file");
     expect(p!.note).toContain("10-file cap");
+  });
+});
+
+describe("the cap warning", () => {
+  it("names what was lost, what it costs, and the number that fixes it", () => {
+    const w = capWarning(123_451, 500_000);
+    expect(w).toContain("123,451 files were NOT indexed");
+    expect(w).toContain("500,000-file cap");
+    expect(w).toContain("incomplete");
+    // The suggested cap is the whole tree: cap + skipped.
+    expect(w).toContain("--max-files 623451");
+    expect(w).toContain("CX_MAX_FILES=623451");
+  });
+
+  it("keeps the pasteable numbers free of thousands separators", () => {
+    // `--max-files 623,451` reaches Number() as NaN, so the advice would be
+    // worse than no advice. Only the prose is formatted.
+    const lines = capWarning(123_451, 500_000).split("\n");
+    const advice = lines.find((l) => l.includes("--max-files"))!;
+    expect(advice).not.toMatch(/\d,\d/);
   });
 });
 

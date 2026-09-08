@@ -93,13 +93,21 @@ no-op. The MCP server also auto-syncs in the background as queries arrive.
 
 ### What happens on a repo too big to index fully?
 
-Indexing caps how many files it takes (`CX_MAX_FILES`, default 20,000); files
-past the cap are left out. When that happens the index is marked partial:
-every `find`, `search`, and `sql` result carries a `partial` note with how many files
-were skipped and the cap in effect, so an agent treats a missing match as
-"maybe not indexed" rather than "not in the repo." `cx status` shows the same,
-and `cx search` prints a warning. Raise `CX_MAX_FILES` (CLI: `--max-files`)
-and re-index for full coverage.
+Indexing caps how many files it takes (`CX_MAX_FILES`, default 500,000); files
+past the cap are left out. The cap is not there to bound memory - chunks and
+vectors stream to disk, so nothing holds the tree at once - it is there so an
+`index` aimed at the wrong directory stops instead of reading everything it can
+reach. Half a million files is past any repository and past a laptop's own code
+and logs, so a corpus you meant to index goes in whole.
+
+When a tree does reach the cap, the index is marked partial and nothing about
+it is quiet: `cx index` prints a warning on that build and on every sync after
+it, naming the files skipped and the exact `--max-files` value that would
+cover the whole tree. `cx status` reports it, and every `find`, `search` and
+`sql` result carries a `partial` note with the files skipped and the cap in
+effect, so an agent treats a missing match as "maybe not indexed" rather than
+"not in the repo." Raise `CX_MAX_FILES` (CLI: `--max-files`) and re-index for
+full coverage.
 
 ### What tools does the MCP server expose?
 

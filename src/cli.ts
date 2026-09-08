@@ -28,6 +28,7 @@ import {
   DEFAULT_SUBAGENT_K,
   DEFAULT_SUBAGENT_MAX_TURNS,
   DEFAULT_SUBAGENT_MAX_WALL_SECS,
+  DEFAULT_CAPS,
   configureHosted,
   hostedSettingsFromFlags,
   type HostedFlags,
@@ -112,7 +113,7 @@ hostedOptions(
     .option("--full", "force a full rebuild instead of an incremental sync")
     .option("-w, --watch", "keep watching the tree and sync on changes")
     .option("--no-embed", "keyword index only - skip the vector stage")
-    .option("--max-files <n>", "cap on files indexed (default 20000)")
+    .option("--max-files <n>", `cap on files indexed - a tree over it indexes partially and says so (default ${DEFAULT_CAPS.maxFiles})`)
     .option("--json", "machine-readable stats"),
 )
   .option(

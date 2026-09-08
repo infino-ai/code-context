@@ -324,8 +324,16 @@ export interface IndexCaps {
   maxFileBytes: number;
 }
 
+/** The file cap is not a memory bound - chunks spool to an on-disk NDJSON
+ * spill and vectors to a packed-f32 one, so no stage holds the tree at once.
+ * It is a stop on the wrong target: an `index` aimed at a home directory or at
+ * `/` would otherwise read and embed everything it can reach, for hours, and
+ * only say so afterwards. Half a million files is past any repository and past
+ * a laptop's own code, logs and docs, so a corpus somebody meant to index goes
+ * in whole - and a tree that does reach the cap now says so on every build and
+ * every sync, with the number to raise. */
 export const DEFAULT_CAPS: IndexCaps = {
-  maxFiles: Number(process.env.CX_MAX_FILES ?? 20000),
+  maxFiles: Number(process.env.CX_MAX_FILES ?? 500_000),
   maxFileBytes: Number(process.env.CX_MAX_FILE_BYTES ?? 1024 * 1024),
 };
 

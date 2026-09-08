@@ -85,7 +85,7 @@ network.
 | `CX_INDEX_DIR` | `<repo>/.infino` | where the local index lives |
 | `CX_SEARCH_K` | 10 | default number of hits `search` returns (also settable per call and via the CLI `-k` flag) |
 | `CX_FIND_LIMIT` | 500 | default number of matching lines `find` returns, which is also the hard cap; `total` and `byFile` are complete either way |
-| `CX_MAX_FILES` / `CX_MAX_FILE_BYTES` | 20000 / 1MB | indexing caps (files over the cap are left out and the tools flag the index as partial) |
+| `CX_MAX_FILES` / `CX_MAX_FILE_BYTES` | 500000 / 1MB | indexing caps (files over the file cap are left out; `cx index` warns on every build and sync while the tree is over it, and the tools flag the index as partial) |
 | `CX_ROOT` | current directory | default repository root for the MCP server / CLI when not run from the repository (each tool call can override it with a `path` argument) |
 | `CX_AUTO_INDEX` | on | `0` makes a query on an unindexed repository error instead of building the index inline |
 | `CX_AUTO_SYNC` | on | `0` disables the MCP server's background staleness sync |
