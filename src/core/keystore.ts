@@ -65,6 +65,16 @@ export interface StoredAccount {
   /** When this account was stored, ISO 8601, so `cx status` can say how old
    * the sign-in is without asking the platform. */
   storedAt: string;
+  /** When the person at this machine agreed that indexed content may be sent
+   * to the platform, ISO 8601. Absent means they have not been asked, or said
+   * no - and the cloud tools stay off until it is set, because the thing being
+   * consented to is source code leaving the machine.
+   *
+   * It is recorded per machine rather than per repository: it is a person's
+   * decision about a platform, and asking again for every checkout trains
+   * people to stop reading it. Each install still names the repository it is
+   * enabling, so it is never silent about what is being sent. */
+  uploadConsentAt?: string;
 }
 
 /** The account directory: `$CX_ACCOUNT_DIR`, else `~/.infino`.
@@ -159,12 +169,13 @@ export function readStoredAccount(): StoredAccount | undefined {
     return undefined;
   }
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
-  const { baseUrl, consoleUrl, storedAt } = parsed as Record<string, unknown>;
+  const { baseUrl, consoleUrl, storedAt, uploadConsentAt } = parsed as Record<string, unknown>;
   if (typeof baseUrl !== "string" || baseUrl === "") return undefined;
   return {
     baseUrl,
     ...(typeof consoleUrl === "string" && consoleUrl !== "" ? { consoleUrl } : {}),
     storedAt: typeof storedAt === "string" ? storedAt : "",
+    ...(typeof uploadConsentAt === "string" && uploadConsentAt !== "" ? { uploadConsentAt } : {}),
   };
 }
 

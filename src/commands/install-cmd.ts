@@ -51,6 +51,7 @@ import { API_KEY_ENV } from "../core/config.js";
 import { HostedError } from "../core/hosted.js";
 import { createDatabase, databaseNameFor } from "../core/account-api.js";
 import { readStoredAccount, readStoredKey } from "../core/keystore.js";
+import { askUploadConsent, hasUploadConsent, recordUploadConsent, type ConsentDeps, type ConsentOutcome } from "../core/consent.js";
 import { signInHint } from "./login-cmd.js";
 
 /** Package this command installs, and the pinned spelling `npx` resolves. */
@@ -108,6 +109,15 @@ export interface InstallCmdOptions {
   /** Write a local-tools-only entry even when this machine has an account:
    * for a repository whose contents must not leave it. */
   localOnly?: boolean;
+  /** Agree to uploading this repository's contents without being asked, for a
+   * script or a CI job that has no terminal to answer on. */
+  yes?: boolean;
+}
+
+/** Injected for tests: the platform, and the person at the terminal. */
+export interface InstallDeps {
+  fetch?: typeof fetch;
+  consent?: ConsentDeps;
 }
 
 /** What the platform half of an install resolved to. */
@@ -370,7 +380,7 @@ function refuseInlineKey(opts: InstallCmdOptions): void {
 async function resolvePlatform(
   opts: InstallCmdOptions,
   root: string,
-  deps: { fetch?: typeof fetch },
+  deps: InstallDeps,
 ): Promise<PlatformSetup> {
   if (opts.db) return { db: opts.db, notes: [] };
   if (opts.localOnly) {
@@ -389,6 +399,23 @@ async function resolvePlatform(
 
   if (opts.dryRun) {
     return { db, notes: [`would register the database ${database} on ${baseUrl} if it is not there yet`] };
+  }
+
+  // Consent before the first upload, not after. Registering the database is
+  // the step that commits this repository to the platform, so the question
+  // comes before it - and a no leaves a working local-only install rather
+  // than a half-configured one.
+  const consent = opts.yes ? grantWithoutAsking() : await askUploadConsent(baseUrl, database, root, deps.consent);
+  if (consent === "declined") {
+    return { notes: ["Local tools only (find / search / sql), as you asked: nothing about this repository leaves it."] };
+  }
+  if (consent === "no-terminal") {
+    return {
+      notes: [
+        `Local tools only (find / search / sql): enabling ask and explore uploads this repository's contents, and there is no terminal here to ask.`,
+        `Re-run \`cx install\` from a terminal, or pass --yes to agree without being asked.`,
+      ],
+    };
   }
 
   try {
@@ -414,6 +441,15 @@ async function resolvePlatform(
   }
 }
 
+/** `--yes`: a script agreeing on its user's behalf. Recorded like any other
+ * agreement, so a later interactive run does not ask again and the account
+ * file says when consent was given either way. */
+function grantWithoutAsking(): ConsentOutcome {
+  if (hasUploadConsent()) return "already-given";
+  recordUploadConsent(new Date().toISOString());
+  return "granted";
+}
+
 /** Whether a failed create means this account cannot serve this repository at
  * all, as opposed to a call that happened to fail. A refused key, an account
  * with no billing details, and a key whose pattern excludes this database are
@@ -437,7 +473,7 @@ function unusableReason(err: HostedError, baseUrl: string): string {
 export async function installCmd(
   opts: InstallCmdOptions,
   version: string,
-  deps: { fetch?: typeof fetch } = {},
+  deps: InstallDeps = {},
 ): Promise<void> {
   refuseInlineKey(opts);
   const root = resolve(opts.path ?? process.cwd());

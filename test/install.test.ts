@@ -26,11 +26,21 @@ let accountDir: string;
 const read = (path: string) => JSON.parse(readFileSync(path, "utf8"));
 const configIn = (dir: string) => join(dir, ".mcp.json");
 
-/** Give the run a stored account: a key at 0600 and the platform beside it. */
-const signIn = (baseUrl: string) => {
+/** Give the run a stored account: a key at 0600 and the platform beside it.
+ * `consented` is what `cx login` plus one interactive `cx install` leaves
+ * behind; without it the upload gate refuses, which is its own set of tests
+ * below rather than a precondition of the entry-writing ones. */
+const signIn = (baseUrl: string, consented = true) => {
   mkdirSync(accountDir, { recursive: true });
   writeFileSync(join(accountDir, "key"), "inf_deadbeef_secret\n", { mode: 0o600 });
-  writeFileSync(join(accountDir, "account.json"), JSON.stringify({ baseUrl, storedAt: "2026-09-08T00:00:00.000Z" }));
+  writeFileSync(
+    join(accountDir, "account.json"),
+    JSON.stringify({
+      baseUrl,
+      storedAt: "2026-09-08T00:00:00.000Z",
+      ...(consented ? { uploadConsentAt: "2026-09-08T00:00:00.000Z" } : {}),
+    }),
+  );
 };
 
 beforeEach(() => {
@@ -370,6 +380,91 @@ describe("cx install: no flags, with an account stored", () => {
     const { impl, calls } = platform(201);
     await installCmd({ path: root, dryRun: true }, VERSION, { fetch: impl });
     expect(calls).toHaveLength(0);
+    expect(existsSync(configIn(root))).toBe(false);
+  });
+});
+
+describe("cx install: nothing is uploaded without consent", () => {
+  const platform = () => {
+    const calls: string[] = [];
+    const impl = (async (url: string | URL | Request, init?: RequestInit) => {
+      calls.push(`${init?.method ?? "GET"} ${String(url)}`);
+      return new Response("{}", { status: 201 });
+    }) as unknown as typeof fetch;
+    return { impl, calls };
+  };
+  const dbOf = (dir: string) => {
+    const args: string[] = read(configIn(dir)).mcpServers["code-context"].args;
+    return args.includes("--db") ? args[args.indexOf("--db") + 1] : undefined;
+  };
+
+  it("registers nothing and enables nothing when the answer is no", async () => {
+    signIn("https://platform.example", false);
+    const { impl, calls } = platform();
+    await installCmd({ path: root }, VERSION, {
+      fetch: impl,
+      consent: { interactive: true, ask: async () => "n" },
+    });
+    expect(calls).toEqual([]);
+    expect(dbOf(root)).toBeUndefined();
+  });
+
+  it("registers the database once the answer is yes", async () => {
+    signIn("https://platform.example", false);
+    const { impl, calls } = platform();
+    await installCmd({ path: root }, VERSION, {
+      fetch: impl,
+      consent: { interactive: true, ask: async () => "y", now: () => new Date("2026-09-08T12:00:00Z") },
+    });
+    expect(calls).toEqual(["POST https://platform.example/v1/databases"]);
+    expect(dbOf(root)).toContain("https://platform.example/");
+  });
+
+  it("with no terminal, stays local and says how to proceed rather than uploading", async () => {
+    signIn("https://platform.example", false);
+    const { impl, calls } = platform();
+    await installCmd({ path: root }, VERSION, { fetch: impl, consent: { interactive: false } });
+    expect(calls).toEqual([]);
+    expect(dbOf(root)).toBeUndefined();
+  });
+
+  it("--yes agrees without a terminal, and records it so nothing asks again", async () => {
+    signIn("https://platform.example", false);
+    const { impl, calls } = platform();
+    await installCmd({ path: root, yes: true }, VERSION, { fetch: impl, consent: { interactive: false } });
+    expect(calls).toEqual(["POST https://platform.example/v1/databases"]);
+    expect(JSON.parse(readFileSync(join(accountDir, "account.json"), "utf8")).uploadConsentAt).toBeTruthy();
+  });
+
+  it("asks nothing when an explicit --db was given: naming a database is the decision", async () => {
+    signIn("https://platform.example", false);
+    let asked = false;
+    await installCmd({ path: root, db: "https://other.example/mine" }, VERSION, {
+      consent: {
+        interactive: true,
+        ask: async () => {
+          asked = true;
+          return "n";
+        },
+      },
+    });
+    expect(asked).toBe(false);
+    expect(dbOf(root)).toBe("https://other.example/mine");
+  });
+
+  it("asks nothing on --dry-run, which uploads nothing by definition", async () => {
+    signIn("https://platform.example", false);
+    let asked = false;
+    await installCmd({ path: root, dryRun: true }, VERSION, {
+      consent: {
+        interactive: true,
+        ask: async () => {
+          asked = true;
+          return "y";
+        },
+      },
+    });
+    expect(asked).toBe(false);
     expect(existsSync(configIn(root))).toBe(false);
   });
 });
