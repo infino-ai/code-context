@@ -147,28 +147,37 @@ subagents.[^fifty]
 
 ## Install
 
-Node 20 or newer, macOS or Linux. The cloud tools are on this branch and not yet in the npm release, so build from the branch:
+Node 20 or newer, macOS or Linux. All five tools are on this branch; the npm release is older and serves a smaller surface, so build the branch:
 
 ```bash
 git clone -b feat/platform-backend https://github.com/infino-ai/code-context
 cd code-context && npm ci && npm run build
 ```
 
-You need two things from whoever runs your Infino platform instance: a **database URL** for the repository you want to index, `https://host/<database>`
-(one database per repository), and a **bearer key**, which goes in a file only you can read. Then register the server with Claude Code, with your
-paths:
+Then one command wires it into Claude Code. Run it **in the repository you want to search** - it writes that repo's `.mcp.json`, so there is no JSON to
+hand-edit. `--local` points the entry at the build you just made:
 
 ```bash
-claude mcp add-json code-context -s user '{"command":"node","args":["/path/to/code-context/dist/cli.js","mcp","--db","https://host/<database>","--api-key-file","/path/to/key"],"alwaysLoad":true}'
+cd /path/to/your/repo
+node /path/to/code-context/dist/cli.js install --local
 ```
 
-Open Claude Code in the repository and ask a question. The first local call builds the index inline and answers on the same call; the first `explore`
-loads the platform copy. `alwaysLoad` keeps the tools in Sonnet's view in sessions with many MCP servers.
+That gets you the three local tools, with no account and no key. Open Claude Code there and ask a question: the first call builds the index inline and
+answers on the same call.
 
-Without a database URL the same server runs the three local tools alone, which is what the npm release ships today and needs no account and no key.
+For all five, add a **database URL** for the repository, `https://host/<database>` (one per repository), and a **bearer key** in a file only you can
+read - both from whoever runs your Infino platform instance. Only the key's path goes in the config, never the key:
 
-Everything else - the five tools in detail, the platform flags, the environment variables, the CLI, other MCP clients - is in
-[docs/reference.md](docs/reference.md).
+```bash
+node /path/to/code-context/dist/cli.js install --local \
+  --db https://host/<database> --api-key-file ~/.infino/key
+```
+
+The first `explore` loads the platform copy. Add `--uninstall` to remove the entry, or `--dry-run` to see it first. Drop `--local` only once the version
+you want is on npm - without it the entry runs `npx` against this package's version, which is not on the registry until it is released.
+
+Everything else - the five tools in detail, the platform flags, the environment variables, and `--config` for an MCP client other than Claude Code - is
+in [docs/reference.md](docs/reference.md).
 
 > The package, the CLI (`cx`) and the MCP server are still named
 > `code-context`. SuperGrep is the product; the names underneath follow.

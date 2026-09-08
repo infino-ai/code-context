@@ -84,11 +84,21 @@ describe("cx install: writing the entry", () => {
     expect(existsSync(configIn(root))).toBe(false);
   });
 
-  it("--local runs the checkout's build through an absolute node", () => {
-    const entry = serverEntry({ local: true }, root, VERSION);
+  it("--local runs this build through an absolute node, wherever it is installed to", () => {
+    const entry = serverEntry({ local: true }, VERSION);
     expect(entry.command).toBe(process.execPath);
-    expect(entry.args[0]).toBe(join(root, "dist", "cli.js"));
+    // The path is this build's own cli.js, not one under the repository being
+    // installed into: a checkout is built once and installed into many repos,
+    // and a path relative to the target names a file that is not there.
+    expect(entry.args[0]).toMatch(/cli\.js$/);
+    expect(entry.args[0]).not.toContain(root);
     expect(entry.args[1]).toBe("mcp");
+  });
+
+  it("defaults to an npx entry pinned to this package's version", () => {
+    const entry = serverEntry({}, VERSION);
+    expect(entry.command).toBe("npx");
+    expect(entry.args).toEqual(["-y", `@infino-ai/code-context@${VERSION}`, "mcp"]);
   });
 
   it("--dry-run writes nothing", () => {

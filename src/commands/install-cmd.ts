@@ -38,6 +38,7 @@ import {
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { homedir } from "node:os";
+import { fileURLToPath } from "node:url";
 import { bold, dim, green, yellow } from "../core/output.js";
 import { API_KEY_ENV } from "../core/config.js";
 
@@ -261,14 +262,29 @@ export function platformArgs(opts: InstallCmdOptions): string[] {
   return args;
 }
 
+/** This build's own CLI entry point: `dist/cli.js`, one directory up from the
+ * compiled copy of this module. Resolved from here rather than from the
+ * repository being installed into, which is usually somewhere else entirely -
+ * a checkout is built once and then installed into each repo you want to
+ * search, so a path relative to the target would name a file that does not
+ * exist there. */
+function ownCliPath(): string {
+  return resolve(dirname(fileURLToPath(import.meta.url)), "..", "cli.js");
+}
+
 /** The server entry to write. `npx` with a pinned version by default, so the
- * client resolves the same build every start; `--local` runs the checkout's
+ * client resolves the same build every start; `--local` runs this checkout's
  * own `dist/cli.js` through the absolute node running this install, because a
- * client's process often has no node on PATH. */
-export function serverEntry(opts: InstallCmdOptions, root: string, version: string): ServerEntry {
+ * client's process often has no node on PATH.
+ *
+ * `--local` is the right choice from a source build, and not only a
+ * preference: the pinned `npx` spec names this package's version, which is
+ * not on the registry until it is released, so an unreleased build that wrote
+ * an `npx` entry would hand the client a version it cannot fetch. */
+export function serverEntry(opts: InstallCmdOptions, version: string): ServerEntry {
   const tail = ["mcp", ...platformArgs(opts)];
   if (opts.local) {
-    return { command: process.execPath, args: [join(root, "dist", "cli.js"), ...tail], alwaysLoad: true };
+    return { command: process.execPath, args: [ownCliPath(), ...tail], alwaysLoad: true };
   }
   return { command: "npx", args: ["-y", `${PACKAGE_NAME}@${version}`, ...tail], alwaysLoad: true };
 }
@@ -312,7 +328,7 @@ export function installCmd(opts: InstallCmdOptions, version: string): void {
     return;
   }
 
-  const entry = serverEntry(opts, root, version);
+  const entry = serverEntry(opts, version);
   const existed = name in servers;
   const next: Config = { ...config, mcpServers: { ...servers, [name]: entry } };
 
