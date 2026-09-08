@@ -155,30 +155,20 @@ git clone -b feat/platform-backend https://github.com/infino-ai/code-context
 cd code-context && npm ci && npm run build
 ```
 
-Then, in the repository you want to search:
+Then, in the directory you want to search:
 
 ```bash
 node /path/to/code-context/dist/cli.js install
 ```
 
-Open Claude Code there and ask a question. The first call builds the index and answers on the same call. That is `find`, `search` and `sql`, with no
-account and no key.
+Open Claude Code there and ask a question.
 
-For `ask` and `explore`, add a **database URL** for the repository and a **bearer key** in a file only you can read, both from whoever runs your Infino
-platform instance:
+If you already have an Infino account, you can add a **database URL** for the repository and a **bearer key** in a file only you can read, both from whoever manages your Infino account. If you do not yet have an account, SuperGrep will create a free account for you (with your permission) so you can store your data durably.
 
 ```bash
 node /path/to/code-context/dist/cli.js install \
   --db https://host/<database> --api-key-file ~/.infino/key
 ```
-
-One database per repository, and only the key's path goes in the config - never the key.
-
-Everything else - the five tools in detail, the platform flags, the environment variables, and other MCP clients - is in
-[docs/reference.md](docs/reference.md).
-
-> The package, the CLI (`cx`) and the MCP server are still named
-> `code-context`. SuperGrep is the product; the names underneath follow.
 
 ## Learn more
 
