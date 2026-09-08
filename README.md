@@ -148,14 +148,14 @@ subagents.[^fifty]
 
 ## Install
 
-You need node 20 or newer, on macOS or Linux. Then:
+You need node 20 or newer, on macOS or Linux. Then clone this repo:
 
 ```bash
 git clone -b feat/platform-backend https://github.com/infino-ai/code-context
 cd code-context && npm ci && npm run build
 ```
 
-Then, in the directory you want to search:
+Once cloned, in the directory you want to search:
 
 ```bash
 node /path/to/code-context/dist/cli.js install
