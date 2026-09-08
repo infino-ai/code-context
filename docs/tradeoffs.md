@@ -70,4 +70,5 @@ than pretending to be complete: `cx index` warns on the build and on every
 sync while the tree is over the cap, `find`, `search` and `sql` results carry a
 `partial` marker (files skipped and the cap in effect), and `cx status`
 reports it. That turns "no match" into "no match in the indexed subset" - raise
-`CX_MAX_FILES` and re-index for full coverage.
+`CX_MAX_FILES` and re-index for full coverage. Or use hydration to index parquet 
+files directly from object storage without impacting your local machine.
