@@ -10,12 +10,12 @@ questions. It holds the exact lookups: `find` ties or wins pinpoint (where is
 this symbol) and known-file (what does this file do), with no more
 unsupported claims than the baseline. It loses aggregation, comprehension and
 by-meaning, in both comparisons, with more unsupported claims overall - **9
-wins, 9 ties, 18 losses** against plain file tools; **7, 7, 21** against
-Sonnet's own Explore subagents. So SuperGreps answers are slightly worse, according
-to an Opus judge, than Sonnet alone. This does not mean that answers will appear
-worse in production, but worth flagging. A model that reads the files writes an answer
-with more of the code in it, and this judge rewards that. The full tables and
-categories are in the [README](../README.md#quality). 
+wins, 9 ties, 18 losses** against plain Sonnet; **7, 7, 21** against
+Sonnet's own Explore subagents. So SuperGreps answers are slightly worse when the questions
+are more general, according to an Opus judge, than Sonnet alone. This does not mean
+that answers will appear worse in production, but worth flagging. A model that reads
+the files writes an answer with more of the code in it, and this judge rewards that.
+The full tables and categories are in the [README](../README.md#quality). 
 
 ### It does not do structural code intelligence
 
