@@ -30,7 +30,7 @@ context from the index can do it at a fraction of the cost and fifty at a time. 
 
 ### Sonnet chooses it on its own
 
-Nothing in the prompt names a tool. Given all five beside its own file tools, **76% of every call Sonnet makes is to SuperGrep, of its own choosing**, and
+Given all five tools alongside its own file tools, **Sonnet chooses to use SuperGrep 76% of the time**, and
 its first choice is always SuperGrep in every category of question:
 
 ![What Sonnet reaches for first, by question type](docs/subagent/first-choice.svg)
