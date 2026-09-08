@@ -163,7 +163,7 @@ node /path/to/code-context/dist/cli.js install
 
 Open Claude Code there and ask a question.
 
-If you already have an Infino account, you can add a **database URL** for the repository and a **bearer key** in a file only you can read, both from whoever manages your Infino account. If you do not yet have an account, SuperGrep will create a free account for you (with your permission) so you can store your data durably.
+If you already have an Infino account, you can add a **database URL** for the repository and a **bearer key** in a protected file. If you do not yet have an account, SuperGrep will create a free account for you (with your permission) and store the data securely under ~/.infino. Please login and rotate your keys before you run SuperGrep in prod.
 
 ```bash
 node /path/to/code-context/dist/cli.js install \
