@@ -18,6 +18,7 @@ import { indexCmd, type IndexCmdOptions } from "./commands/index-cmd.js";
 import { installCmd, type InstallCmdOptions } from "./commands/install-cmd.js";
 import { loginCmd, type LoginCmdOptions } from "./commands/login-cmd.js";
 import { findCmd, searchCmd, sqlCmd, statusCmd, usageCmd } from "./commands/query-cmds.js";
+import { savingsCmd } from "./commands/savings-cmd.js";
 import {
   DEFAULT_SEARCH_K,
   DEFAULT_FIND_LIMIT,
@@ -104,6 +105,7 @@ program
   .option("-i, --ignore-case", "match regardless of letter case")
   .option("-c, --count", "print matching lines per file instead of the lines, like grep -c")
   .option("--defines", "only lines inside a definition of the text - where it is declared, not every use")
+  .option("--under <prefix>", "only matches under this repo-relative path prefix; the total and per-file counts then describe that subtree")
   .option("--limit <n>", `maximum matching lines to print (default ${DEFAULT_FIND_LIMIT}, max ${MAX_FIND_LIMIT})`)
   .option("--json", "machine-readable output")
   .option("-C, --path <dir>", "repo root (default: current directory)")
@@ -171,6 +173,14 @@ program
   .option("--json", "machine-readable output")
   .option("-C, --path <dir>", "repo root (default: current directory)")
   .action(usageCmd);
+
+program
+  .command("savings")
+  .description("what the index served, and what reading those files whole would have cost instead")
+  .option("--rate <dollars-per-million>", "price the tokens at your model's rate (no money is shown without it)")
+  .option("--json", "machine-readable output")
+  .option("-C, --path <dir>", "repo root (default: current directory)")
+  .action(savingsCmd);
 
 program
   .command("login")

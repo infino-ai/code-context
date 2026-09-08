@@ -234,6 +234,9 @@ export interface FindResult {
    * mistake a narrow answer for a rare name. Named as the platform route's
    * `defined_from`, which reports the same thing. */
   definedFrom?: number;
+  /** Echoed when `under` scoped the result, so a caller reading the answer
+   * knows the counts describe a subtree and not the repository. */
+  under?: string;
 }
 
 export interface FindOptions {
@@ -250,6 +253,17 @@ export interface FindOptions {
    * writes the index and knows the column, while the platform's find is
    * generic over any table and has to be told. */
   defines?: boolean;
+  /** Keep only matches whose path starts with this prefix - one repository of
+   * a workspace, one subtree of a monorepo, one branch's worktree.
+   *
+   * Exact, unlike the same idea on a ranked search: `find` retrieves every
+   * candidate and cuts to the limit afterwards, so narrowing the candidates
+   * loses nothing and `total`, `files` and `byFile` all describe the scoped
+   * answer. A prefix filter over a top-k ranked search would instead drop hits
+   * that ranked below the cutoff and report the remainder as the whole answer,
+   * which is why `search` has no such option: a scoped RANKED search is `sql`
+   * over a search relation, where the filter composes in the same pass. */
+  under?: string;
 }
 
 /** Does this chunk's `symbol` column declare `name`?
@@ -371,8 +385,13 @@ export async function find(handle: IndexHandle, query: string, opts: FindOptions
   // arrives again from an overlapping chunk that does not, so the declaring
   // chunk always wins the dedupe rather than whichever chunk came first.
   const declaring = new Set<string>();
+  // A prefix with no trailing slash still means "this directory", so `src` and
+  // `src/` both scope to the subtree rather than also matching `src-gen/`. A
+  // prefix naming a single file is left as given.
+  const under = opts.under?.replace(/\/+$/, "");
   for (const row of candidates) {
     const path = String(row.path);
+    if (under !== undefined && under !== "" && path !== under && !path.startsWith(`${under}/`)) continue;
     const symbol = row.symbol ? String(row.symbol) : undefined;
     const declares = definesName(symbol, query, ignoreCase);
     for (const m of matchLines(String(row.content), Number(row.start_line), query, ignoreCase)) {
@@ -411,6 +430,7 @@ export async function find(handle: IndexHandle, query: string, opts: FindOptions
     ...(rows.length > limit ? { truncated: true } : {}),
     ...(partial ? { partial } : {}),
     ...(opts.defines ? { definedFrom: matched } : {}),
+    ...(under !== undefined && under !== "" ? { under } : {}),
   };
 }
 

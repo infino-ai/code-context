@@ -179,8 +179,13 @@ export const SQL_DESCRIPTION =
   "'lines ranked in the top 300 for <topic>', and expect files outside the top k, including " +
   "large ones, to be missing from it. A question with no topic in it - a file's length, the " +
   `largest files, a count over the whole repository - comes from ${TABLE} with no search ` +
-  `function: SELECT path, MAX(end_line) AS lines FROM ${TABLE} GROUP BY path ORDER BY lines ` +
-  "DESC. A path prefix is not a topic: filtering on WHERE path LIKE 'src/thing/%' and " +
+  `function: SELECT path, MAX(end_line) AS lines FROM ${TABLE} WHERE lang IN ('rs','ts','py') ` +
+  "GROUP BY path ORDER BY lines DESC. Name the languages you mean, as that example does, on " +
+  "any question about code: an unfiltered ranking over a real repository comes back topped by " +
+  "generated data - benchmark result JSON, fixtures, vendored blobs - which genuinely are the " +
+  "longest files and are never the answer. `lang` is the file extension, so the filter is the " +
+  "cheapest way to say 'code, not data', and it works the same inside a ranked search's " +
+  "aggregate. A path prefix is not a topic: filtering on WHERE path LIKE 'src/thing/%' and " +
   "measuring lengths answers how big those files are, not which code is about the thing, and " +
   "it guesses the answer from a directory name instead of retrieving it. " +
   "The result includes a 'usage' field, a one-line receipt of tokens returned and rows.";
@@ -509,6 +514,16 @@ export async function serveMcp(rootPath?: string): Promise<void> {
               "until one turns out to be the declaration. The result reports definedFrom, how many " +
               "matching lines there were before the filter.",
           ),
+        under: z
+          .string()
+          .optional()
+          .describe(
+            "Repo-relative path prefix to scope to - one repository of a workspace, one subtree of a " +
+              "monorepo, one directory. The total and the per-file counts then describe that subtree, " +
+              "and the result echoes `under` so the numbers are not mistaken for the whole repository. " +
+              "Reach for it when a common name would return thousands of lines across everything: " +
+              "scoping is exact here, because find retrieves every match and cuts afterwards.",
+          ),
         limit: z
           .number()
           .int()
@@ -521,11 +536,12 @@ export async function serveMcp(rootPath?: string): Promise<void> {
           .optional()
           .describe(
             "Absolute path to the repository root to search. Defaults to the server's configured root; " +
-              "set it to target a specific repo when a session spans more than one.",
+              "set it to target a specific repo when a session spans more than one. This is a different " +
+              "index; `under` narrows within one.",
           ),
       },
     },
-    async ({ query, ignoreCase, defines, limit, path }) => {
+    async ({ query, ignoreCase, defines, under, limit, path }) => {
       let ctx: RepoCtx;
       try {
         ctx = repoFor(path);
@@ -543,7 +559,7 @@ export async function serveMcp(rootPath?: string): Promise<void> {
       if (!autoIndexed) maybeAutoSync(ctx); // a fresh build is already current
       try {
         const t0 = performance.now();
-        const result = await find(handle, query, { ignoreCase, defines, limit });
+        const result = await find(handle, query, { ignoreCase, defines, under, limit });
         let usage: string | undefined;
         if (receiptOn) {
           const entry = findEntry(result);

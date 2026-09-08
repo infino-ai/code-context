@@ -39,6 +39,8 @@ export interface FindCmdOptions {
   count?: boolean;
   /** Only lines inside a definition of the text, not every occurrence. */
   defines?: boolean;
+  /** Only matches under this repo-relative path prefix. */
+  under?: string;
   limit?: string;
   json?: boolean;
   path?: string;
@@ -54,6 +56,7 @@ export async function findCmd(text: string, opts: FindCmdOptions): Promise<void>
     const result = await find(handle, text, {
       ignoreCase: opts.ignoreCase,
       defines: opts.defines,
+      under: opts.under,
       limit: opts.limit === undefined ? undefined : Number(opts.limit),
     });
     if (receiptEnabled()) {
@@ -77,7 +80,20 @@ export async function findCmd(text: string, opts: FindCmdOptions): Promise<void>
     if (result.definedFrom !== undefined && result.total < result.definedFrom) {
       console.error(dim(`${result.total} defining of ${result.definedFrom} matching lines - drop --defines for all of them`));
     }
-    if (result.total === 0) console.error(yellow(opts.defines ? "no definitions - drop --defines to see where it is used" : "no matches"));
+    if (result.under) {
+      console.error(dim(`scoped to ${result.under}/ - the total and per-file counts describe that subtree, not the repository`));
+    }
+    if (result.total === 0) {
+      console.error(
+        yellow(
+          opts.defines
+            ? "no definitions - drop --defines to see where it is used"
+            : result.under
+              ? `no matches under ${result.under}/ - drop --under to search the whole repository`
+              : "no matches",
+        ),
+      );
+    }
   } catch (err) {
     die(err);
   }

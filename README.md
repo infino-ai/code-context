@@ -183,6 +183,8 @@ node /path/to/code-context/dist/cli.js install
 
 Add `--local-only` to get that same local-only entry on a machine that does have an account.
 
+**Your agent can run this step itself.** `install --local-only` and `cx index` create no account, take no key and upload nothing - they write an index into `.infino/` and an entry into `.mcp.json`, both inside the repository. So if you are reading this with Claude Code open, "set SuperGrep up locally" is a thing to ask it to do rather than a thing to do yourself. The only step that needs you is `--platform`, because that one creates an account and sends the files' contents off the machine.
+
 ### If you already have an Infino account
 
 Sign in once per machine instead. The key comes from a file or standard input, never from an argument - argv is readable by every process on the machine:

@@ -149,6 +149,41 @@ describe("find", () => {
     expect(r.ignoreCase).toBe(false);
   });
 
+  it("scopes to a path prefix, and the counts describe the subtree", async () => {
+    // `export function` is in src/auth.ts twice and src/storage.ts twice.
+    // Unscoped that is four; scoped to one file it is two, and `total`,
+    // `files` and `byFile` all have to say two rather than reporting the
+    // repository's four alongside a cut list.
+    const whole = await find(handle, "export function");
+    expect(whole.total).toBe(4);
+    expect(whole.under).toBeUndefined();
+
+    const scoped = await find(handle, "export function", { under: "src/auth.ts" });
+    expect(scoped.total).toBe(2);
+    expect(scoped.files).toBe(1);
+    expect(scoped.byFile).toEqual([{ path: "src/auth.ts", count: 2 }]);
+    expect(scoped.under).toBe("src/auth.ts");
+  });
+
+  it("treats a prefix as a directory, with or without a trailing slash", async () => {
+    const bare = await find(handle, "export function", { under: "src" });
+    const slashed = await find(handle, "export function", { under: "src/" });
+    expect(bare.total).toBe(4);
+    expect(slashed.total).toBe(4);
+    // Both normalise to the same echoed scope, so a caller cannot tell which
+    // spelling was used from the answer.
+    expect(bare.under).toBe("src");
+    expect(slashed.under).toBe("src");
+  });
+
+  it("does not let a prefix match a sibling that merely starts with it", async () => {
+    // `src` must not scope in a hypothetical `src-generated/`. Asserted on the
+    // rule rather than a fixture directory: a prefix names a path segment.
+    const r = await find(handle, "export function", { under: "sr" });
+    expect(r.total).toBe(0);
+    expect(r.under).toBe("sr");
+  });
+
   it("counts matches per file over every match, most first, even when the list is cut", async () => {
     // `export function` twice in each of auth.ts and storage.ts; the tie
     // breaks on path. The cut list is one line, the counts are still whole.
