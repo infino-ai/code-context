@@ -92,6 +92,42 @@ describe("chunkFile", () => {
     }
   });
 
+  it("names a continuation chunk by the definition that encloses it", async () => {
+    // A definition over MAX_LINES is split into fixed windows, and those
+    // windows used to carry no symbol at all - 17% of chunks and 20% of the
+    // indexed characters on the engine's own source. A model handed an
+    // anonymous window reports the only line numbers it has, the window's,
+    // which is the judge's "misplaces probe_pointer's range (218-251 vs the
+    // real 252-283)". Every chunk now names what it is part of, and carries
+    // the definition's true span - which is what a reassembly query needs.
+    const body = Array.from({ length: 200 }, (_, i) => `  const step${i} = ${i};`).join("\n");
+    const src = `export function hugeMechanism() {\n${body}\n}\n`;
+    const chunks = await chunkFile("big.ts", src);
+    expect(chunks.length).toBeGreaterThan(2);
+    // The definition ends on the file's last brace, so every chunk is either
+    // its opening or a part of it, and none is anonymous.
+    const anonymous = chunks.filter((c) => !c.symbol);
+    expect(anonymous, "no chunk of a split definition is anonymous").toEqual([]);
+    // Continuations say they are parts, and give the whole definition's span.
+    const parts = chunks.filter((c) => c.symbol?.includes(", part)"));
+    expect(parts.length).toBeGreaterThan(0);
+    const defEnd = src.trimEnd().split("\n").length;
+    const span = `(1-${defEnd}, part)`;
+    for (const p of parts) {
+      expect(p.symbol, "a part names the definition and its true extent").toContain("hugeMechanism");
+      expect(p.symbol, `the span is the definition's, not the window's: ${p.symbol}`).toContain(span);
+    }
+    // The point of it: at least one part ends well before the definition does
+    // and still reports the definition's end, which is the number a citation
+    // needs and the window could never supply.
+    const early = parts.filter((p) => p.endLine < defEnd);
+    expect(early.length, "some part ends before the definition").toBeGreaterThan(0);
+    for (const p of early) {
+      expect(p.symbol).toContain(`-${defEnd},`);
+      expect(p.symbol).not.toContain(`-${p.endLine},`);
+    }
+  });
+
   it("cuts bash, css, and powershell at definition boundaries", async () => {
     const cases = [
       { path: "script.sh", re: /^f\d\(\) \{/, code: Array.from({ length: 6 }, (_, i) => `f${i}() {\n${"  echo body\n".repeat(15)}}`).join("\n") },

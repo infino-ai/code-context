@@ -29,9 +29,13 @@ export interface Chunk {
   scope?: string;
 }
 
-/** A definition site found in the AST: where it starts and how to name it. */
+/** A definition site found in the AST: where it starts, where it ends, and
+ * how to name it. `endRow` is what makes a continuation chunk nameable - see
+ * `spanMeta`. Absent for the span builders with no AST (markdown headings, log
+ * records), where a definition has no extent to speak of. */
 interface DefSite {
   row: number; // 0-based
+  endRow?: number; // 0-based, inclusive
   name: string;
   kind: string;
   scope: string;
@@ -352,7 +356,19 @@ function collectDefs(node: TSNode, defs: Set<string>, scope: string[], sites: De
   for (const child of node.namedChildren) {
     if (defs.has(child.type)) {
       const name = nameOf(child);
-      sites.push({ row: child.startPosition.row, name, kind: kindOf(child.type), scope: scope.join(" › ") });
+      sites.push({
+        row: child.startPosition.row,
+        // The definition's true last line, which the grammar already knows.
+        // Without it a chunk that holds only part of a large definition has
+        // nothing to name itself by, and the model reports the chunk's own
+        // end as the definition's - measured on this corpus as "truncates
+        // run_compaction_job to 709 of 809", where 709 is a chunk boundary
+        // and the function runs to 809.
+        endRow: child.endPosition.row,
+        name,
+        kind: kindOf(child.type),
+        scope: scope.join(" › "),
+      });
       collectDefs(child, defs, name ? [...scope, name] : scope, sites, depth + 1);
     } else {
       collectDefs(child, defs, scope, sites, depth + 1);
@@ -492,17 +508,57 @@ function logDefs(lines: string[], lang: string): DefSite[] {
   return sites;
 }
 
-/** The primary symbol/kind/scope for a chunk: the definition sites that *start*
- * within the chunk's line range. A continuation window of a large definition
- * has none, and that's fine - it just carries no symbol. */
+/** How a symbol says it is only PART of the definition it names, and where the
+ * whole thing lives: `run_compaction_job (603-809, part)`. Carried in the
+ * symbol column rather than a new one, so nothing downstream needs a schema
+ * change to read it. */
+function partOf(name: string, def: DefSite): string {
+  return `${name} (${def.row + 1}-${(def.endRow ?? def.row) + 1}, part)`;
+}
+
+/** The primary symbol/kind/scope for a chunk.
+ *
+ * A chunk where definitions START is named by them, as before. A chunk that is
+ * only a CONTINUATION of a larger definition used to carry nothing — "and
+ * that's fine, it just carries no symbol" — which measured at 17% of chunks
+ * and 20% of the indexed characters on this corpus, and 73% of those are also
+ * over the embedder's window. A model handed sixty anonymous lines opening
+ * `fts_cfg,` cannot say what it read, so it reports the only numbers it has:
+ * the window's. That is what the judge sees as "misplaces probe_pointer's
+ * range (218-251 vs the real 252-283)" and "off-by-two line spans", which
+ * together were 8 of 9 losses.
+ *
+ * So a continuation is named by the innermost definition that encloses it,
+ * marked as a part and carrying that definition's true span — which is also
+ * exactly what a reassembly query needs in order to ask for the rest. */
 function spanMeta(defs: DefSite[], startLine: number, endLine: number): Partial<Chunk> | undefined {
   const inSpan = defs.filter((d) => d.row + 1 >= startLine && d.row + 1 <= endLine);
-  if (inSpan.length === 0) return undefined;
-  const names = [...new Set(inSpan.map((d) => d.name).filter(Boolean))];
+  if (inSpan.length > 0) {
+    const names = [
+      ...new Set(
+        inSpan
+          .map((d) => (d.name && d.endRow != null && d.endRow + 1 > endLine ? partOf(d.name, d) : d.name))
+          .filter(Boolean),
+      ),
+    ];
+    return {
+      symbol: names.join(", ").slice(0, 120) || undefined,
+      kind: inSpan[0].kind,
+      scope: inSpan[0].scope || undefined,
+    };
+  }
+  // Nothing starts here: the innermost definition that spans the chunk. Sorted
+  // by start row so the last match is the innermost — an `impl` encloses the
+  // `fn` that encloses the window, and the `fn` is what a citation needs.
+  const enclosing = defs
+    .filter((d) => d.endRow != null && d.row + 1 < startLine && d.endRow + 1 >= endLine && d.name)
+    .sort((a, b) => a.row - b.row)
+    .at(-1);
+  if (!enclosing) return undefined;
   return {
-    symbol: names.join(", ").slice(0, 120) || undefined,
-    kind: inSpan[0].kind,
-    scope: inSpan[0].scope || undefined,
+    symbol: partOf(enclosing.name, enclosing).slice(0, 120),
+    kind: enclosing.kind,
+    scope: enclosing.scope || undefined,
   };
 }
 
