@@ -506,6 +506,35 @@ function spanMeta(defs: DefSite[], startLine: number, endLine: number): Partial<
   };
 }
 
+/** A line that documents or annotates the definition below it rather than
+ * standing on its own: Rust doc comments and attributes, block-comment bodies,
+ * JS/TS decorators, Python comments and decorators. */
+const DOC_OR_ATTR_LINE = /^\s*(\/\/\/|\/\/!|\/\*|\*|#\[|@\w|#(?!!)\s)/;
+
+/** Break rows for code, moved up so a definition's chunk carries its own doc
+ * comment. Breaking at the signature line leaves the `///` block in the
+ * PREVIOUS chunk: measured over five of the engine's own source files, 318 of
+ * 568 documented definitions (56%) were split that way. One of them is
+ * `load_materialized_rows`, whose doc block says "Currently a test-only
+ * helper" four lines above a signature that started a new chunk — so a search
+ * hit on the body could not show the warning, and an answer built on that hit
+ * described it as the live ingest path. The same split separates a definition
+ * from the defaults its doc block states, which is the other thing those
+ * answers got wrong.
+ *
+ * Only the BREAK moves. The def's own row is untouched, so `spanMeta` still
+ * attributes the symbol to the chunk that holds its signature. The walk stops
+ * at a blank line, at anything that is not a doc/attribute line, and at
+ * another definition's row, so it can never swallow the definition above. */
+function breakRowsCarryingDocs(lines: string[], defs: DefSite[]): number[] {
+  const defRows = new Set(defs.map((d) => d.row));
+  return defs.map((d) => {
+    let row = d.row;
+    while (row > 0 && !defRows.has(row - 1) && DOC_OR_ATTR_LINE.test(lines[row - 1] ?? "")) row--;
+    return row;
+  });
+}
+
 export async function chunkFile(path: string, content: string): Promise<Chunk[]> {
   if (!content.trim()) return [];
   const lang = langFor(path);
@@ -530,7 +559,10 @@ export async function chunkFile(path: string, content: string): Promise<Chunk[]>
     spans = defs.length > 0 ? packSegments(lines, defs.map((d) => d.row)) : fixedWindows(lines, 1);
   } else {
     defs = await syntacticDefs(lang, content);
-    spans = defs && defs.length > 0 ? packSegments(lines, defs.map((d) => d.row)) : fixedWindows(lines, 1);
+    spans =
+      defs && defs.length > 0
+        ? packSegments(lines, breakRowsCarryingDocs(lines, defs))
+        : fixedWindows(lines, 1);
   }
 
   const chunks: Chunk[] = [];

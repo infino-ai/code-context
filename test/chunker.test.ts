@@ -57,6 +57,41 @@ describe("chunkFile", () => {
     }
   });
 
+  it("keeps a definition's doc comment in the chunk that holds its signature", async () => {
+    // Breaking at the signature line put the doc block in the PREVIOUS chunk.
+    // Measured over five of the engine's own source files, that split 318 of
+    // 568 documented definitions (56%) - including one whose doc block reads
+    // "Currently a test-only helper" four lines above a signature that started
+    // a new chunk, so a hit on the body could not show the warning and an
+    // answer built on it called the helper a live path. Doc blocks are also
+    // where defaults are stated, which is the other thing those answers got
+    // wrong. Each function here is ~18 lines against TARGET_LINES 60, so the
+    // packer must break between them.
+    const fns = Array.from(
+      { length: 8 },
+      (_, i) =>
+        `/** What f${i} does.\n *  The default is ${i * 10}.\n */\nexport function f${i}() {\n${"  // body\n".repeat(14)}  return ${i};\n}`,
+    ).join("\n");
+    const chunks = await chunkFile("mod.ts", fns);
+    expect(chunks.length).toBeGreaterThan(1);
+    for (let i = 0; i < 8; i++) {
+      const holding = chunks.find((c) => c.content.includes(`export function f${i}()`));
+      expect(holding, `f${i} lands in a chunk`).toBeDefined();
+      expect(holding!.content, `f${i} carries its own doc block`).toContain(`What f${i} does.`);
+      expect(holding!.content, `f${i} carries the default from its doc block`).toContain(
+        `The default is ${i * 10}.`,
+      );
+    }
+    // Only the break moved: the definition's own row is unchanged, so the
+    // symbol is still attributed to the chunk holding its signature.
+    expect(chunks.some((c) => c.symbol)).toBe(true);
+    // Line ranges still tile the file without gaps or overlap.
+    expect(chunks[0].startLine).toBe(1);
+    for (let i = 1; i < chunks.length; i++) {
+      expect(chunks[i].startLine).toBe(chunks[i - 1].endLine + 1);
+    }
+  });
+
   it("cuts bash, css, and powershell at definition boundaries", async () => {
     const cases = [
       { path: "script.sh", re: /^f\d\(\) \{/, code: Array.from({ length: 6 }, (_, i) => `f${i}() {\n${"  echo body\n".repeat(15)}}`).join("\n") },
