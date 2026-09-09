@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: Copyright The Infino Authors
 //
-// `cx search` / `cx sql` / `cx status` - the query commands.
+// `cx find` / `cx search` / `cx sql` / `cx status` / `cx usage` - the query commands.
 
 import { openIndex, NoIndexError } from "../core/context.js";
 import { indexDir, resolveRoot } from "../core/config.js";
 import { createEmbedder, embedderInfo } from "../core/embedder.js";
-import { search, runSql, jsonify } from "../core/searcher.js";
+import { find, search, runSql, jsonify } from "../core/searcher.js";
 import {
   receiptEnabled,
+  findEntry,
   searchEntry,
   sqlEntry,
   formatReceipt,
@@ -25,6 +26,50 @@ function die(err: unknown): never {
   const msg = err instanceof NoIndexError ? err.message : `error: ${(err as Error).message}`;
   console.error(msg);
   process.exit(1);
+}
+
+export interface FindCmdOptions {
+  ignoreCase?: boolean;
+  /** Per-file counts instead of the matching lines, like `grep -c`. */
+  count?: boolean;
+  limit?: string;
+  json?: boolean;
+  path?: string;
+}
+
+/** `cx find` - every line containing the exact text, printed `path:line: text`
+ * the way `grep -n` does, so it drops into the same habits and pipelines. */
+export function findCmd(text: string, opts: FindCmdOptions): void {
+  try {
+    const handle = openIndex(opts.path);
+    // `find` rejects a non-integer, so `--limit abc` is an error rather than an
+    // empty listing; the raw string is converted here and validated there.
+    const result = find(handle, text, {
+      ignoreCase: opts.ignoreCase,
+      limit: opts.limit === undefined ? undefined : Number(opts.limit),
+    });
+    if (receiptEnabled()) {
+      const entry = findEntry(result);
+      recordUsage(handle.dir, entry);
+      console.error(dim(formatReceipt(entry)));
+    }
+    if (opts.json) {
+      console.log(jsonify(result, true));
+      return;
+    }
+    if (result.partial) console.error(yellow(`warning: ${result.partial.note}`));
+    if (opts.count) {
+      for (const f of result.byFile) console.log(`${cyan(f.path)}${dim(":")} ${f.count}`);
+    } else {
+      for (const m of result.matches) console.log(`${cyan(m.path)}${dim(`:${m.line}:`)} ${m.text}`);
+      if (result.truncated) {
+        console.error(yellow(`showing ${result.matches.length} of ${result.total} matches - raise --limit to see more`));
+      }
+    }
+    if (result.total === 0) console.error(yellow("no matches"));
+  } catch (err) {
+    die(err);
+  }
 }
 
 export interface SearchCmdOptions {
@@ -111,7 +156,7 @@ export function statusCmd(opts: StatusCmdOptions): void {
     console.log(
       `code-context index: ${fmtCount(m.chunks)} chunks from ${fmtCount(m.files)} files, ` +
         `vectors ${m.vectors}, indexed ${fmtAge(m.indexedAt)}. ` +
-        `MCP tools: search (terms + meaning), sql (aggregation), reindex (after big edits).`,
+        `MCP tools: find (exact text, every occurrence), search (terms + meaning), sql (aggregation); the index re-syncs on every query.`,
     );
     return;
   }
@@ -152,6 +197,15 @@ export interface UsageCmdOptions {
 
 const truncate = (s: string, n: number): string => (s.length > n ? s.slice(0, n - 3) + "..." : s);
 
+/** `find 4 · Grep 2 · Read 1`, most first; empty string when there is nothing. */
+function countsLine(counts: Record<string, number> | undefined): string {
+  if (!counts) return "";
+  return Object.entries(counts)
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([name, n]) => `${name} ${n}`)
+    .join(" · ");
+}
+
 /** `cx usage` - the local ledger of what queries went through the index and a
  * compact summary of what each returned. Read straight off `.infino/usage.jsonl`,
  * so it's deterministic and needs no running server or model. */
@@ -187,7 +241,7 @@ export async function usageCmd(opts: UsageCmdOptions): Promise<void> {
     return;
   }
   if (entries.length === 0 && (!session || session.prompts === 0)) {
-    console.error(yellow("no usage recorded yet - run `cx search`/`cx sql` here, or query via the MCP server"));
+    console.error(yellow("no usage recorded yet - run `cx find`/`cx search`/`cx sql` here, or query via the MCP server"));
     return;
   }
 
@@ -202,6 +256,12 @@ export async function usageCmd(opts: UsageCmdOptions): Promise<void> {
     const used = Math.min(session.promptsWithCx, session.prompts);
     const calls = `${session.cxCalls} call${session.cxCalls === 1 ? "" : "s"}`;
     console.log(dim(`  this session: code-context used in ${used} of ${session.prompts} prompts (${calls})`));
+    // Which door, and what the agent reached for first: the two numbers that
+    // say whether the tool surface steers as intended.
+    const byTool = countsLine(session.cxCallsByTool);
+    if (byTool) console.log(dim(`  by tool: ${byTool}`));
+    const first = countsLine(session.firstToolByPrompt);
+    if (first) console.log(dim(`  first tool of a prompt: ${first}`));
   }
   console.log("");
 
@@ -217,6 +277,16 @@ export async function usageCmd(opts: UsageCmdOptions): Promise<void> {
         `${dim(clock)}  ${bold(tool)}  ${q}  ${dim(`-> ${hits.length} hits / ${files} files | ~${fmtTokens(e.returnedTokens)} tok | ${e.ranking ?? "?"}`)}`,
       );
       const locs = hits.slice(0, 5).map((h) => `${h.path}:${h.startLine}-${h.endLine}`);
+      if (locs.length) console.log(green(`            ${locs.join("  ")}${hits.length > 5 ? dim(`  (+${hits.length - 5} more)`) : ""}`));
+    } else if (e.tool === "find") {
+      // A find match is one line, so cite it as path:line; the count is the
+      // repo-wide total, which can exceed the lines that were returned.
+      const hits = e.hits ?? [];
+      const files = new Set(hits.map((h) => h.path)).size;
+      console.log(
+        `${dim(clock)}  ${bold(tool)}  ${q}  ${dim(`-> ${e.matches ?? hits.length} matches / ${files} files | ~${fmtTokens(e.returnedTokens)} tok`)}`,
+      );
+      const locs = hits.slice(0, 5).map((h) => `${h.path}:${h.startLine}`);
       if (locs.length) console.log(green(`            ${locs.join("  ")}${hits.length > 5 ? dim(`  (+${hits.length - 5} more)`) : ""}`));
     } else {
       console.log(

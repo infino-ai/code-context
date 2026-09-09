@@ -28,7 +28,7 @@
   <!-- connector A -> B -->
   <line x1="620" y1="200" x2="620" y2="258" stroke="#334155" stroke-width="2" marker-end="url(#arrow)"/>
   <text x="640" y="226" font-size="13.5" fill="#475569" font-family="Menlo, monospace">CLI (cx)  +  MCP server</text>
-  <text x="640" y="246" font-size="13.5" fill="#94a3b8" font-family="Menlo, monospace">tools: search · sql · reindex</text>
+  <text x="640" y="246" font-size="13.5" fill="#94a3b8" font-family="Menlo, monospace">tools: find · search · sql</text>
 
   <!-- ============ Row B: code-context ============ -->
   <rect x="80" y="260" width="1080" height="354" rx="10" fill="#fafafa" stroke="#cbd5e1" stroke-width="1.5"/>
