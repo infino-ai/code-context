@@ -12,8 +12,12 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { foldToolMessage, newToolAccounting } from "../bench/lanes.mjs";
+import { ledgerMark, ledgerSince, meteredFrom, ourCharge } from "./charge.mjs";
 import { livePhase, phaseOf, phaseShares, phaseSplit, spansOf, unionMs } from "./phases.mjs";
 
 /** One assistant message carrying one tool_use block. */
@@ -193,6 +197,54 @@ test("foldToolMessage returns the calls this message started and ended, in strea
 
   // a result for an id nobody opened is ignored rather than invented
   assert.deepEqual(foldToolMessage(acc, result("nope"), 800).ended, []);
+});
+
+// --- the charge -------------------------------------------------------------
+
+test("the ledger delta is sliced by BYTE offset, so non-ASCII before the mark does not lose every entry", () => {
+  const dir = mkdtempSync(join(tmpdir(), "cx-demo-ledger-"));
+  // A prior run's line holding source code, which is where the non-ASCII comes
+  // from in the real ledger: box drawing, arrows, accented identifiers.
+  const before = JSON.stringify({ tool: "find", query: "let x = \"— ▸ café ✓\";" }) + "\n";
+  writeFileSync(join(dir, "usage.jsonl"), before);
+  const mark = ledgerMark(dir);
+  assert.ok(mark > Buffer.byteLength(before) - 1);
+  assert.ok(mark > before.length, "the byte length exceeds the character length, which is the trap");
+
+  // The real entry this test was written from, fractional rtt and all.
+  const mine = JSON.stringify({ tool: "explore", agentModelTokens: 155_615, platform: { rttMs: 39_936.724707, readTokens: 32 } }) + "\n";
+  writeFileSync(join(dir, "usage.jsonl"), before + mine);
+
+  const entries = ledgerSince(dir, mark);
+  assert.equal(entries.length, 1, "slicing the decoded string instead would return nothing");
+  assert.equal(entries[0].tool, "explore");
+  const metered = meteredFrom(entries);
+  assert.deepEqual(metered, { readTokens: 32, modelTokens: 155_615, platformCalls: 1, platformMs: 39_937 });
+});
+
+test("a missing ledger meters zero rather than throwing, and the grep arm has no ledger at all", () => {
+  assert.equal(ledgerMark("/nonexistent/dir"), 0);
+  assert.deepEqual(ledgerSince("/nonexistent/dir", 0), []);
+  assert.deepEqual(meteredFrom([]), { readTokens: 0, modelTokens: 0, platformCalls: 0, platformMs: 0 });
+});
+
+test("our charge stays in tokens until both rates are given, and never half-prices a bill", () => {
+  const metered = { readTokens: 32, modelTokens: 155_615, platformCalls: 1, platformMs: 39_937 };
+  const none = ourCharge(metered, { readTokenUsdPerMillion: null, modelTokenUsdPerMillion: null, markup: 0 });
+  assert.equal(none.totalUsd, null);
+  assert.equal(none.priced, false);
+
+  // One rate is not a bill: a total here would understate it silently.
+  const half = ourCharge(metered, { readTokenUsdPerMillion: 50, modelTokenUsdPerMillion: null, markup: 0.3 });
+  assert.equal(half.totalUsd, null);
+  assert.equal(half.priced, false);
+
+  const both = ourCharge(metered, { readTokenUsdPerMillion: 50, modelTokenUsdPerMillion: 0.2327, markup: 0.3 });
+  assert.ok(Math.abs(both.retrievalUsd - 0.0016) < 1e-9);
+  // 155,615 tokens at $0.2327/M is $0.03621, plus 30% is $0.04707
+  assert.ok(Math.abs(both.inferenceUsd - 0.047073) < 1e-5);
+  assert.equal(both.priced, true);
+  assert.ok(Math.abs(both.totalUsd - (both.retrievalUsd + both.inferenceUsd)) < 1e-12);
 });
 
 test("an end-to-end grep-shaped stream splits the way the bar will draw it", () => {

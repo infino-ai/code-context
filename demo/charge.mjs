@@ -47,16 +47,23 @@ export function ledgerMark(indexDir) {
 
 /** The entries appended since `mark`. A torn or half-written final line is
  * skipped rather than throwing - the client appends without locking, and a
- * demo must not fail on a line it could not parse. */
+ * demo must not fail on a line it could not parse.
+ *
+ * The file is read as BYTES and sliced before decoding, because `mark` is a
+ * byte offset from `statSync().size` and a decoded string is indexed in UTF-16
+ * code units. Slicing the string instead reads short by one position per
+ * non-ASCII byte, which on a ledger holding source code lands past the end and
+ * silently reports that the run metered nothing. Measured against a 23 MB
+ * ledger: every entry lost, no error. */
 export function ledgerSince(indexDir, mark) {
   let text;
   try {
-    text = readFileSync(ledgerPath(indexDir), "utf8");
+    text = readFileSync(ledgerPath(indexDir)).subarray(mark).toString("utf8");
   } catch {
     return [];
   }
   const entries = [];
-  for (const line of text.slice(mark).split("\n")) {
+  for (const line of text.split("\n")) {
     if (!line.trim()) continue;
     try {
       entries.push(JSON.parse(line));
