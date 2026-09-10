@@ -39,6 +39,9 @@ interface DefSite {
   name: string;
   kind: string;
   scope: string;
+  /** A definition worth NAMING but not worth breaking a chunk at - see
+   * [`NAME_ONLY_TYPES`]. Excluded from the break rows, kept for the symbol. */
+  nameOnly?: boolean;
 }
 
 /** The text we embed / index for a chunk: a compact, deterministic context
@@ -209,6 +212,7 @@ const DEF_TYPES: Record<string, Set<string>> = {
   ]),
   // Shell: break at function definitions (scripts are otherwise flat).
   bash: new Set(["function_definition"]),
+  // (name-only kinds live in NAME_ONLY_TYPES below, not here)
   // CSS: break at each rule set and at-rule block; packSegments coalesces
   // small rules into windows, so this doesn't over-fragment.
   css: new Set([
@@ -220,6 +224,43 @@ const DEF_TYPES: Record<string, Set<string>> = {
   powershell: new Set(["function_statement", "class_statement"]),
 };
 DEF_TYPES.tsx = DEF_TYPES.typescript;
+
+// Node types that NAME a chunk without breaking one.
+//
+// `find(defines: true)` keeps a match only where the chunk's `symbol` column
+// lists the name, and the column is built from the definitions above. Those
+// are all the kinds worth starting a new chunk at, which left constants,
+// statics and type aliases out of the column entirely — so `defines` returned
+// nothing for any of them. Measured 2026-09-10 on the pinpoint question that
+// asks for every `std::env::var` read: the model narrowed to eleven
+// consecutive constant names with `defines: true`, got `0 matches / 0 files`
+// on every one, abandoned the tool and finished the question with three shell
+// greps. Confirmed against the index: `API_KEY_ENV` and `SHAPE_ENV` appear in
+// chunk text and zero times in a symbol column, where `pack_partition` and
+// `SuperfileReader` appear in both.
+//
+// They are separate from DEF_TYPES rather than added to it because these are
+// the same list to two consumers: the rows drive chunk break points and the
+// names build the symbol. A file opening with twenty `const` declarations
+// would fragment into twenty chunks, which is a worse bug than the one being
+// fixed. Marked `nameOnly` and filtered out of the break rows, so chunk
+// boundaries are byte-identical and only the symbol column gains entries.
+const NAME_ONLY_TYPES: Record<string, Set<string>> = {
+  rust: new Set(["const_item", "static_item", "type_item", "union_item"]),
+  typescript: new Set(["lexical_declaration", "variable_declaration"]),
+  javascript: new Set(["lexical_declaration", "variable_declaration"]),
+  go: new Set(["const_declaration", "var_declaration"]),
+  java: new Set(["field_declaration"]),
+  "c-sharp": new Set(["field_declaration", "property_declaration"]),
+  cpp: new Set(["declaration", "type_definition"]),
+  python: new Set([]),
+  ruby: new Set([]),
+  php: new Set(["const_declaration", "property_declaration"]),
+  bash: new Set([]),
+  css: new Set([]),
+  powershell: new Set([]),
+};
+NAME_ONLY_TYPES.tsx = NAME_ONLY_TYPES.typescript;
 
 // The runtime and grammars ship together in @vscode/tree-sitter-wasm (CJS),
 // so the parser ABI always matches the grammar builds.
@@ -336,8 +377,9 @@ async function syntacticDefs(lang: string, content: string): Promise<DefSite[] |
     });
     if (!tree) return undefined;
     const defs = DEF_TYPES[grammar];
+    const nameOnly = NAME_ONLY_TYPES[grammar] ?? new Set<string>();
     const sites: DefSite[] = [];
-    collectDefs(tree.rootNode, defs, [], sites, 0);
+    collectDefs(tree.rootNode, defs, nameOnly, [], sites, 0);
     consecutiveParseFailures = 0; // the runtime is healthy again
     return sites.sort((a, b) => a.row - b.row);
   } catch {
@@ -351,9 +393,33 @@ async function syntacticDefs(lang: string, content: string): Promise<DefSite[] |
 // Depth cap keeps this to module/class/method level, not local closures.
 const MAX_DEPTH = 6;
 
-function collectDefs(node: TSNode, defs: Set<string>, scope: string[], sites: DefSite[], depth: number): void {
+function collectDefs(
+  node: TSNode,
+  defs: Set<string>,
+  nameOnly: Set<string>,
+  scope: string[],
+  sites: DefSite[],
+  depth: number,
+): void {
   if (depth > MAX_DEPTH) return;
   for (const child of node.namedChildren) {
+    // A name-only kind is recorded and then left alone: it names the chunk it
+    // sits in, it does not start one, and nothing inside a constant or a type
+    // alias is a definition worth scoping under it.
+    if (nameOnly.has(child.type) && !defs.has(child.type)) {
+      const name = nameOf(child);
+      if (name) {
+        sites.push({
+          row: child.startPosition.row,
+          endRow: child.endPosition.row,
+          name,
+          kind: kindOf(child.type),
+          scope: scope.join(" › "),
+          nameOnly: true,
+        });
+      }
+      continue;
+    }
     if (defs.has(child.type)) {
       const name = nameOf(child);
       sites.push({
@@ -369,9 +435,9 @@ function collectDefs(node: TSNode, defs: Set<string>, scope: string[], sites: De
         kind: kindOf(child.type),
         scope: scope.join(" › "),
       });
-      collectDefs(child, defs, name ? [...scope, name] : scope, sites, depth + 1);
+      collectDefs(child, defs, nameOnly, name ? [...scope, name] : scope, sites, depth + 1);
     } else {
-      collectDefs(child, defs, scope, sites, depth + 1);
+      collectDefs(child, defs, nameOnly, scope, sites, depth + 1);
     }
   }
 }
@@ -401,6 +467,14 @@ function kindOf(type: string): string {
   if (/method/.test(type)) return "method";
   if (/function/.test(type)) return "function";
   if (/rule_set|keyframes|media/.test(type)) return "rule";
+  // The name-only kinds. `const` before `static` and both before the generic
+  // declaration, since C++ reaches this with a bare `declaration`.
+  if (/const/.test(type)) return "const";
+  if (/static/.test(type)) return "static";
+  if (/type_item|type_definition|type_alias/.test(type)) return "type";
+  if (/union/.test(type)) return "union";
+  if (/property/.test(type)) return "property";
+  if (/field|lexical_declaration|variable_declaration|^declaration$/.test(type)) return "value";
   return "def";
 }
 
@@ -583,8 +657,13 @@ const DOC_OR_ATTR_LINE = /^\s*(\/\/\/|\/\/!|\/\*|\*|#\[|@\w|#(?!!)\s)/;
  * at a blank line, at anything that is not a doc/attribute line, and at
  * another definition's row, so it can never swallow the definition above. */
 function breakRowsCarryingDocs(lines: string[], defs: DefSite[]): number[] {
-  const defRows = new Set(defs.map((d) => d.row));
-  return defs.map((d) => {
+  // Name-only definitions never become break points, so a block of constants
+  // does not fragment into one chunk each. They stay in `defs` for the symbol
+  // column and are filtered here, which is the whole reason the two are
+  // separate sets.
+  const breaking = defs.filter((d) => !d.nameOnly);
+  const defRows = new Set(breaking.map((d) => d.row));
+  return breaking.map((d) => {
     let row = d.row;
     while (row > 0 && !defRows.has(row - 1) && DOC_OR_ATTR_LINE.test(lines[row - 1] ?? "")) row--;
     return row;
@@ -615,8 +694,12 @@ export async function chunkFile(path: string, content: string): Promise<Chunk[]>
     spans = defs.length > 0 ? packSegments(lines, defs.map((d) => d.row)) : fixedWindows(lines, 1);
   } else {
     defs = await syntacticDefs(lang, content);
+    // Only a BREAKING definition justifies syntactic spans. A file that is
+    // nothing but constants has definitions to name chunks by and none to cut
+    // them at, and it falls back to fixed windows exactly as it did before
+    // those constants were recorded.
     spans =
-      defs && defs.length > 0
+      defs && defs.some((d) => !d.nameOnly)
         ? packSegments(lines, breakRowsCarryingDocs(lines, defs))
         : fixedWindows(lines, 1);
   }

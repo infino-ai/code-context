@@ -206,6 +206,45 @@ describe("chunkFile", () => {
     expect(scoped).toBeDefined();
   });
 
+  /** A constant is named in the symbol column, and does not break a chunk.
+   *
+   * `find(defines: true)` keeps a match only where the chunk's symbol column
+   * lists the name, so a kind missing from that column is invisible to the
+   * flag. Constants, statics and type aliases were all missing. Measured
+   * 2026-09-10 on the pinpoint question asking for every `std::env::var`
+   * read: the model narrowed to eleven constant names with `defines: true`,
+   * got `0 matches / 0 files` on all eleven, gave up on the tool and finished
+   * with three shell greps.
+   *
+   * The second half of the assertion is the part that could regress
+   * silently. Naming these kinds by adding them to the break set would
+   * fragment a block of constants into one chunk each, which is worse than
+   * the bug. They must name a chunk without starting one. */
+  it("names a const without breaking a chunk at it", async () => {
+    const consts = [0, 1, 2, 3, 4, 5].map((n) => `const K${n}: u64 = ${n};`).join("\n");
+    const body = `${"    step();\n".repeat(40)}`;
+    const src = `${consts}\n\nfn only_fn() {\n${body}}\n`;
+    const chunks = await chunkFile("c.rs", src);
+
+    const names = chunks.flatMap((c) => (c.symbol ?? "").split(",").map((s) => s.trim()));
+    for (const n of ["K0", "K3", "K5"]) {
+      expect(names, `${n} is named so defines can see it`).toContain(n);
+    }
+    // Six constants on six consecutive lines must not become six chunks: the
+    // block sits in whichever chunk covers line 1.
+    const holding = chunks.filter((c) => c.startLine <= 6 && c.endLine >= 1);
+    expect(holding.length, `the const block is not fragmented: ${chunks.map((c) => `${c.startLine}-${c.endLine}`).join(" ")}`).toBe(1);
+    // And the function still breaks, so real definitions are unaffected.
+    expect(names).toContain("only_fn");
+  });
+
+  it("names a type alias, which defines could not see either", async () => {
+    const src = `type Rows = Vec<u8>;\n\nfn f() {\n${"    x();\n".repeat(40)}}\n`;
+    const chunks = await chunkFile("t.rs", src);
+    const names = chunks.flatMap((c) => (c.symbol ?? "").split(",").map((s) => s.trim()));
+    expect(names).toContain("Rows");
+  });
+
   it("carries the markdown heading as symbol, nested under its parent", async () => {
     const md = ["# Title", ...Array(70).fill("text"), "## Second", ...Array(10).fill("more")].join("\n");
     const chunks = await chunkFile("doc.md", md);
