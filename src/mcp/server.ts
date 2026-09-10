@@ -484,7 +484,13 @@ export async function serveMcp(rootPath?: string): Promise<void> {
           const result = await searchHosted(ctx.hosted, query, k);
           let usage: string | undefined;
           if (receiptOn) {
-            const entry = searchEntry(result, ctx.root);
+            // withPlatform, as the ask and explore paths do: the platform
+            // returns the tokens it metered for this call, and without this
+            // a remote search is the one hosted path whose read tokens never
+            // reach the ledger. They were being estimated at a measured rate
+            // per search instead, which is a made-up number standing in for
+            // one the response already carried.
+            const entry = withPlatform(searchEntry(result, ctx.root), ctx);
             recordUsage(ctx.dir, entry);
             usage = formatReceipt(entry, session);
           }
