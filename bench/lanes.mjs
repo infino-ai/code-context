@@ -804,8 +804,22 @@ export function recordedQueries(toolDetails) {
  * across the whole run, outer and every subagent's calls interleaved in
  * stream order - runs of consecutive entries in that list do NOT mean
  * concurrent messages, because a subagent's own calls land between an outer
- * batch's entries. Group by (`batch`, `inSubagent`) instead of by adjacency. */
-export function foldToolMessage(acc, m) {
+ * batch's entries. Group by (`batch`, `inSubagent`) instead of by adjacency.
+ *
+ * `now` is the caller's clock, in milliseconds since the run began. Pass it and
+ * every call gets `startedAt` when its tool_use is folded and `endedAt` when its
+ * result comes back - a WALL span, which is the only timing a built-in tool has
+ * (`tookMs` is the MCP servers' own and is null for Read, Grep, Bash and the
+ * rest). Omit it and the details are byte-for-byte what they were before, which
+ * is what keeps the recorded rows and their tests unchanged. The end stamp is
+ * when the result message was folded, so it is an upper bound on the call.
+ *
+ * Returns the details this message started and ended, so a caller streaming the
+ * run can emit an event per transition without re-deriving which block was
+ * which. Nothing in the harness reads it. */
+export function foldToolMessage(acc, m, now) {
+  const started = [];
+  const ended = [];
   if (m.type === "assistant") {
     const inSubagent = Boolean(m.parent_tool_use_id);
     const batch = acc.batchSeq;
@@ -817,8 +831,9 @@ export function foldToolMessage(acc, m) {
         acc.toolCalls.push(name);
         // The input is kept for every call, so the queries an answer was
         // built on can be rerun by whoever grades it.
-        const detail = { name, input: keepInput(b.input), tookMs: null, usage: null, batch, ...(inSubagent ? { inSubagent: true } : {}) };
+        const detail = { name, input: keepInput(b.input), tookMs: null, usage: null, batch, ...(inSubagent ? { inSubagent: true } : {}), ...(now === undefined ? {} : { startedAt: now }) };
         acc.toolDetails.push(detail);
+        started.push(detail);
         if (b.id) acc.pending.set(b.id, detail);
         if (inSubagent) acc.subagentCalls++;
         if (b.name === AGENT_TOOL) acc.subagents.push(typeof b.input?.subagent_type === "string" ? b.input.subagent_type : "?");
@@ -834,6 +849,10 @@ export function foldToolMessage(acc, m) {
       const detail = acc.pending.get(b.tool_use_id);
       if (!detail) continue;
       acc.pending.delete(b.tool_use_id);
+      // Stamped before the MCP-only branch below, because the wall span is the
+      // whole point for a built-in tool: Read, Grep and Bash have no `tookMs`.
+      if (now !== undefined) detail.endedAt = now;
+      ended.push(detail);
       if (b.is_error) detail.isError = true;
       if (!isMcpTool(detail.name)) continue;
       const parsed = parseCxResult(toolResultText(b, m.tool_use_result));
@@ -842,6 +861,7 @@ export function foldToolMessage(acc, m) {
       if (parsed.queries.length) detail.queries = parsed.queries;
     }
   }
+  return { started, ended };
 }
 
 export const newToolAccounting = () => ({ toolCalls: [], toolDetails: [], pending: new Map(), subagentCalls: 0, subagents: [], batchSeq: 0 });
@@ -855,13 +875,31 @@ export const cxTookMs = (toolDetails) => tookMsOf(toolDetails, isCxTool);
 /** The Snowflake calls' share: the warehouse's work, 0 in every other lane. */
 export const sfTookMs = (toolDetails) => tookMsOf(toolDetails, isSfTool);
 
-/** Run one agent conversation; returns the measured record. */
-export async function runLane({ lane, prompt, system, repoDir, indexDir, maxTurns = SESSION_MAX_TURNS }) {
+/** Run one agent conversation; returns the measured record.
+ *
+ * `onEvent`, when given, is called as the run happens rather than after it:
+ * `{at, kind, name, batch, inSubagent}` for every tool call that starts and
+ * every one that ends, `at` in milliseconds since this run began. It is how a
+ * live page draws a bar while the answer is still being written; every caller
+ * that does not pass it gets exactly the behaviour it had before. A throwing
+ * callback must not take the run down with it - the run is the expensive
+ * thing - so each call is guarded. */
+export async function runLane({ lane, prompt, system, repoDir, indexDir, maxTurns = SESSION_MAX_TURNS, onEvent }) {
   const t0 = performance.now();
   const acc = newToolAccounting();
+  const emit = onEvent
+    ? (event) => {
+        try {
+          onEvent(event);
+        } catch {
+          /* a listener's fault is not the run's */
+        }
+      }
+    : null;
   let usage = null;
   let costUsd = null;
   let modelUsage = null;
+  let durationApiMs = null;
   let answer = "";
   let error = null;
   try {
@@ -876,7 +914,12 @@ export async function runLane({ lane, prompt, system, repoDir, indexDir, maxTurn
         ...laneOptions(lane, repoDir, indexDir),
       },
     })) {
-      foldToolMessage(acc, m);
+      const at = Math.round(performance.now() - t0);
+      const { started, ended } = foldToolMessage(acc, m, at);
+      if (emit) {
+        for (const d of started) emit({ at, kind: "tool_start", name: d.name, batch: d.batch, inSubagent: Boolean(d.inSubagent) });
+        for (const d of ended) emit({ at, kind: "tool_end", name: d.name, batch: d.batch, inSubagent: Boolean(d.inSubagent) });
+      }
       if (m.type === "assistant") {
         for (const b of m.message.content ?? []) {
           if (b.type === "text") answer = b.text;
@@ -885,6 +928,10 @@ export async function runLane({ lane, prompt, system, repoDir, indexDir, maxTurn
       if (m.type === "result") {
         usage = m.usage ?? null;
         costUsd = m.total_cost_usd ?? null;
+        // The SDK's own split of the run: time spent waiting on the model API
+        // against total. A second, independent estimate of the model share, so
+        // the bar drawn from tool spans can be checked rather than trusted.
+        durationApiMs = m.duration_api_ms ?? null;
         // `usage` is the main loop alone; `modelUsage` is every model call the
         // run made, subagents included, and carries a cost per model. It is
         // the only field that separates what the outer model spent from what
@@ -915,6 +962,7 @@ export async function runLane({ lane, prompt, system, repoDir, indexDir, maxTurn
     usage: u,
     costUsd,
     modelUsage,
+    durationApiMs,
     wallMs: Math.round(performance.now() - t0),
     toolCalls,
     toolDetails,

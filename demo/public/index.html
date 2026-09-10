@@ -1,0 +1,330 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sonnet + grep vs Sonnet + infino</title>
+<style>
+  :root {
+    --ground: #0e1116; --panel: #161b22; --ink: #e8ecf1; --soft: #a7b0bd; --faint: #7b8494;
+    --rule: #262d37;
+    --model: #4c5563;      /* the caller model thinking */
+    --retrieval: #2f9e8f;  /* finding code: grep on one side, the index on the other */
+    --subagent: #d9b465;   /* work handed to another loop */
+    --warn: #e39191;
+    --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      --ground: #f6f7f9; --panel: #fff; --ink: #14181e; --soft: #4c5563; --faint: #7b8494;
+      --rule: #dfe3e9; --model: #b3bac4; --retrieval: #0f7d70; --subagent: #a8801f; --warn: #8c2f2f;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--ground); color: var(--ink);
+    font: 14px/1.55 var(--mono); padding: clamp(16px, 3vw, 36px);
+  }
+  h1 { font-size: 17px; font-weight: 500; margin: 0 0 4px; letter-spacing: -.01em; }
+  .sub { color: var(--faint); font-size: 12.5px; margin: 0 0 22px; }
+  form { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+  input[type=text] {
+    flex: 1 1 420px; min-width: 0; background: var(--panel); color: var(--ink);
+    border: 1px solid var(--rule); border-radius: 0; padding: 10px 12px; font: inherit;
+  }
+  input[type=text]:focus { outline: 2px solid var(--retrieval); outline-offset: -1px; }
+  button {
+    background: var(--retrieval); color: #06110f; border: 0; border-radius: 0;
+    padding: 10px 18px; font: inherit; font-weight: 500; cursor: pointer;
+  }
+  button:disabled { background: var(--rule); color: var(--faint); cursor: default; }
+  .examples { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 20px; }
+  .examples button {
+    background: transparent; color: var(--soft); border: 1px solid var(--rule);
+    padding: 4px 9px; font-size: 12px; font-weight: 400;
+  }
+  .legend { display: flex; gap: 18px; margin-bottom: 14px; font-size: 12px; color: var(--soft); flex-wrap: wrap; }
+  .swatch { display: inline-block; width: 10px; height: 10px; margin-right: 6px; vertical-align: -1px; }
+  .status { color: var(--faint); font-size: 12.5px; min-height: 1.6em; margin-bottom: 14px; }
+  .arms { display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); gap: 16px; }
+  .arm { background: var(--panel); border: 1px solid var(--rule); padding: 16px 18px 18px; }
+  .arm h2 { font-size: 13px; font-weight: 500; margin: 0 0 2px; }
+  .lane { color: var(--faint); font-size: 11.5px; margin: 0 0 14px; }
+  .clock { float: right; font-variant-numeric: tabular-nums; color: var(--soft); font-size: 12px; }
+  .track { height: 26px; background: var(--ground); border: 1px solid var(--rule); display: flex; overflow: hidden; }
+  .seg { height: 100%; transition: width .12s linear; }
+  .seg.model { background: var(--model); }
+  .seg.retrieval { background: var(--retrieval); }
+  .seg.subagent { background: var(--subagent); }
+  .split { display: flex; gap: 14px; margin-top: 8px; font-size: 11.5px; color: var(--soft); flex-wrap: wrap; }
+  .split b { font-weight: 500; color: var(--ink); font-variant-numeric: tabular-nums; }
+  table { width: 100%; border-collapse: collapse; margin-top: 16px; font-size: 12.5px; }
+  th, td { text-align: right; padding: 5px 0; border-top: 1px solid var(--rule); font-variant-numeric: tabular-nums; }
+  th:first-child, td:first-child { text-align: left; color: var(--soft); font-weight: 400; }
+  .answer {
+    margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--rule);
+    font-size: 12.5px; color: var(--soft); white-space: pre-wrap; word-break: break-word;
+    max-height: 320px; overflow-y: auto;
+  }
+  .tools { margin-top: 10px; font-size: 11px; color: var(--faint); word-break: break-word; }
+  .err { color: var(--warn); }
+  .note { margin-top: 26px; color: var(--faint); font-size: 11.5px; max-width: 70ch; }
+  .fixture {
+    background: var(--warn); color: #1a0c0c; padding: 8px 12px; margin-bottom: 16px;
+    font-size: 12px; font-weight: 500;
+  }
+</style>
+</head>
+<body>
+
+<div class="fixture" id="fixture" hidden>FIXTURE MODE — invented data. No model ran, no question was answered. Nothing on this page is a measurement.</div>
+
+<h1>Sonnet + grep &nbsp;vs&nbsp; Sonnet + infino</h1>
+<p class="sub">One question, both arms at once. Each bar fills as its run happens, coloured by where the time is going.</p>
+
+<form id="ask">
+  <input type="text" id="q" placeholder="Ask something about the infino engine repository…" autocomplete="off">
+  <button type="submit" id="go">Run both</button>
+</form>
+<div class="examples" id="examples"></div>
+
+<div class="legend">
+  <span><i class="swatch" style="background:var(--model)"></i>model — the caller thinking</span>
+  <span><i class="swatch" style="background:var(--retrieval)"></i>retrieval — finding code (grep / the index)</span>
+  <span><i class="swatch" style="background:var(--subagent)"></i>subagent — handed to another loop</span>
+</div>
+
+<div class="status" id="status">Ready.</div>
+<div class="arms" id="arms"></div>
+
+<p class="note">
+  One question is an anecdote, not a benchmark: the published comparison is 36 questions with a blind
+  judge, and a single pair will sometimes go the other way. The saving concentrates on questions that
+  make an agent fan out — on the recorded set, nine of thirty-six questions carried two thirds of the
+  grep arm's whole bill.
+</p>
+
+<script>
+const PHASES = ["model", "retrieval", "subagent"];
+const EXAMPLES = [
+  "How does compaction decide which superfiles to merge, and how does it run?",
+  "Which files hold the most code about tombstones?",
+  "Where is the BM25 score actually computed?",
+  "How does the manifest commit stay atomic under a concurrent writer?",
+];
+
+const armsEl = document.getElementById("arms");
+const statusEl = document.getElementById("status");
+const form = document.getElementById("ask");
+const input = document.getElementById("q");
+const go = document.getElementById("go");
+
+for (const text of EXAMPLES) {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.textContent = text.length > 52 ? text.slice(0, 50) + "…" : text;
+  b.title = text;
+  b.onclick = () => { input.value = text; input.focus(); };
+  document.getElementById("examples").append(b);
+}
+
+/** Live state for one arm: the segments drawn so far plus the one still
+ * growing. A segment is {phase, from, to} in milliseconds since the arm began;
+ * the open one has no `to` until the phase changes. */
+function newArm(meta) {
+  const el = document.createElement("section");
+  el.className = "arm";
+  el.innerHTML = `
+    <span class="clock" data-clock>0.0s</span>
+    <h2>${meta.label}</h2>
+    <p class="lane">lane ${meta.lane}</p>
+    <div class="track" data-track></div>
+    <div class="split" data-split></div>
+    <div data-body></div>`;
+  armsEl.append(el);
+  return {
+    meta, el,
+    track: el.querySelector("[data-track]"),
+    splitEl: el.querySelector("[data-split]"),
+    clockEl: el.querySelector("[data-clock]"),
+    bodyEl: el.querySelector("[data-body]"),
+    segments: [{ phase: "model", from: 0 }],
+    lastAt: 0,
+    finishedAt: null,
+    nodes: [],
+  };
+}
+
+/** Close the open segment at `at` and open one for `phase` — unless the phase
+ * has not actually changed, in which case the open segment simply keeps
+ * growing. */
+function switchPhase(arm, at, phase) {
+  const open = arm.segments[arm.segments.length - 1];
+  if (open.phase === phase) return;
+  open.to = at;
+  arm.segments.push({ phase, from: at });
+}
+
+/** Repaint one arm's bar. `now` is how long the arm has been running, which
+ * for a finished arm is its wall clock and for a live one is the clock. */
+function paint(arm, now) {
+  const total = Math.max(now, 1);
+  while (arm.nodes.length < arm.segments.length) {
+    const node = document.createElement("span");
+    node.className = "seg";
+    arm.track.append(node);
+    arm.nodes.push(node);
+  }
+  arm.segments.forEach((s, i) => {
+    const end = s.to ?? now;
+    const node = arm.nodes[i];
+    node.className = `seg ${s.phase}`;
+    node.style.width = `${Math.max(0, ((end - s.from) / total) * 100)}%`;
+  });
+  arm.clockEl.textContent = `${(now / 1000).toFixed(1)}s`;
+}
+
+/** The finished arm's own numbers, from the server rather than from the bar —
+ * the bar is a drawing, the split is the measurement. */
+function render(arm, r) {
+  const pct = (ms) => (r.split.wallMs > 0 ? Math.round((ms / r.split.wallMs) * 100) : 0);
+  arm.splitEl.innerHTML = PHASES.map((p) => {
+    const ms = r.split[`${p}Ms`];
+    return `<span><i class="swatch" style="background:var(--${p})"></i>${p} <b>${(ms / 1000).toFixed(1)}s</b> ${pct(ms)}%</span>`;
+  }).join("");
+
+  const money = (v) => (v === null || v === undefined ? "—" : `$${v < 0.01 ? v.toFixed(4) : v.toFixed(3)}`);
+  const n = (v) => (v === null || v === undefined ? "—" : v.toLocaleString());
+  const ours = r.cost.ours;
+  const m = r.cost.metered;
+  arm.bodyEl.innerHTML = `
+    <table>
+      <tr><th>wall clock</th><td>${(r.wallMs / 1000).toFixed(1)}s</td></tr>
+      <tr><th>tool calls</th><td>${n(r.calls)}</td></tr>
+      <tr><th>caller tokens</th><td>${n(r.tokens)}</td></tr>
+      <tr><th>their model bill</th><td>${money(r.cost.theirModelBillUsd)}</td></tr>
+      <tr><th>our read tokens</th><td>${n(m.readTokens)}</td></tr>
+      <tr><th>our inference tokens</th><td>${n(m.modelTokens)}</td></tr>
+      <tr><th>our charge</th><td>${ours.priced ? money(ours.totalUsd) : "unpriced"}</td></tr>
+    </table>
+    ${r.error ? `<div class="answer err">${escapeHtml(r.error)}</div>` : `<div class="answer">${escapeHtml(r.answer || "(no answer)")}</div>`}
+    <div class="tools">${r.toolCalls.length ? escapeHtml(r.toolCalls.join(" · ")) : "no tool calls"}</div>`;
+}
+
+const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+let live = null;
+
+form.onsubmit = (e) => {
+  e.preventDefault();
+  const question = input.value.trim();
+  if (!question || live) return;
+  armsEl.innerHTML = "";
+  go.disabled = true;
+  statusEl.textContent = "Queued…";
+
+  const arms = new Map();
+  const started = performance.now();
+  const source = new EventSource(`/run?q=${encodeURIComponent(question)}`);
+  live = source;
+
+  // The bar has to keep growing between events, or a 60-second subagent call
+  // looks like a hang. Every frame extends whichever segment is open.
+  const tick = () => {
+    if (!live) return;
+    for (const arm of arms.values()) {
+      if (arm.finishedAt === null) paint(arm, performance.now() - arm.startedAt);
+    }
+    requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+
+  source.addEventListener("queued", (e) => {
+    const d = JSON.parse(e.data);
+    document.getElementById("fixture").hidden = !d.fixture;
+    for (const meta of d.arms) {
+      const arm = newArm(meta);
+      arm.startedAt = performance.now();
+      arms.set(meta.id, arm);
+    }
+    statusEl.textContent = "Waiting for a slot…";
+  });
+
+  source.addEventListener("started", (e) => {
+    const d = JSON.parse(e.data);
+    for (const arm of arms.values()) arm.startedAt = performance.now();
+    statusEl.textContent = `Running both arms — run ${d.run} of ${d.of}. This takes tens of seconds; the grep arm can take minutes.`;
+  });
+
+  for (const kind of ["arm_start", "tool_start", "tool_end"]) {
+    source.addEventListener(kind, (e) => {
+      const d = JSON.parse(e.data);
+      const arm = arms.get(d.arm);
+      if (!arm) return;
+      if (d.nowIn) switchPhase(arm, d.at, d.nowIn);
+      arm.lastAt = d.at;
+      paint(arm, Math.max(d.at, performance.now() - arm.startedAt));
+    });
+  }
+
+  source.addEventListener("done", (e) => {
+    const d = JSON.parse(e.data);
+    for (const r of d.results) {
+      const arm = arms.get(r.arm);
+      if (!arm) continue;
+      arm.finishedAt = r.wallMs;
+      // Redraw from the measurement rather than the drawing, so the finished
+      // bar matches the numbers printed under it.
+      arm.segments = segmentsFromSplit(arm.segments, r.split);
+      paint(arm, r.split.wallMs);
+      render(arm, r);
+    }
+    const [a, b] = d.results;
+    if (a && b && !a.error && !b.error) {
+      const faster = (a.wallMs / b.wallMs).toFixed(1);
+      const cheaper = a.cost.theirModelBillUsd && b.cost.theirModelBillUsd
+        ? (a.cost.theirModelBillUsd / b.cost.theirModelBillUsd).toFixed(1) : null;
+      statusEl.textContent = `Done. infino was ${faster}× the speed${cheaper ? ` and ${cheaper}× cheaper on the model bill` : ""} on this one question.`;
+    } else {
+      statusEl.textContent = "Done, with an error on at least one arm.";
+    }
+    stop();
+  });
+
+  source.addEventListener("failed", (e) => {
+    statusEl.innerHTML = `<span class="err">Failed: ${escapeHtml(JSON.parse(e.data).error)}</span>`;
+    stop();
+  });
+
+  source.onerror = () => {
+    if (live) statusEl.textContent = statusEl.textContent.startsWith("Done") ? statusEl.textContent : "Connection closed.";
+    stop();
+  };
+
+  function stop() {
+    source.close();
+    live = null;
+    go.disabled = false;
+  }
+};
+
+/** Scale the segments the bar drew to the split the server measured. The two
+ * agree on ordering and very nearly on size; the server's is the number that
+ * gets quoted, so the finished bar shows that one. */
+function segmentsFromSplit(drawn, split) {
+  const measured = { model: split.modelMs, retrieval: split.retrievalMs, subagent: split.subagentMs };
+  const drawnTotals = { model: 0, retrieval: 0, subagent: 0 };
+  for (const s of drawn) drawnTotals[s.phase] += (s.to ?? split.wallMs) - s.from;
+  let cursor = 0;
+  return drawn.map((s) => {
+    const own = (s.to ?? split.wallMs) - s.from;
+    const share = drawnTotals[s.phase] > 0 ? own / drawnTotals[s.phase] : 0;
+    const width = measured[s.phase] * share;
+    const seg = { phase: s.phase, from: cursor, to: cursor + width };
+    cursor += width;
+    return seg;
+  });
+}
+</script>
+</body>
+</html>
