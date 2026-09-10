@@ -261,15 +261,32 @@ function corpus() {
   };
 }
 
+/** Every path this server answers, with an optional mount prefix stripped.
+ *
+ * `tailscale serve --set-path /demo` puts the page under a prefix, and whether
+ * it strips that prefix before proxying is not something the CLI's help says.
+ * Rather than find out the hard way on someone else's browser, accept both
+ * shapes: `/demo/run` and `/run` reach the same handler. DEMO_BASE_PATH names
+ * the prefix; without it only the bare paths are served, which is what a
+ * dedicated port gives. */
+const BASE_PATH = (process.env.DEMO_BASE_PATH ?? "").replace(/\/+$/, "");
+
+function route(pathname) {
+  if (BASE_PATH && pathname === BASE_PATH) return "/";
+  if (BASE_PATH && pathname.startsWith(`${BASE_PATH}/`)) return pathname.slice(BASE_PATH.length);
+  return pathname;
+}
+
 const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
-  if (url.pathname === "/run") return handleRun(req, res, url);
-  if (url.pathname === "/health") return plain(res, 200, "ok");
-  if (url.pathname === "/corpus") {
+  const path = route(url.pathname);
+  if (path === "/run") return handleRun(req, res, url);
+  if (path === "/health") return plain(res, 200, "ok");
+  if (path === "/corpus") {
     res.writeHead(200, { "content-type": "application/json" });
     return res.end(JSON.stringify(corpus()));
   }
-  if (url.pathname === "/" || url.pathname === "/index.html") {
+  if (path === "/" || path === "/index.html") {
     const html = await readFile(join(HERE, "public", "index.html"), "utf8");
     res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
     return res.end(html);

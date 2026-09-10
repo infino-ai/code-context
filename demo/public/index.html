@@ -136,6 +136,15 @@
 </p>
 
 <script>
+/** Where this page's own endpoints live. Served on its own port the page sits
+ * at "/", and these are "/corpus" and "/run". Mounted under a path by
+ * `tailscale serve --set-path /demo` it sits at "/demo", and an absolute
+ * "/corpus" would leave the mount entirely and hit whatever else that host
+ * serves at the root — here, the gateway. Deriving the base from the page's
+ * own location covers both, with or without a trailing slash. */
+const BASE = location.pathname.replace(/\/index\.html$/, "").replace(/\/$/, "");
+const api = (path) => `${BASE}/${path}`;
+
 const PHASES = ["model", "retrieval", "subagent"];
 const EXAMPLES = [
   "How does compaction decide which superfiles to merge, and how does it run?",
@@ -162,7 +171,7 @@ for (const text of EXAMPLES) {
 }
 
 // What the arms are looking at, from the index's own manifest.
-fetch("/corpus").then((r) => r.json()).then((c) => {
+fetch(api("corpus")).then((r) => r.json()).then((c) => {
   const facts = [];
   if (c.files) facts.push(["files", c.files.toLocaleString()]);
   if (c.chunks) facts.push(["indexed chunks", c.chunks.toLocaleString()]);
@@ -275,7 +284,7 @@ form.onsubmit = (e) => {
 
   const arms = new Map();
   const started = performance.now();
-  const source = new EventSource(`/run?q=${encodeURIComponent(question)}`);
+  const source = new EventSource(api(`run?q=${encodeURIComponent(question)}`));
   live = source;
 
   // The bar has to keep growing between events, or a 60-second subagent call
