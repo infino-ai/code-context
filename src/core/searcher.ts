@@ -130,6 +130,50 @@ export interface SearchResult {
 
 const PROJECTION = ["path", "start_line", "end_line", "lang", "symbol", "content", "score"];
 
+/** One engine row as a hit. Shared by the local and the hosted search so the
+ * two cannot drift: a caller must not be able to tell from the shape of a hit
+ * which index answered, or a lane comparing them would be comparing the
+ * mapping as well as the index. */
+function toHit(r: Record<string, unknown>): SearchHit {
+  const full = String(r.content);
+  const startLine = Number(r.start_line);
+  return {
+    path: String(r.path),
+    startLine,
+    endLine: Number(r.end_line),
+    lang: String(r.lang ?? ""),
+    score: Number(r.score),
+    ...(r.symbol ? { symbol: String(r.symbol) } : {}),
+    // Cut first, then number: the cap is on the code, so the prefixes never
+    // eat into how much of the chunk a hit carries, and a prefix can never
+    // be cut in half. The kept text is a prefix of the chunk either way, so
+    // its lines still run consecutively from the chunk's first line.
+    content: numberLines(full.slice(0, HIT_CONTENT_CAP), startLine),
+    ...(full.length > HIT_CONTENT_CAP ? { truncated: true } : {}),
+  };
+}
+
+/** `search` against the HOSTED index: the platform fuses both legs and embeds
+ * the query with the column's own model, so this needs no local index, no
+ * embedder and no vectors.
+ *
+ * Always "hybrid": the hosted table's embedding column is filled by the
+ * platform at ingest, so the vector leg is there by construction - there is no
+ * backfill window to warn about the way the local path has.
+ *
+ * No `partial` either. That marker means the LOCAL index skipped files over
+ * its size cap; what the hosted table holds was decided when it was loaded,
+ * and this caller has no way to know it. Reporting the local index's
+ * completeness beside hosted hits would be a claim about the wrong index. */
+export async function searchHosted(
+  hosted: { hybridSearch: (t: string, tf: string, vf: string, q: string, k: number, p: string[]) => Promise<Array<Record<string, unknown>>> },
+  query: string,
+  k = DEFAULT_SEARCH_K,
+): Promise<SearchResult> {
+  const rows = await hosted.hybridSearch(TABLE, CONTENT_COLUMN, EMBEDDING_COLUMN, query, k, PROJECTION);
+  return { query, ranking: "hybrid", hits: rows.map(toHit) };
+}
+
 /** The vector leg of a search, or null for a keyword-only pass: the locally
  * embedded query when the index has vectors and an embedder is at hand;
  * nothing otherwise (no vector to fuse means the search stays
@@ -156,19 +200,7 @@ export async function search(
   return {
     query,
     ranking,
-    hits: rows.map((r) => {
-      const full = String(r.content);
-      return {
-        path: String(r.path),
-        startLine: Number(r.start_line),
-        endLine: Number(r.end_line),
-        lang: String(r.lang ?? ""),
-        score: Number(r.score),
-        ...(r.symbol ? { symbol: String(r.symbol) } : {}),
-        content: full.slice(0, HIT_CONTENT_CAP),
-        ...(full.length > HIT_CONTENT_CAP ? { truncated: true } : {}),
-      };
-    }),
+    hits: rows.map(toHit),
     ...(ranking === "keyword" && handle.manifest.vectors !== "ready"
       ? { note: "vectors not ready yet - keyword-ranked only (re-run `cx index` or wait for the vector stage to finish)" }
       : {}),
@@ -335,6 +367,56 @@ export function matchLines(
     const text = lines[i].replace(/\r$/, "");
     const at = (ignoreCase ? text.toLowerCase() : text).indexOf(needle);
     if (at >= 0) out.push({ line: startLine + i, text, at });
+  }
+  return out;
+}
+
+/** What separates a line's number from the line, matching the platform's
+ * renderer so a model reading rows from either side sees one format. */
+const LINE_NUMBER_SEPARATOR = ": ";
+
+/** `text` with each line prefixed by its own number in the file, counting
+ * from 1-based `startLine` — `418: pub fn commit(` — the way a file reader
+ * shows a file.
+ *
+ * A chunk's line range is wider than anything inside it, so a model handed
+ * only the range has to count lines to cite one thing in it. The platform's
+ * renderer numbers its rows for exactly this reason, and records what
+ * happened when it did not: the residual after its range check was citations
+ * that "overshoot or start in the wrong function", because a model cannot
+ * count lines inside a block of text. Numbering costs a few characters a
+ * line and no extra call — the rows are already in hand.
+ *
+ * Empty text stays empty: a row that carries a place and no text is a fact
+ * whose citation is the whole of it, and numbering it would invent a line of
+ * content that does not exist. */
+export function numberLines(text: string, startLine: number): string {
+  if (text === "") return "";
+  return text
+    .split("\n")
+    .map((line, i) => `${startLine + i}${LINE_NUMBER_SEPARATOR}${line}`)
+    .join("\n");
+}
+
+/** A column name that carries a row's first line, by the same rule the
+ * platform's renderer uses: the name contains "start". */
+const SPAN_START_MARK = "start";
+
+/** `row` with every multi-line text cell numbered from the row's own line
+ * span, when the row carries one. A row with no start-line column comes back
+ * untouched: nothing places its text, so any number would be invented. Used
+ * for arbitrary SQL rows, where the projection is the caller's choice — a
+ * `SELECT path, content` cannot be numbered and must not be. */
+export function numberRowLines(row: Record<string, unknown>): Record<string, unknown> {
+  const starts = Object.entries(row)
+    .filter(([name]) => name.toLowerCase().includes(SPAN_START_MARK))
+    .map(([, cell]) => Number(cell))
+    .filter((n) => Number.isInteger(n) && n >= 1);
+  if (starts.length === 0) return row;
+  const start = Math.min(...starts);
+  const out: Record<string, unknown> = {};
+  for (const [name, cell] of Object.entries(row)) {
+    out[name] = typeof cell === "string" && cell.includes("\n") ? numberLines(cell, start) : cell;
   }
   return out;
 }

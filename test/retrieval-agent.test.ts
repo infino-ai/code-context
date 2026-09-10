@@ -106,9 +106,11 @@ describe("retrievalAgentRunFrom", () => {
   it("turns facts that name places into hits with their content", () => {
     const { result } = retrievalAgentRunFrom(QUESTION, answered({ facts: PLACE_FACTS, statement: "find('chunks', 'content', 'f0')" }));
     expect(result.sql).toBe("find('chunks', 'content', 'f0')");
+    // Each line carries its own number in the file, counted from the row's
+    // start line - so f1's chunk, which begins at line 11, numbers 11-13.
     expect(result.hits).toEqual([
-      { path: "src/f0.ts", startLine: 1, endLine: 9, content: "fn f0() {\n  body\n}" },
-      { path: "src/f1.ts", startLine: 11, endLine: 19, content: "fn f1() {\n  body\n}" },
+      { path: "src/f0.ts", startLine: 1, endLine: 9, content: "1: fn f0() {\n2:   body\n3: }" },
+      { path: "src/f1.ts", startLine: 11, endLine: 19, content: "11: fn f1() {\n12:   body\n13: }" },
     ]);
     expect(result.rows).toEqual([]);
     expect(result.hitsTotal).toBe(2);
@@ -198,14 +200,24 @@ describe("factRowsOf", () => {
 describe("factsFrom", () => {
   it("makes one hit per row carrying path, start_line and end_line, with the whole content and the descriptors", () => {
     const { hits } = factsFrom([{ ...chunkRow(4, "first line\nsecond line"), symbol: "f4", lang: "ts" }]);
-    expect(hits).toEqual([{ path: "src/f4.ts", startLine: 41, endLine: 49, content: "first line\nsecond line", symbol: "f4", lang: "ts" }]);
+    expect(hits).toEqual([
+      { path: "src/f4.ts", startLine: 41, endLine: 49, content: "41: first line\n42: second line", symbol: "f4", lang: "ts" },
+    ]);
   });
 
   it("cuts a hit's content at HIT_CONTENT_CHARS, the same cap a search hit has", () => {
     const long = "x".repeat(HIT_CONTENT_CHARS * 2);
     const { hits } = factsFrom([chunkRow(0, long)]);
     expect(HIT_CONTENT_CHARS).toBe(4000);
-    expect(hits[0].content).toHaveLength(HIT_CONTENT_CHARS);
+    // The cap bounds the code, and the line numbers are added after it, so
+    // the prefixes never cost a hit any of the chunk it carries. Strip them
+    // back off and exactly the cap's worth of code is there.
+    const code = hits[0].content
+      .split("\n")
+      .map((line) => line.replace(/^\d+: /, ""))
+      .join("\n");
+    expect(code).toHaveLength(HIT_CONTENT_CHARS);
+    expect(hits[0].content.length).toBeGreaterThan(HIT_CONTENT_CHARS);
   });
 
   it("gives empty content to a row with only the place columns - the citation is the fact", () => {
@@ -233,9 +245,9 @@ describe("factsFrom", () => {
   it("dedupes hits by path and start_line, keeping the first appearance", () => {
     const facts = factsFrom([chunkRow(1, "first"), chunkRow(2), chunkRow(1, "second"), { ...chunkRow(1), start_line: 99, content: "another chunk of f1" }]);
     expect(facts.hits.map((h) => `${h.path}:${h.startLine} ${h.content}`)).toEqual([
-      "src/f1.ts:11 first",
-      "src/f2.ts:21 fn f2() {\n  body\n}",
-      "src/f1.ts:99 another chunk of f1",
+      "src/f1.ts:11 11: first",
+      "src/f2.ts:21 21: fn f2() {\n22:   body\n23: }",
+      "src/f1.ts:99 99: another chunk of f1",
     ]);
     expect(facts.hitsTotal).toBe(3);
   });

@@ -427,13 +427,56 @@ export class HostedDb {
 
   // --- reads ---
 
-  /** `POST /v1/query_sql/{db}` with `{query}`: rows as a JSON array. The one
-   * read the client makes outside `sub_agent` - a sync's recount of the
-   * table. The search routes (bm25, hybrid, token_match, find) are the
-   * platform's own loop's to call; `find`, `search` and `sql` read the local
-   * index. */
+  /** `POST /v1/query_sql/{db}` with `{query}`: rows as a JSON array. Used by
+   * a sync's recount of the table, and by `sql` when the hosted index is the
+   * one being read (see `hybridSearch`). */
   async querySql(sql: string): Promise<RowRecord[]> {
     return this.rows(await this.postJson("query_sql", { query: sql }, true), "query_sql");
+  }
+
+  /** `POST /v1/hybrid_search/{db}`: BM25 and the vector leg fused, over the
+   * HOSTED index, returned as rows.
+   *
+   * `vector_text` is the whole point - the platform embeds the query with the
+   * column's own model, so a caller needs no embedder, no model download and
+   * no vectors of its own, and the query is embedded by the same recipe that
+   * embedded the rows. That is not something a client can arrange for itself:
+   * embedding a query locally with a different model would rank it against a
+   * space it does not belong to.
+   *
+   * This exists so that the hosted index can be read WITHOUT the platform's
+   * answering loop. Before it, the only remote retrieval surfaces were `ask`
+   * and `explore`, both of which run that loop - so "hosted index, local
+   * brain" was not expressible, and the choice was the whole platform or
+   * none of it. A reviewer asked for exactly that middle configuration and it
+   * could not be measured. */
+  async hybridSearch(
+    table: string,
+    textField: string,
+    vectorField: string,
+    query: string,
+    k: number,
+    projection: string[],
+  ): Promise<RowRecord[]> {
+    return this.rows(
+      await this.postJson(
+        "hybrid_search",
+        {
+          table_name: table,
+          text_field: textField,
+          text_query: query,
+          // The engine's Or: a row need not carry every term. The platform's
+          // own loop searches the same way.
+          mode: "Or",
+          vector_field: vectorField,
+          vector_text: query,
+          k,
+          projection,
+        },
+        true,
+      ),
+      "hybrid_search",
+    );
   }
 
   // --- sub_agent ---

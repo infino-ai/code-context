@@ -1,5 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { analyzerOf, analyzerTokens, applyEmbeds, excerpt, guardSql, matchLines, plainTerms } from "../src/core/searcher.js";
+import {
+  analyzerOf,
+  analyzerTokens,
+  applyEmbeds,
+  excerpt,
+  guardSql,
+  matchLines,
+  numberLines,
+  numberRowLines,
+  plainTerms,
+} from "../src/core/searcher.js";
 import { hasIndexableToken, isAnalyzer } from "../src/core/analyzer.js";
 import { emptyManifest } from "../src/core/manifest.js";
 import type { Embedder } from "../src/core/embedder.js";
@@ -147,6 +157,51 @@ describe("matchLines", () => {
 
   it("strips a CRLF file's carriage return from the cited text", () => {
     expect(matchLines("x = 1;\r\ny = 2;\r\n", 1, "y =", false)).toEqual([{ line: 2, text: "y = 2;", at: 0 }]);
+  });
+});
+
+describe("numberLines", () => {
+  it("prefixes each line with its own number in the file, counting from the chunk's start", () => {
+    expect(numberLines("fn a() {\n  body\n}", 418)).toBe("418: fn a() {\n419:   body\n420: }");
+  });
+
+  it("leaves empty text empty, so a row that carries only a place gains no phantom line", () => {
+    expect(numberLines("", 7)).toBe("");
+  });
+
+  it("numbers a single line without a trailing newline", () => {
+    expect(numberLines("one line", 1)).toBe("1: one line");
+  });
+});
+
+describe("numberRowLines", () => {
+  it("numbers a multi-line text cell from the row's start-line column", () => {
+    expect(numberRowLines({ path: "a.rs", start_line: 5, end_line: 6, content: "let x = 1;\nlet y = 2;" })).toEqual({
+      path: "a.rs",
+      start_line: 5,
+      end_line: 6,
+      content: "5: let x = 1;\n6: let y = 2;",
+    });
+  });
+
+  it("leaves a row with no start-line column untouched - nothing places its text", () => {
+    const row = { path: "a.rs", content: "let x = 1;\nlet y = 2;" };
+    expect(numberRowLines(row)).toEqual(row);
+  });
+
+  it("leaves single-line cells alone, so aggregates and names are not prefixed", () => {
+    expect(numberRowLines({ path: "a.rs", start_line: 5, symbol: "parse", n: 12 })).toEqual({
+      path: "a.rs",
+      start_line: 5,
+      symbol: "parse",
+      n: 12,
+    });
+  });
+
+  it("takes the least start-like column, the row's own first line", () => {
+    // `start_line` places the text; `window_start` is a larger number that
+    // must not be mistaken for it.
+    expect(numberRowLines({ start_line: 10, window_start: 40, content: "a\nb" }).content).toBe("10: a\n11: b");
   });
 });
 

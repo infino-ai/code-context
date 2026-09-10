@@ -106,7 +106,7 @@ export function refusalHint(err: unknown): string {
 }
 import { localDb, newHostedMemo, platformLabel, platformTableReady, type IndexHandle } from "../core/context.js";
 import { HostedError } from "../core/hosted.js";
-import { find, search, runSql, jsonify, partialIndex } from "../core/searcher.js";
+import { find, search, searchHosted, runSql, jsonify, numberRowLines, partialIndex } from "../core/searcher.js";
 import {
   newSession,
   receiptEnabled,
@@ -188,6 +188,9 @@ export const SQL_DESCRIPTION =
   "aggregate. A path prefix is not a topic: filtering on WHERE path LIKE 'src/thing/%' and " +
   "measuring lengths answers how big those files are, not which code is about the thing, and " +
   "it guesses the answer from a directory name instead of retrieving it. " +
+  "Select start_line beside content whenever you mean to read or cite the code: a row's text " +
+  "comes back with each line's own number in the file when the row carries its start line, and " +
+  "unnumbered when it does not, since nothing then places the text. " +
   "The result includes a 'usage' field, a one-line receipt of tokens returned and rows.";
 
 export async function serveMcp(rootPath?: string): Promise<void> {
@@ -205,6 +208,20 @@ export async function serveMcp(rootPath?: string): Promise<void> {
   // batches. Null under CX_NO_EMBED.
   let embedder: Embedder | null = null;
   const getEmbedder = (): Embedder | null => (process.env.CX_NO_EMBED ? null : (embedder ??= createEmbedder()));
+
+  // CX_REMOTE_SEARCH=1 makes `search` read the HOSTED index instead of the
+  // local one, when a platform database is configured. Off by default, and
+  // deliberately a switch rather than the new behaviour: every measurement
+  // taken so far read the local index under this tool's name, and silently
+  // changing what it reads would reinterpret all of them.
+  //
+  // It exists because the hosted index could not be read without the
+  // platform's answering loop. `ask` and `explore` were the only remote
+  // retrieval, and both run that loop, so the two things a caller might want
+  // separately - the index and the decider - could only be taken together.
+  // With this on, a cheap local agent can hold the hosted index directly,
+  // which is the configuration to beat before the loop is worth its cost.
+  const remoteSearch = ["1", "true", "yes"].includes((process.env.CX_REMOTE_SEARCH ?? "").toLowerCase());
 
   // --- per-repo state ---------------------------------------------------------
   // One server serves every repo a session touches: the optional `path` tool
@@ -412,9 +429,10 @@ export async function serveMcp(rootPath?: string): Promise<void> {
           ? "- ask - a question or task in plain language; returns the rows it retrieved (facts with path:line and the code), not an answer: compose from them. Spawn several in parallel for independent questions. How often a string occurs, per file, is find's byFile.\n" +
             "- explore - a question about a mechanism that spans files (how X works end to end, what calls what); it reads and follows what it finds and returns a written answer grounded in the facts it lists, with the chain of queries. Take the answer and cite its facts. Slower than ask: use it when one retrieval will not do.\n"
           : "") +
-        "Hits carry the code: when a hit answers the question, answer from it and cite path:line " +
-        "without re-reading the file or re-checking with grep; Read a file only for a hit marked " +
-        "truncated. " +
+        "Hits carry the code: when a hit answers the question, answer from it. A hit's content shows " +
+        "each line with its own number in the file, so cite a place as path:line or path:start-end " +
+        "from those numbers and only where the thing you name sits - never the hit's whole line " +
+        "range, which spans the chunk. Read a file only for a hit marked truncated. " +
         "Every tool takes an optional 'path' (an absolute repo root) to target another repository. " +
         "A 'partial' marker means files over the index cap were left out, so a missing match is not " +
         "proof of absence.",
@@ -429,11 +447,13 @@ export async function serveMcp(rootPath?: string): Promise<void> {
         "Ranked code search fusing exact keyword matching with semantic similarity, so it works " +
         "whether or not you know the words. Use it for 'how does X work', 'where is Y handled', code " +
         "by meaning, context before a change, similar implementations. Each hit carries path, line " +
-        "range, and the chunk content: answer and cite from the hits without re-confirming them with " +
-        "grep or by opening the file; Read a file only for one marked truncated. When one search is " +
-        "not enough, refine the query and search again. For every occurrence of an exact string use " +
-        "find; for counts and rankings use sql. The result includes a 'usage' field, a one-line " +
-        "receipt of tokens returned, chunks and files.",
+        "range, and the chunk content: answer from the hits. The content shows each line with its " +
+        "own number in the file, so cite from those numbers - the hit's line range spans the whole " +
+        "chunk and is not the line a quoted or named thing sits on. Quote only text a hit shows, " +
+        "from the lines you cite it to. When one " +
+        "search is not enough, refine the query and search again. For every occurrence of an exact " +
+        "string use find; for counts and rankings use sql. The result includes a 'usage' field, a " +
+        "one-line receipt of tokens returned, chunks and files.",
       inputSchema: {
         query: z.string().describe("What you're looking for - terms, a phrase, or a description."),
         k: z.number().int().positive().max(50).default(DEFAULT_SEARCH_K).describe("Maximum hits."),
@@ -452,6 +472,31 @@ export async function serveMcp(rootPath?: string): Promise<void> {
         ctx = repoFor(path);
       } catch (err) {
         return fail((err as Error).message);
+      }
+      // Reading the hosted index needs no local index at all, so this comes
+      // before ensureIndexed: requiring a local build first would make the
+      // hosted path depend on the very thing it exists to do without.
+      if (remoteSearch && ctx.hosted) {
+        const notReady = await platformNotReady("search", ctx);
+        if (notReady) return notReady;
+        try {
+          const t0 = performance.now();
+          const result = await searchHosted(ctx.hosted, query, k);
+          let usage: string | undefined;
+          if (receiptOn) {
+            const entry = searchEntry(result, ctx.root);
+            recordUsage(ctx.dir, entry);
+            usage = formatReceipt(entry, session);
+          }
+          return ok({
+            ...result,
+            index: "platform",
+            took_ms: Math.round((performance.now() - t0) * 1000) / 1000,
+            ...(usage ? { usage } : {}),
+          });
+        } catch (err) {
+          return fail(`search failed: ${(err as Error).message}${refusalHint(err)}`);
+        }
       }
       let ensured: EnsureResult;
       try {
@@ -618,7 +663,12 @@ export async function serveMcp(rootPath?: string): Promise<void> {
       if (!autoIndexed) maybeAutoSync(ctx); // a fresh build is already current
       try {
         const t0 = performance.now();
-        const rows = await runSql(handle, getEmbedder(), query, embed as Record<string, string> | undefined);
+        // Numbered where the projection places the text, so a line cited out
+        // of a SQL row is read off the row rather than counted. Numbered
+        // before the receipt, not after: a receipt is only worth having if it
+        // is the thing that was returned, and these rows are what the caller
+        // gets.
+        const rows = (await runSql(handle, getEmbedder(), query, embed as Record<string, string> | undefined)).map(numberRowLines);
         const partial = partialIndex(handle.manifest);
         let usage: string | undefined;
         if (receiptOn) {

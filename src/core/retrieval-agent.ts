@@ -16,6 +16,7 @@
 
 import type { HostedDb, RowRecord } from "./hosted.js";
 import { DEFAULT_SEARCH_K } from "./config.js";
+import { numberLines } from "./searcher.js";
 
 /** Place-naming rows kept in one result: as many as a search returns by
  * default, so an ask result costs the outer agent what a search does.
@@ -321,16 +322,21 @@ export function factsFrom(rows: unknown[], maxHits: number = MAX_HITS): Facts {
 }
 
 /** A row as a hit, or null when it does not name a place in the code. The
- * content is cut at HIT_CONTENT_CHARS like a search hit's; a row with the
- * place columns and no content is a hit with empty content (the citation is
- * the fact). */
+ * content is cut at HIT_CONTENT_CHARS and numbered by line like a search
+ * hit's — the two must stay the same shape, or a caller could tell an `ask`
+ * fact from a `search` hit and would have to cite them differently; a row
+ * with the place columns and no content is a hit with empty content (the
+ * citation is the fact). */
 function hitFromRow(raw: unknown): RetrievalAgentHit | null {
   const row = asRecord(raw);
   const path = row[COL_PATH];
   const startLine = row[COL_START_LINE];
   const endLine = row[COL_END_LINE];
   if (typeof path !== "string" || !isFiniteNumber(startLine) || !isFiniteNumber(endLine)) return null;
-  const content = typeof row[COL_CONTENT] === "string" ? (row[COL_CONTENT] as string).slice(0, HIT_CONTENT_CHARS) : "";
+  const content =
+    typeof row[COL_CONTENT] === "string"
+      ? numberLines((row[COL_CONTENT] as string).slice(0, HIT_CONTENT_CHARS), startLine)
+      : "";
   const hit: RetrievalAgentHit = { path, startLine, endLine, content };
   if (typeof row[COL_SYMBOL] === "string" && row[COL_SYMBOL] !== "") hit.symbol = row[COL_SYMBOL] as string;
   if (typeof row[COL_LANG] === "string" && row[COL_LANG] !== "") hit.lang = row[COL_LANG] as string;
