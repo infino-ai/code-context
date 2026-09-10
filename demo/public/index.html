@@ -38,6 +38,19 @@
     padding: 10px 18px; font: inherit; font-weight: 500; cursor: pointer;
   }
   button:disabled { background: var(--rule); color: var(--faint); cursor: default; }
+  .corpus {
+    background: var(--panel); border: 1px solid var(--rule);
+    padding: 14px 16px; margin-bottom: 18px; font-size: 12.5px; color: var(--soft);
+  }
+  .corpus h3 { font-size: 12.5px; font-weight: 500; color: var(--ink); margin: 0 0 6px; }
+  .corpus p { margin: 0 0 8px; }
+  .corpus p:last-child { margin-bottom: 0; }
+  .facts { display: flex; gap: 16px; flex-wrap: wrap; margin: 10px 0; font-variant-numeric: tabular-nums; }
+  .facts span { color: var(--faint); }
+  .facts b { color: var(--ink); font-weight: 500; }
+  .subsystems { color: var(--faint); }
+  .subsystems code { color: var(--soft); }
+  .examples-label { font-size: 11.5px; color: var(--faint); margin: 0 0 6px; }
   .examples { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 20px; }
   .examples button {
     background: transparent; color: var(--soft); border: 1px solid var(--rule);
@@ -80,12 +93,30 @@
 <div class="fixture" id="fixture" hidden>FIXTURE MODE — invented data. No model ran, no question was answered. Nothing on this page is a measurement.</div>
 
 <h1>Sonnet + grep &nbsp;vs&nbsp; Sonnet + infino</h1>
-<p class="sub">One question, both arms at once. Each bar fills as its run happens, coloured by where the time is going.</p>
+<p class="sub">Ask your own question. Both arms run at once, and each bar fills as its run happens, coloured by where the time is going.</p>
+
+<div class="corpus" id="corpus">
+  <h3>What you're asking about</h3>
+  <p>
+    <b>infino</b> — the engine repository: a retrieval engine that stores data on object storage and runs
+    SQL, full-text search and vector search over it. One file (a "superfile") is a valid Parquet file with
+    BM25 and vector indexes spliced in; the supertable layer composes many superfiles into a queryable
+    table with snapshot-isolated reads and an atomic-commit manifest.
+  </p>
+  <div class="facts" id="facts"></div>
+  <p class="subsystems" id="subsystems"></p>
+  <p>
+    Both arms see the same checkout. The grep arm reads it off disk; the infino arm queries the index of it.
+    Questions that make an agent sweep many files are where the two diverge — a question one agent answers
+    from a single file usually comes out level.
+  </p>
+</div>
 
 <form id="ask">
-  <input type="text" id="q" placeholder="Ask something about the infino engine repository…" autocomplete="off">
+  <input type="text" id="q" placeholder="e.g. how does the manifest commit stay atomic under a concurrent writer?" autocomplete="off">
   <button type="submit" id="go">Run both</button>
 </form>
+<p class="examples-label">Or start from one of these and edit it:</p>
 <div class="examples" id="examples"></div>
 
 <div class="legend">
@@ -124,9 +155,28 @@ for (const text of EXAMPLES) {
   b.type = "button";
   b.textContent = text.length > 52 ? text.slice(0, 50) + "…" : text;
   b.title = text;
+  // Fill the box rather than fire: an example is a starting point to edit,
+  // not a canned run.
   b.onclick = () => { input.value = text; input.focus(); };
   document.getElementById("examples").append(b);
 }
+
+// What the arms are looking at, from the index's own manifest.
+fetch("/corpus").then((r) => r.json()).then((c) => {
+  const facts = [];
+  if (c.files) facts.push(["files", c.files.toLocaleString()]);
+  if (c.chunks) facts.push(["indexed chunks", c.chunks.toLocaleString()]);
+  if (c.vectors) facts.push(["vectors", c.vectors]);
+  if (c.hosted) facts.push(["index", "hosted"]);
+  if (c.head) facts.push(["at", c.head.split(" ").slice(0, 2).join(" ")]);
+  document.getElementById("facts").innerHTML = facts
+    .map(([k, v]) => `<span>${k} <b>${escapeHtml(v)}</b></span>`)
+    .join("");
+  if (c.subsystems && c.subsystems.length) {
+    document.getElementById("subsystems").innerHTML =
+      "subsystems: " + c.subsystems.map((s) => `<code>${escapeHtml(s)}</code>`).join(" · ");
+  }
+}).catch(() => { document.getElementById("corpus").hidden = true; });
 
 /** Live state for one arm: the segments drawn so far plus the one still
  * growing. A segment is {phase, from, to} in milliseconds since the arm began;

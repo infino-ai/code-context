@@ -29,6 +29,8 @@
 // process will serve before it refuses; there is no way to make a click free.
 
 import { createServer } from "node:http";
+import { execFileSync } from "node:child_process";
+import { readFileSync, readdirSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -216,10 +218,57 @@ function plain(res, status, body) {
   res.end(`${body}\n`);
 }
 
+/** What the two arms are actually looking at, read from the index's own
+ * manifest and the checkout rather than written down here - a description that
+ * drifts from the corpus is worse than none, because a reader would trust it
+ * when choosing what to ask. */
+function corpus() {
+  let manifest = {};
+  try {
+    manifest = JSON.parse(readFileSync(join(INDEX_DIR, "platform.json"), "utf8"));
+  } catch {
+    try {
+      manifest = JSON.parse(readFileSync(join(INDEX_DIR, "codecontext.json"), "utf8"));
+    } catch {
+      /* no manifest: the page shows the repo name alone */
+    }
+  }
+  let head = null;
+  try {
+    head = execFileSync("git", ["log", "-1", "--format=%h %cs %s"], { cwd: REPO_DIR, encoding: "utf8" }).trim();
+  } catch {
+    /* not a checkout, or no git */
+  }
+  let subsystems = [];
+  try {
+    subsystems = readdirSync(join(REPO_DIR, "src"), { withFileTypes: true })
+      .filter((d) => d.isDirectory() && !d.name.startsWith("."))
+      .map((d) => d.name)
+      .sort();
+  } catch {
+    /* no src/ */
+  }
+  return {
+    repo: REPO_DIR.split("/").pop(),
+    files: manifest.files ?? null,
+    chunks: manifest.chunks ?? null,
+    vectors: manifest.vectors ?? null,
+    analyzer: manifest.analyzer ?? null,
+    indexedAt: manifest.indexedAt ?? null,
+    hosted: manifest.origin === "hosted",
+    head,
+    subsystems,
+  };
+}
+
 const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
   if (url.pathname === "/run") return handleRun(req, res, url);
   if (url.pathname === "/health") return plain(res, 200, "ok");
+  if (url.pathname === "/corpus") {
+    res.writeHead(200, { "content-type": "application/json" });
+    return res.end(JSON.stringify(corpus()));
+  }
   if (url.pathname === "/" || url.pathname === "/index.html") {
     const html = await readFile(join(HERE, "public", "index.html"), "utf8");
     res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
