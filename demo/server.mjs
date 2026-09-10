@@ -35,7 +35,7 @@ import { readFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { checkLaneEnv, runLane } from "../bench/lanes.mjs";
+import { checkLaneEnv, runLane, systemPrompt } from "../bench/lanes.mjs";
 import { armCost, ledgerMark, ledgerSince, ratesFromEnv } from "./charge.mjs";
 import { fixtureArm, isFixture } from "./fixture.mjs";
 import { livePhase, phaseOf, phaseSplit } from "./phases.mjs";
@@ -60,10 +60,9 @@ const REPO_DIR = resolve(process.env.CX_BENCH_REPO ?? "/home/ubuntu/infino-ai/wo
 const INDEX_DIR = resolve(process.env.CX_INDEX_DIR ?? join(REPO_DIR, ".infino-hosted"));
 const MAX_RUNS = Number(process.env.DEMO_MAX_RUNS ?? 25);
 
-const SYSTEM =
-  `You answer questions about the repository checked out at ${REPO_DIR}. ` +
-  `Use the available tools to find the answer. Cite file paths (with line ranges when you have them). ` +
-  `Be efficient: prefer few, well-chosen tool calls.`;
+// The bench's own prompt, imported rather than copied: the demo and the runner
+// drive the same lanes, so two copies would be two experiments.
+const SYSTEM = systemPrompt(REPO_DIR);
 
 let runsServed = 0;
 /** One run at a time, process-wide. A second request waits on this. */
@@ -204,7 +203,21 @@ async function handleRun(req, res, url) {
     await serialize(async () => {
       runsServed += 1;
       send(res, "started", { question, run: runsServed, of: MAX_RUNS });
-      const results = await Promise.all(ARMS.map((arm) => runArm(arm, question, guarded)));
+      // Each arm reports the instant it finishes, in its own `arm_done` frame.
+      // The claim of the page is that one arm gets there first, so holding the
+      // faster arm's numbers back until the slower one lands hides the only
+      // thing a reader came to see - and the bar keeps growing while it waits,
+      // which makes the fast arm look exactly as slow as the slow one.
+      const results = await Promise.all(
+        ARMS.map(async (arm) => {
+          const result = await runArm(arm, question, guarded);
+          guarded({ ...result, kind: "arm_done" });
+          return result;
+        }),
+      );
+      // `done` no longer carries the rendering. It closes the run and carries
+      // the comparison between the arms, which is the one thing that does need
+      // both of them.
       if (alive) send(res, "done", { results });
     });
   } catch (err) {

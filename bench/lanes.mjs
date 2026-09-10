@@ -875,6 +875,18 @@ export const cxTookMs = (toolDetails) => tookMsOf(toolDetails, isCxTool);
 /** The Snowflake calls' share: the warehouse's work, 0 in every other lane. */
 export const sfTookMs = (toolDetails) => tookMsOf(toolDetails, isSfTool);
 
+/** What every lane tells the model before the question, in one place.
+ *
+ * The runner and the demo drive the same lanes against the same repository, so
+ * a second copy of this text is a second experiment: the moment one is edited
+ * the demo stops showing what the bench measured, and nothing fails to say so.
+ * `run-questions.mjs` appends the table card to it when CX_CARD_TIER asks for
+ * one; the base is shared. */
+export const systemPrompt = (repoDir) =>
+  `You answer questions about the repository checked out at ${repoDir}. ` +
+  `Use the available tools to find the answer. Cite file paths (with line ranges when you have them). ` +
+  `Be efficient: prefer few, well-chosen tool calls.`;
+
 /** Run one agent conversation; returns the measured record.
  *
  * `onEvent`, when given, is called as the run happens rather than after it:

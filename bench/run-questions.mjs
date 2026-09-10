@@ -21,7 +21,7 @@
 // Model is set in lanes.mjs (BENCH_MODEL, default claude-sonnet-4-6).
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { runLane, record, checkLaneEnv, LANES, MODEL, BENCH, BENCH_DB_URL, BENCH_KEY_FILE } from "./lanes.mjs";
+import { runLane, record, checkLaneEnv, systemPrompt, LANES, MODEL, BENCH, BENCH_DB_URL, BENCH_KEY_FILE } from "./lanes.mjs";
 import { splitDbUrl } from "./warm-hosted.mjs";
 
 const [repoArg, lanesArg, questionsArg] = process.argv.slice(2);
@@ -47,10 +47,7 @@ try {
 const questionsFile = questionsArg ?? process.env.CX_BENCH_QUESTIONS ?? join(BENCH, "questions", "infino.json");
 const questions = JSON.parse(readFileSync(questionsFile, "utf8"));
 
-let system =
-  `You answer questions about the repository checked out at ${repoDir}. ` +
-  `Use the available tools to find the answer. Cite file paths (with line ranges when you have them). ` +
-  `Be efficient: prefer few, well-chosen tool calls.`;
+let system = systemPrompt(repoDir);
 
 // The table card in the model's own prompt, when CX_CARD_TIER names a tier
 // (lean | enriched | semantic). The platform's loop already reads the card

@@ -326,18 +326,36 @@ form.onsubmit = (e) => {
     });
   }
 
+  /** Settle one arm from its own result. Setting `finishedAt` is what stops
+   * the animation loop extending that arm's bar, so an arm that finished at
+   * 22s stops reading 22s instead of climbing to the other arm's 169s. */
+  function finish(r) {
+    const arm = arms.get(r.arm);
+    if (!arm || arm.finishedAt !== null) return;
+    arm.finishedAt = r.wallMs;
+    // Redraw from the measurement rather than the drawing, so the finished
+    // bar matches the numbers printed under it.
+    arm.segments = segmentsFromSplit(arm.segments, r.split);
+    paint(arm, r.split.wallMs);
+    render(arm, r);
+  }
+
+  source.addEventListener("arm_done", (e) => {
+    const r = JSON.parse(e.data);
+    finish(r);
+    const waiting = [...arms.values()].filter((a) => a.finishedAt === null);
+    if (waiting.length) {
+      statusEl.textContent =
+        `${r.label} finished in ${(r.wallMs / 1000).toFixed(1)}s — ` +
+        `${waiting.map((a) => a.meta.label).join(" and ")} still running.`;
+    }
+  });
+
   source.addEventListener("done", (e) => {
     const d = JSON.parse(e.data);
-    for (const r of d.results) {
-      const arm = arms.get(r.arm);
-      if (!arm) continue;
-      arm.finishedAt = r.wallMs;
-      // Redraw from the measurement rather than the drawing, so the finished
-      // bar matches the numbers printed under it.
-      arm.segments = segmentsFromSplit(arm.segments, r.split);
-      paint(arm, r.split.wallMs);
-      render(arm, r);
-    }
+    // Every arm has normally rendered from its own arm_done already; this
+    // settles any whose frame did not arrive.
+    for (const r of d.results) finish(r);
     const [a, b] = d.results;
     if (a && b && !a.error && !b.error) {
       const faster = (a.wallMs / b.wallMs).toFixed(1);
