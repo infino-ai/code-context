@@ -21,7 +21,8 @@
 // Model is set in lanes.mjs (BENCH_MODEL, default claude-sonnet-4-6).
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { runLane, record, checkLaneEnv, LANES, MODEL, BENCH } from "./lanes.mjs";
+import { runLane, record, checkLaneEnv, LANES, MODEL, BENCH, BENCH_DB_URL, BENCH_KEY_FILE } from "./lanes.mjs";
+import { splitDbUrl } from "./warm-hosted.mjs";
 
 const [repoArg, lanesArg, questionsArg] = process.argv.slice(2);
 const repoPath = repoArg ?? process.env.CX_BENCH_REPO;
@@ -46,10 +47,38 @@ try {
 const questionsFile = questionsArg ?? process.env.CX_BENCH_QUESTIONS ?? join(BENCH, "questions", "infino.json");
 const questions = JSON.parse(readFileSync(questionsFile, "utf8"));
 
-const system =
+let system =
   `You answer questions about the repository checked out at ${repoDir}. ` +
   `Use the available tools to find the answer. Cite file paths (with line ranges when you have them). ` +
   `Be efficient: prefer few, well-chosen tool calls.`;
+
+// The table card in the model's own prompt, when CX_CARD_TIER names a tier
+// (lean | enriched | semantic). The platform's loop already reads the card
+// from inside a sub_agent call; this hands the same facts to the OUTER model
+// instead, so "the card" can be measured apart from "the loop" - the loop
+// costs 700s of platform time on this corpus and the card costs none.
+//
+// Everything else about the run is unchanged, so a lane with this set differs
+// from the same lane without it by the prompt alone.
+const cardTier = process.env.CX_CARD_TIER ?? null;
+if (cardTier) {
+  const { base, db } = splitDbUrl(process.env[BENCH_DB_URL] ?? "");
+  const key = readFileSync(process.env[BENCH_KEY_FILE] ?? "", "utf8").trim();
+  const table = process.env.CX_CARD_TABLE ?? "chunks";
+  const url = `${base}/v1/table_card/${encodeURIComponent(db)}?table=${encodeURIComponent(table)}&tier=${encodeURIComponent(cardTier)}`;
+  const res = await fetch(url, { headers: { authorization: `Bearer ${key}`, accept: "application/json" } });
+  if (!res.ok) {
+    console.error(`error: card fetch failed, HTTP ${res.status} from ${url.replace(/\?.*/, "")}`);
+    process.exit(1);
+  }
+  const record = await res.json();
+  const card = JSON.stringify(record.card ?? record);
+  system +=
+    `\n\nThe repository's code index is one table, described below. This is the table's card: its ` +
+    `schema with each column's index role, per-column statistics, and sample rows, computed from the ` +
+    `table itself. Use it to choose columns and write queries without discovering the shape first.\n${card}`;
+  console.log(`card: ${cardTier} tier, ${card.length} chars, table "${table}"`);
+}
 
 // Run every (question, lane) pair through a small concurrency pool.
 const CONC = Number(process.env.CX_BENCH_CONCURRENCY ?? 5);
@@ -70,7 +99,20 @@ async function worker() {
     // The whole answer goes on the row: the judge and cite-check read it from
     // here, and a cut answer (1,500 characters, until 2026-09-05) had the judge
     // scoring truncated text on both sides.
-    record("questions.jsonl", { q: job.i, cat: job.cat, lane: job.lane, repo: repoDir, ...r });
+    // `q` is the question's INDEX IN ITS FILE, so it collides across files: a
+    // runner that loops four sets writes four different questions as q=1, and
+    // pairing two arms on (cat, q) then silently matches the wrong pair. The
+    // text and the set name are what actually identify a question, so both go
+    // on the row and a judge can pair on them instead.
+    record("questions.jsonl", {
+      q: job.i,
+      cat: job.cat,
+      questionSet: questionsFile.split("/").pop(),
+      question: job.q,
+      lane: job.lane,
+      repo: repoDir,
+      ...r,
+    });
     results.push({ ...job, tokens: r.tokens, cost: r.costUsd ?? 0, calls: r.calls, wallMs: r.wallMs, cxTookMs: r.cxTookMs, error: r.error });
     done++;
     console.log(

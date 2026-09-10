@@ -345,6 +345,30 @@ export function agentFlags(env = process.env) {
  *                      subagent: pure Sonnet as a real session has it
  *   index-explore    - stock-explore plus the MCP server, with Explore
  *                      overridden to run on code-context's tools (Haiku inside)
+ *   hosted-full-remote - hosted-full with `search` reading the hosted index as
+ *                      well, so nothing in the lane reads the old local
+ *                      vectors. hosted-full's own `search` is local, which
+ *                      means every hosted-full row ever recorded did part of
+ *                      its index work on the 384-dim local index; this lane is
+ *                      the comparison that actually prices the hosted index
+ *                      for the full surface
+ *   hosted-index     - the stock tools plus find/search/sql over the HOSTED
+ *                      index, read by the session model itself: no subagent,
+ *                      no platform loop, `ask` and `explore` hidden. The
+ *                      `hosted` lane with CX_REMOTE_SEARCH, so the pair
+ *                      prices the hosted index against the local one with
+ *                      nothing else moving - and if neither decider earns its
+ *                      cost, this lane is the product
+ *   hosted-index-explore - index-explore reading the PLATFORM's index: the same
+ *                      Haiku subagent with the same find/search/sql, but
+ *                      `search` goes to the hosted table (CX_REMOTE_SEARCH),
+ *                      and the platform's `ask` and `explore` are hidden from
+ *                      both levels. It separates the two things every other
+ *                      hosted lane moves together - the index and the decider
+ *                      - by keeping the index and removing the decider.
+ *                      Against `index-explore` it prices the index alone (same
+ *                      brain, better vectors); against `hosted-full` it prices
+ *                      the decider alone (same index, cheap brain)
  *   platform-explore - the same with the platform database, with Explore
  *                      overridden to run on the explore tool alone (the
  *                      platform's explore mode: reads, follows, answers)
@@ -365,6 +389,15 @@ export function agentFlags(env = process.env) {
  *                      help or confuse? (The `find`/`explore` lanes hide
  *                      `search` and `sql`, which are the local instruments
  *                      for questions by meaning and for counts.)
+ *   hosted-full-agent - hosted-full plus the Agent tool, with Explore left
+ *                      exactly as Claude Code ships it: no override, so its
+ *                      built-in Explore keeps whatever tools a real session
+ *                      would give it (the full cx surface, since mcp is on),
+ *                      beside the outer model holding that same surface
+ *                      itself. Unlike `delegated`, nothing about Explore's
+ *                      definition is touched - this measures the free choice
+ *                      a real client actually offers: retrieve directly, or
+ *                      spawn Explore, with neither path special-cased
  *   delegated        - hosted-full plus the Agent tool, with Explore
  *                      overridden to run the whole code-context surface with
  *                      the mid-tier model inside. The outer model can retrieve
@@ -420,6 +453,14 @@ export const LANES = {
     args: (env) => [...hostedFlags(env), ...agentFlags(env)],
     requires: HOSTED_REQUIRES,
   },
+  "hosted-full-agent": {
+    kind: "hosted",
+    tools: [...STOCK_TOOLS, AGENT_TOOL],
+    mcp: true,
+    env: mcpEnvBase,
+    args: (env) => [...hostedFlags(env), ...agentFlags(env)],
+    requires: HOSTED_REQUIRES,
+  },
   "agent-only": {
     kind: "hosted",
     tools: ["Read"],
@@ -437,6 +478,51 @@ export const LANES = {
     env: mcpEnvBase,
     agents: { [EXPLORE]: exploreOnIndex },
     requires: [],
+  },
+  "hosted-full-remote": {
+    kind: "hosted",
+    tools: STOCK_TOOLS,
+    mcp: true,
+    // hosted-full with `search` reading the hosted index too. It is a separate
+    // lane and not a change to hosted-full because that name carries 734
+    // recorded rows: hosted-full's `search` has always read the LOCAL index,
+    // so every one of those rows did a third of its index work on the old
+    // 384-dim vectors, and switching what the name means would reinterpret
+    // them all. This lane is the honest "the whole surface, all of it hosted".
+    env: (repoDir, indexDir) => ({ ...mcpEnvBase(repoDir, indexDir), CX_REMOTE_SEARCH: "1" }),
+    args: (env) => [...hostedFlags(env), ...agentFlags(env)],
+    requires: HOSTED_REQUIRES,
+  },
+  "hosted-index": {
+    kind: "hosted",
+    tools: STOCK_TOOLS,
+    mcp: true,
+    // The hosted index read by the SESSION model directly - no subagent, no
+    // platform loop. If the index is what carries the value and neither
+    // decider earns its cost, this is the whole product: three tools over a
+    // hosted table. It is the `hosted` lane plus CX_REMOTE_SEARCH, and the
+    // pair prices the index against the local one with nothing else moving.
+    env: (repoDir, indexDir) => ({ ...mcpEnvBase(repoDir, indexDir), CX_REMOTE_SEARCH: "1" }),
+    args: hostedFlags,
+    disallowedTools: ["ask", "explore"].map((tool) => `${CX_TOOL_PREFIX}${tool}`),
+    requires: HOSTED_REQUIRES,
+  },
+  "hosted-index-explore": {
+    kind: "hosted",
+    tools: [...STOCK_TOOLS, AGENT_TOOL],
+    mcp: true,
+    // CX_REMOTE_SEARCH makes `search` read the platform's index instead of the
+    // local one. Without it this lane would be `index-explore` with a `--db`
+    // flag that changes nothing a searcher can see: `find` and `sql` are local
+    // by construction, and `search` was too, so the subagent would sit on the
+    // local MiniLM index while the lane's name claimed otherwise. Measured
+    // that way once by mistake — the platform served zero queries for the
+    // whole run, which is the only reason it was caught.
+    env: (repoDir, indexDir) => ({ ...mcpEnvBase(repoDir, indexDir), CX_REMOTE_SEARCH: "1" }),
+    args: hostedFlags,
+    disallowedTools: ["ask", "explore"].map((tool) => `${CX_TOOL_PREFIX}${tool}`),
+    agents: { [EXPLORE]: exploreOnIndex },
+    requires: HOSTED_REQUIRES,
   },
   "platform-explore": {
     kind: "hosted",
@@ -708,23 +794,37 @@ export function recordedQueries(toolDetails) {
  * with parent_tool_use_id set came from inside a subagent: its calls are
  * counted like any other and marked, and an Agent call records which
  * subagent type it spawned. Exported so the parsing is testable without a
- * model. */
+ * model.
+ *
+ * `batch` tags every call with which assistant message it came from
+ * (`acc.batchSeq`, incremented once per message that carries at least one
+ * tool_use block). This is the ONLY sound way to detect fan-out: several
+ * tool_use blocks in ONE assistant message are the model choosing to run them
+ * concurrently, and the SDK does. `toolCalls`/`toolDetails` is one flat list
+ * across the whole run, outer and every subagent's calls interleaved in
+ * stream order - runs of consecutive entries in that list do NOT mean
+ * concurrent messages, because a subagent's own calls land between an outer
+ * batch's entries. Group by (`batch`, `inSubagent`) instead of by adjacency. */
 export function foldToolMessage(acc, m) {
   if (m.type === "assistant") {
     const inSubagent = Boolean(m.parent_tool_use_id);
+    const batch = acc.batchSeq;
+    let sawToolUse = false;
     for (const b of m.message?.content ?? []) {
       if (b.type === "tool_use") {
+        sawToolUse = true;
         const name = shortToolName(b.name);
         acc.toolCalls.push(name);
         // The input is kept for every call, so the queries an answer was
         // built on can be rerun by whoever grades it.
-        const detail = { name, input: keepInput(b.input), tookMs: null, usage: null, ...(inSubagent ? { inSubagent: true } : {}) };
+        const detail = { name, input: keepInput(b.input), tookMs: null, usage: null, batch, ...(inSubagent ? { inSubagent: true } : {}) };
         acc.toolDetails.push(detail);
         if (b.id) acc.pending.set(b.id, detail);
         if (inSubagent) acc.subagentCalls++;
         if (b.name === AGENT_TOOL) acc.subagents.push(typeof b.input?.subagent_type === "string" ? b.input.subagent_type : "?");
       }
     }
+    if (sawToolUse) acc.batchSeq++;
   }
   if (m.type === "user") {
     const content = m.message?.content;
@@ -744,7 +844,7 @@ export function foldToolMessage(acc, m) {
   }
 }
 
-export const newToolAccounting = () => ({ toolCalls: [], toolDetails: [], pending: new Map(), subagentCalls: 0, subagents: [] });
+export const newToolAccounting = () => ({ toolCalls: [], toolDetails: [], pending: new Map(), subagentCalls: 0, subagents: [], batchSeq: 0 });
 
 /** Sum of the server-side took_ms over the calls of one server's tools in a
  * run - that server's work inside the question's wall clock. */

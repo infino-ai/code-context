@@ -105,7 +105,7 @@ function withSnowflakeEnv(fn, extra = {}) {
 
 // --- lane table ---------------------------------------------------------------
 
-test("the lane table names exactly the sixteen lanes and an unknown lane throws", () => {
+test("the lane table names exactly the twenty lanes and an unknown lane throws", () => {
   assert.deepEqual(Object.keys(LANES).sort(), [
     "agent-only",
     "combo",
@@ -119,6 +119,10 @@ test("the lane table names exactly the sixteen lanes and an unknown lane throws"
     "hosted",
     "hosted-agent",
     "hosted-full",
+    "hosted-full-agent",
+    "hosted-full-remote",
+    "hosted-index",
+    "hosted-index-explore",
     "index-explore",
     "platform-explore",
     "snowflake",
@@ -212,6 +216,21 @@ test("hosted-full hides nothing: all five code-context tools stay in the model's
     assert.deepEqual(opts.tools, ["Glob", "Grep", "Read", "LS", "Bash"]);
     assert.equal(opts.mcpServers["code-context"].args.includes("--db"), true);
     assert.equal(laneDef("hosted-full").kind, "hosted");
+  });
+});
+
+test("hosted-full-agent offers Explore alongside the full surface, untouched: no override, nothing hidden", () => {
+  withHostedEnv(() => {
+    const opts = laneOptions("hosted-full-agent", "/r", "/r/.infino");
+    // the whole stock surface plus the Agent tool - the free choice a real
+    // client actually offers
+    assert.deepEqual(opts.tools, ["Glob", "Grep", "Read", "LS", "Bash", "Agent"]);
+    assert.equal(opts.disallowedTools, undefined);
+    // unlike `delegated`, Explore's definition is never touched: no agents
+    // override at all, so Claude Code's own Explore runs exactly as shipped
+    assert.equal(opts.agents, undefined);
+    assert.equal(opts.mcpServers["code-context"].args.includes("--db"), true);
+    assert.equal(laneDef("hosted-full-agent").kind, "hosted");
   });
 });
 
@@ -346,6 +365,37 @@ test("foldToolMessage counts calls made inside subagents and records the subagen
   assert.deepEqual(acc.subagents, ["Explore"]);
   assert.equal(acc.toolDetails[1].inSubagent, true);
   assert.equal(acc.toolDetails[3].inSubagent, undefined);
+});
+
+test("foldToolMessage's batch id is the only sound fan-out signal: same message, same batch", () => {
+  const acc = newToolAccounting();
+  // One assistant message spawning two Agent calls at once - a real fan-out,
+  // both tool_use blocks in ONE message's content array.
+  foldToolMessage(acc, {
+    type: "assistant",
+    parent_tool_use_id: null,
+    message: {
+      content: [
+        { type: "tool_use", id: "a1", name: "Agent", input: { subagent_type: "Explore", prompt: "q1" } },
+        { type: "tool_use", id: "a2", name: "Agent", input: { subagent_type: "Explore", prompt: "q2" } },
+      ],
+    },
+  });
+  // A subagent's own call, interleaved in the stream between the two batches -
+  // exactly the case that makes "consecutive entries in toolCalls" wrong.
+  foldToolMessage(acc, { type: "assistant", parent_tool_use_id: "a1", message: { content: [{ type: "tool_use", id: "s1", name: "Read", input: {} }] } });
+  // A second, SEQUENTIAL outer call - a different message, so a different batch.
+  foldToolMessage(acc, { type: "assistant", parent_tool_use_id: null, message: { content: [{ type: "tool_use", id: "a3", name: "Agent", input: {} }] } });
+
+  const outerAgents = acc.toolDetails.filter((d) => d.name === "Agent" && !d.inSubagent);
+  assert.equal(outerAgents[0].batch, outerAgents[1].batch, "the two fanned-out Agent calls share one batch");
+  assert.notEqual(outerAgents[1].batch, outerAgents[2].batch, "the later sequential Agent call is a different batch");
+  // The subagent's call sits between the two Agent batches in toolDetails
+  // (stream order) yet carries neither outer batch id - proving adjacency in
+  // the flat list cannot be used to detect fan-out.
+  const inner = acc.toolDetails.find((d) => d.inSubagent);
+  assert.notEqual(inner.batch, outerAgents[0].batch);
+  assert.notEqual(inner.batch, outerAgents[2].batch);
 });
 
 test("CX_BENCH_AGENT_MAX_TURNS passes through as --subagent-max-turns on the agent lanes only", () => {
@@ -516,9 +566,9 @@ test("foldToolMessage joins tool_use to tool_result by id, keeps every input and
   foldToolMessage(acc, userResult("t3", JSON.stringify({ rows: [], took_ms: 7.5, usage: "returned ~10 tokens | 0 rows" })));
   assert.deepEqual(acc.toolCalls, ["cx:search", "Read", "cx:sql"]);
   assert.deepEqual(acc.toolDetails, [
-    { name: "cx:search", input: { query: "where files are merged" }, tookMs: 12.5, usage: cxResult.usage },
-    { name: "Read", input: { file_path: "/r/src/lib.rs" }, tookMs: null, usage: null },
-    { name: "cx:sql", input: sqlInput, tookMs: 7.5, usage: "returned ~10 tokens | 0 rows" },
+    { name: "cx:search", input: { query: "where files are merged" }, tookMs: 12.5, usage: cxResult.usage, batch: 0 },
+    { name: "Read", input: { file_path: "/r/src/lib.rs" }, tookMs: null, usage: null, batch: 1 },
+    { name: "cx:sql", input: sqlInput, tookMs: 7.5, usage: "returned ~10 tokens | 0 rows", batch: 2 },
   ]);
   assert.equal(cxTookMs(acc.toolDetails), 20);
   assert.equal(acc.pending.size, 0);
@@ -557,8 +607,8 @@ test("foldToolMessage records a Snowflake tool's telemetry, and recordedQueries 
   foldToolMessage(acc, userResult("f2", "src/a.rs:1:compaction"));
   foldToolMessage(acc, userResult("f3", JSON.stringify({ hits: [], took_ms: 4 })));
   assert.deepEqual(acc.toolCalls, ["sf:sql", "Grep", "cx:find"]);
-  assert.deepEqual(acc.toolDetails[0], { name: "sf:sql", input: { query }, tookMs: 340, usage: "returned ~20 tokens | 0 rows" });
-  assert.deepEqual(acc.toolDetails[1], { name: "Grep", input: { pattern: "compaction" }, tookMs: null, usage: null });
+  assert.deepEqual(acc.toolDetails[0], { name: "sf:sql", input: { query }, tookMs: 340, usage: "returned ~20 tokens | 0 rows", batch: 0 });
+  assert.deepEqual(acc.toolDetails[1], { name: "Grep", input: { pattern: "compaction" }, tookMs: null, usage: null, batch: 1 });
   // each server's share is its own: the warehouse's time is not counted as engine work
   assert.equal(sfTookMs(acc.toolDetails), 340);
   assert.equal(cxTookMs(acc.toolDetails), 4);
@@ -769,7 +819,7 @@ test("foldToolMessage marks errored results and ignores results with no matching
   foldToolMessage(acc, userResult("orphan", "x"));
   foldToolMessage(acc, { type: "user", message: { content: "a plain prompt echo" } });
   foldToolMessage(acc, { type: "result", result: "done" });
-  assert.deepEqual(acc.toolDetails, [{ name: "cx:find", input: {}, tookMs: null, usage: null, isError: true }]);
+  assert.deepEqual(acc.toolDetails, [{ name: "cx:find", input: {}, tookMs: null, usage: null, batch: 0, isError: true }]);
   assert.equal(cxTookMs(acc.toolDetails), 0);
 });
 
