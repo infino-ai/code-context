@@ -114,11 +114,14 @@ export const CORPORA = [
     repo: "/home/ubuntu/infino-ai/workspace/bench-repos/opensearch-shallow",
     index: "/home/ubuntu/infino-ai/workspace/bench-repos/opensearch-shallow/.infino",
     table: "chunks_opensearch",
-    // The hosted load stopped at 15,872 of 67,721 rows when the embedding
-    // host went away mid-run. Until it is redone, only the grep arm is
-    // honest here.
-    ready: false,
-    note: "hosted table is 15,872 of 67,721 rows — the grep arm is complete, the index arms are not",
+    // Loaded whole on 2026-09-11 by a hydrate job from nine NDJSON files
+    // staged under the database root: 67,721 chunks across 16,230 files,
+    // embedded on the GPU host, one commit per 8,192-row group, then
+    // optimized. (Two earlier loads did not get here: one lost its
+    // embedding host at 15,872 rows; one committed every row and then
+    // dropped the table over a compaction race - see the platform's
+    // hydrate and optimizer commits of the same night.)
+    ready: true,
     // UNMEASURED. Nothing has been run against this corpus, so unlike the
     // infino starters these carry no recorded gap. They are the SHAPES that
     // separated there — "which files hold the most code about X", a
