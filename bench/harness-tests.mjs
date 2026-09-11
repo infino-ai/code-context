@@ -180,8 +180,12 @@ test("combo and hosted share the built-in tools; hosted configures the server by
     assert.equal(server.env.CX_DB_URL, undefined);
     assert.equal(server.env.INFINO_API_KEY, undefined);
     assert.equal(server.env.CX_EMBED_PROVIDER, undefined);
-    // --db brings ask and explore; the control lane hides both
+    // --db brings ask and explore; the control lane hides both - from the
+    // model's list AND from the server's instructions
     assert.deepEqual(hosted.disallowedTools, ["mcp__code-context__ask", "mcp__code-context__explore"]);
+    assert.equal(server.env.CX_AGENT_TOOLS, "0");
+    assert.equal(laneOptions("hosted-index", "/r", "/r/.infino").mcpServers["code-context"].env.CX_AGENT_TOOLS, "0");
+    assert.equal(laneOptions("hosted-full-remote", "/r", "/r/.infino").mcpServers["code-context"].env.CX_AGENT_TOOLS, undefined);
     assert.deepEqual(combo.mcpServers["code-context"].args.slice(1), ["mcp"]);
     assert.equal(combo.disallowedTools, undefined);
   }, { CX_BENCH_EMBED_PROVIDER: undefined });

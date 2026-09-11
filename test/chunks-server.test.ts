@@ -146,6 +146,38 @@ describe("the chunks table with the platform up", () => {
   });
 });
 
+describe("the chunks table with CX_AGENT_TOOLS=0: the lane that hides ask and explore", () => {
+  let s: Started;
+  beforeAll(async () => {
+    // The env is read when the server starts, so it is set here and not at
+    // the top of the file, where it would reach the other two servers.
+    process.env.CX_AGENT_TOOLS = "0";
+    s = await start(up(), "cx-chunks-noagent-");
+  });
+  afterAll(async () => {
+    delete process.env.CX_AGENT_TOOLS;
+    await stop(s);
+  });
+
+  it("registers neither ask nor explore and names neither in the instructions, while sql keeps its validation note", async () => {
+    const { tools } = await s.client.listTools();
+    const names = tools.map((t) => t.name);
+    expect(names).toContain("find");
+    expect(names).toContain("search");
+    expect(names).toContain("sql");
+    expect(names).not.toContain("ask");
+    expect(names).not.toContain("explore");
+    const instructions = s.client.getInstructions() ?? "";
+    expect(instructions).toContain("code-context is a local index of this repository");
+    expect(instructions).not.toContain("- ask -");
+    expect(instructions).not.toContain("- explore -");
+    // The database is still configured: the sql text's platform-side note
+    // and the startup card read are about sql, not about the loop.
+    expect(tools.find((t) => t.name === "sql")?.description).toContain("'validation'");
+    expect(s.startup).toEqual(["table_card"]);
+  });
+});
+
 describe("the chunks table with the platform answering 503 at spawn", () => {
   let s: Started;
   beforeAll(async () => {

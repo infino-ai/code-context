@@ -229,6 +229,15 @@ const SNOWFLAKE_MCP = join(BENCH, "snowflake-mcp.mjs");
  * mid-question would put a stat walk on the clock. */
 export const mcpEnvBase = (repoDir, indexDir) => ({ CX_ROOT: repoDir, CX_INDEX_DIR: indexDir, CX_AUTO_SYNC: "0" });
 
+/** Server env for a lane that hides `ask` and `explore`: the server then
+ * registers neither and names neither in its instructions. The SDK's
+ * `disallowedTools` removes a tool from the model's list but not from the
+ * server's instructions, which are prompt text on every turn - and a line
+ * for a tool that is not there made the caller try it and lose the turn to
+ * the refusal (the index arm on the jobs corpus, 2026-09-11). Both are kept:
+ * the env takes the line out, the list is the guarantee. */
+export const NO_AGENT_TOOLS = { CX_AGENT_TOOLS: "0" };
+
 /** The code-context server as the SDK starts it, for the lanes and for the
  * judge: this checkout's build, `cx mcp` plus the given flags, the given
  * server env over the process's. Without flags the server has the local index
@@ -431,7 +440,7 @@ export const LANES = {
     kind: "hosted",
     tools: STOCK_TOOLS,
     mcp: true,
-    env: mcpEnvBase,
+    env: (repoDir, indexDir) => ({ ...mcpEnvBase(repoDir, indexDir), ...NO_AGENT_TOOLS }),
     args: hostedFlags,
     disallowedTools: ["ask", "explore"].map((tool) => `${CX_TOOL_PREFIX}${tool}`),
     requires: HOSTED_REQUIRES,
@@ -502,7 +511,7 @@ export const LANES = {
     // decider earns its cost, this is the whole product: three tools over a
     // hosted table. It is the `hosted` lane plus CX_REMOTE_SEARCH, and the
     // pair prices the index against the local one with nothing else moving.
-    env: (repoDir, indexDir) => ({ ...mcpEnvBase(repoDir, indexDir), CX_REMOTE_SEARCH: "1" }),
+    env: (repoDir, indexDir) => ({ ...mcpEnvBase(repoDir, indexDir), CX_REMOTE_SEARCH: "1", ...NO_AGENT_TOOLS }),
     args: hostedFlags,
     disallowedTools: ["ask", "explore"].map((tool) => `${CX_TOOL_PREFIX}${tool}`),
     requires: HOSTED_REQUIRES,
@@ -518,7 +527,7 @@ export const LANES = {
     // local MiniLM index while the lane's name claimed otherwise. Measured
     // that way once by mistake — the platform served zero queries for the
     // whole run, which is the only reason it was caught.
-    env: (repoDir, indexDir) => ({ ...mcpEnvBase(repoDir, indexDir), CX_REMOTE_SEARCH: "1" }),
+    env: (repoDir, indexDir) => ({ ...mcpEnvBase(repoDir, indexDir), CX_REMOTE_SEARCH: "1", ...NO_AGENT_TOOLS }),
     args: hostedFlags,
     disallowedTools: ["ask", "explore"].map((tool) => `${CX_TOOL_PREFIX}${tool}`),
     agents: { [EXPLORE]: exploreOnIndex },

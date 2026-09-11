@@ -313,6 +313,17 @@ export function autoSyncEnabled(): boolean {
   return !OFF_VALUES.includes((process.env.CX_AUTO_SYNC ?? "").toLowerCase());
 }
 
+/** Whether the MCP server registers the platform's `ask` and `explore` when
+ * a platform database is configured (CX_AGENT_TOOLS, default on). Off, the
+ * two are neither registered nor named in the server's instructions. A lane
+ * that hides them through the SDK's disallowedTools removes them from the
+ * model's tool list but not from those instructions, and a line for a tool
+ * that is not there made the caller try it and lose the turn to the refusal;
+ * this switch takes the line out at the source. */
+export function agentToolsEnabled(): boolean {
+  return !OFF_VALUES.includes((process.env.CX_AGENT_TOOLS ?? "").toLowerCase());
+}
+
 /** The table this client builds when nothing overrides the name: the one
  * table a process owns. A process whose `CX_TABLE` names anything else is a
  * search-only process over a table something else loaded (see TABLE), and

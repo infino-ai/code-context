@@ -66,6 +66,7 @@ import {
   embedProvider,
   autoIndexEnabled as autoIndexSetting,
   autoSyncEnabled as autoSyncSetting,
+  agentToolsEnabled,
   exploreMaxTurns,
   exploreMaxWallSecs,
   subagentK,
@@ -912,11 +913,16 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
   };
 
   // The platform tools (`ask`, `explore`) are registered whenever a
-  // platform database is configured. Their routing lines join the
-  // instructions only then: the instructions are prompt text on every turn,
-  // and a line for a tool that is not there would cost tokens and steer
-  // toward nothing.
+  // platform database is configured and CX_AGENT_TOOLS does not say
+  // otherwise. Their routing lines join the instructions only then: the
+  // instructions are prompt text on every turn, and a line for a tool that is
+  // not there would cost tokens and steer toward nothing - measured: a lane
+  // that hid the two through the SDK's disallowedTools alone still carried
+  // their lines here, and the caller spent a turn calling `explore` into the
+  // refusal. `platformTools` keeps what belongs to the database rather than
+  // to the loop: the sql text's card and validation note.
   const platformTools = hosted !== null;
+  const agentTools = platformTools && agentToolsEnabled();
 
   // What the default root's doors run against (TableMode), decided here and
   // once. With CX_REMOTE_SEARCH, a platform database and a CX_TABLE that is
@@ -1018,9 +1024,9 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
     { name: "code-context", version: "0.1.2" },
     {
       instructions: rows
-        ? rowsInstructions(rows, platformTools)
+        ? rowsInstructions(rows, agentTools)
         : mode.kind === "unresolved"
-        ? unresolvedInstructions(TABLE, mode.cause, platformTools)
+        ? unresolvedInstructions(TABLE, mode.cause, agentTools)
         : "code-context is a local index of this repository. Which tool for which question:\n" +
         "- find - every line containing an exact string, where you would grep.\n" +
         "- search - how does X work, where is Y handled, code by meaning.\n" +
@@ -1028,7 +1034,7 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
         "much of them is about a topic (rank by hybrid_search, not bm25, when the topic is a concept; " +
         "a total over a search relation is the top k's matched lines, never a file's length - sizes " +
         "and whole-repo counts come from the chunks table with no search function).\n" +
-        (platformTools
+        (agentTools
           ? "- ask - a question or task in plain language; returns the rows it retrieved (facts with path:line and the code), not an answer: compose from them. Spawn several in parallel for independent questions. How often a string occurs, per file, is find's byFile.\n" +
             "- explore - a question about a mechanism that spans files (how X works end to end, what calls what); it reads and follows what it finds and returns a written answer grounded in the facts it lists, with the chain of queries. Take the answer and cite its facts. Slower than ask: use it when one retrieval will not do.\n"
           : "") +
@@ -1411,7 +1417,7 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
     },
   );
 
-  if (platformTools) {
+  if (agentTools) {
     server.registerTool(
       "ask",
       {
