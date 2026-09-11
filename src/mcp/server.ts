@@ -117,6 +117,7 @@ import {
   partialIndex,
   searchStatement,
   findStatement,
+  CONTENT_COLUMN,
 } from "../core/searcher.js";
 import {
   newSession,
@@ -178,9 +179,11 @@ const CARD_TIER = "lean";
 const VALIDATION_NOTE =
   " Pass the question you are answering as 'question' and the result carries 'validation': " +
   "whether these rows would be accepted as answering it - no rows, an aggregate of zeros, or rows " +
-  "naming nothing the question named are refused, with the reason - so query again on a refusal " +
-  "rather than answering from it. Valid means the result answers the question's terms, not that " +
-  "it is correct.";
+  "naming nothing the question named are refused, with the reason. A refusal names the question's " +
+  "terms that occur nowhere in the index ('absent': no query will find them, so do not search for " +
+  "them again) and the ones that do (query for those), and carries a 'suggestion' statement when " +
+  "the one that ran should be rewritten. Query again on a refusal rather than answering from it. " +
+  "Valid means the result answers the question's terms, not that it is correct.";
 
 /** What introduces the card in the `sql` description. Stated as the table's
  * own measured shape, because that is what it is: the optimizer computed it
@@ -440,13 +443,21 @@ export async function serveMcp(rootPath?: string): Promise<void> {
   ): Promise<Record<string, unknown> | undefined> => {
     if (!ctx.hosted) return undefined;
     try {
-      const verdict = await ctx.hosted.validate({ statement, rows, ...(question ? { question } : {}) });
+      const verdict = await ctx.hosted.validate({
+        table: TABLE,
+        column: CONTENT_COLUMN,
+        statement,
+        rows,
+        ...(question ? { question } : {}),
+      });
       // `anchors` and `rows` are the check's own working, not news to the
       // caller, and on a valid result the whole verdict is one word; the
-      // reason is the part worth prompt space.
-      return verdict.valid === true
-        ? { valid: true, check: verdict.check }
-        : { valid: false, check: verdict.check, reason: verdict.reason };
+      // reason is the part worth prompt space - with the terms the corpus
+      // does not hold and the rewrite to run, when the platform found them.
+      if (verdict.valid === true) return { valid: true, check: verdict.check };
+      const absent = Array.isArray(verdict.absent) && verdict.absent.length > 0 ? { absent: verdict.absent } : {};
+      const suggestion = typeof verdict.suggestion === "string" ? { suggestion: verdict.suggestion } : {};
+      return { valid: false, check: verdict.check, reason: verdict.reason, ...absent, ...suggestion };
     } catch (err) {
       console.error(`validation unavailable: ${(err as Error).message}`);
       return undefined;

@@ -265,16 +265,34 @@ describe("request shapes", () => {
       rows: 1,
     };
     const { db, calls } = client([json(verdict), json(verdict)]);
-    const request = { statement: "SELECT path FROM chunks", rows: [{ path: "README.md" }], question: "Where is `write_pointer` called?" };
+    const request = {
+      table: "chunks",
+      column: "content",
+      statement: "SELECT path FROM chunks",
+      rows: [{ path: "README.md" }],
+      question: "Where is `write_pointer` called?",
+    };
     expect(await db.validate(request)).toEqual(verdict);
     expect(calls[0].url).toBe("https://api.example.test/v1/validate/cx");
     expect(calls[0].method).toBe("POST");
-    expect(bodyJson(calls[0])).toEqual(request);
+    // The table and column travel under the data plane's names, like find's.
+    expect(bodyJson(calls[0])).toEqual({
+      table_name: "chunks",
+      field_name: "content",
+      statement: "SELECT path FROM chunks",
+      rows: [{ path: "README.md" }],
+      question: "Where is `write_pointer` called?",
+    });
     // Without a question only the statement and rows travel: the platform
     // reads an absent question as "nothing to anchor on", and an explicit
     // null would be refused as a type error.
-    await db.validate({ statement: "SELECT COUNT(*) AS n FROM chunks", rows: [{ n: 0 }] });
-    expect(bodyJson(calls[1])).toEqual({ statement: "SELECT COUNT(*) AS n FROM chunks", rows: [{ n: 0 }] });
+    await db.validate({ table: "chunks", column: "content", statement: "SELECT COUNT(*) AS n FROM chunks", rows: [{ n: 0 }] });
+    expect(bodyJson(calls[1])).toEqual({
+      table_name: "chunks",
+      field_name: "content",
+      statement: "SELECT COUNT(*) AS n FROM chunks",
+      rows: [{ n: 0 }],
+    });
   });
 
   it("sub_agent does not retry a 501 (no agent configured on the deployment)", async () => {

@@ -35,7 +35,7 @@ import { analyzerOf, analyzerTokens, hasIndexableToken } from "./analyzer.js";
 export { analyzerOf, analyzerTokens };
 
 /** The FTS-indexed column every door queries. */
-const CONTENT_COLUMN = "content";
+export const CONTENT_COLUMN = "content";
 
 /** Refuse to embed a query with a model other than the one the index was
  * built with: a same-dimension swap would return silently wrong vector

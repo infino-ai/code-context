@@ -387,17 +387,25 @@ export class HostedDb {
    * retrieval-contract check the platform's own answering loop gates every
    * query on, over the caller's statement, rows and (optionally) question.
    *
-   * No table read and no model on the platform side, so it is fast and
-   * cannot fail for a platform reason; metered as a read at the floor, with
-   * the billed tokens on the response header like every other call. It is
-   * the platform's own copy of the rules rather than a second implementation
-   * here, which would drift from the loop's within a release.
+   * Served by the table's worker: a refusal is diagnosed against the index -
+   * which of the question's terms occur nowhere in `column`, so no query will
+   * find them - and that lookup is what the call meters, with the billed
+   * tokens on the response header like every other call. It is the
+   * platform's own copy of the rules rather than a second implementation
+   * here, which would drift from the loop's within a release. Sent with no
+   * rows, it is the diagnosis alone: the check to make before a query.
    *
    * `valid: true` means the result would be accepted as the answer, NOT that
    * the answer is correct: rows that name the question's terms and say
    * something false pass. */
-  async validate(req: { statement: string; rows: readonly object[]; question?: string }): Promise<RowRecord> {
-    const body: RowRecord = { statement: req.statement, rows: req.rows };
+  async validate(req: {
+    table: string;
+    column: string;
+    statement: string;
+    rows: readonly object[];
+    question?: string;
+  }): Promise<RowRecord> {
+    const body: RowRecord = { table_name: req.table, field_name: req.column, statement: req.statement, rows: req.rows };
     if (req.question !== undefined) body.question = req.question;
     // jsonify, not JSON.stringify: rows off the local engine carry bigint
     // cells (a COUNT(*) is one), and the aggregate case is the one this
