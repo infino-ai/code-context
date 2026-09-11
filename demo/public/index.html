@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Sonnet + grep vs Sonnet + infino</title>
+<title>grep vs index vs index + subagents</title>
 <style>
   :root {
     --ground: #0e1116; --panel: #161b22; --ink: #e8ecf1; --soft: #a7b0bd; --faint: #7b8494;
@@ -50,6 +50,14 @@
   .facts b { color: var(--ink); font-weight: 500; }
   .subsystems { color: var(--faint); }
   .subsystems code { color: var(--soft); }
+  select {
+    background: var(--panel); color: var(--ink); border: 1px solid var(--rule);
+    padding: 10px 12px; font: inherit; border-radius: 0;
+  }
+  /* Said in the warning colour because it is a limit on what the run means,
+     not a note about it: a corpus whose hosted table is incomplete runs
+     fewer arms, and a reader must not read that as the product. */
+  .corpus-note { color: var(--warn); font-size: 12px; margin: 0 0 10px; }
   .examples-label { font-size: 11.5px; color: var(--faint); margin: 0 0 6px; }
   .examples { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 20px; }
   .examples button {
@@ -69,11 +77,43 @@
   .seg.model { background: var(--model); }
   .seg.retrieval { background: var(--retrieval); }
   .seg.subagent { background: var(--subagent); }
+  /* The segment still growing sweeps, so the caller's first model turn - five
+     or six seconds before any tool call, with nothing to draw - reads as work
+     rather than as a hung page. */
+  .seg.open {
+    background-image: linear-gradient(90deg, transparent, rgba(255, 255, 255, .22), transparent);
+    background-repeat: no-repeat; background-size: 140px 100%;
+    animation: sweep 1.3s linear infinite;
+  }
+  @keyframes sweep { from { background-position: -140px 0; } to { background-position: calc(100% + 140px) 0; } }
+  .now { margin-top: 7px; font-size: 11.5px; color: var(--faint); font-variant-numeric: tabular-nums; min-height: 1.3em; }
+  .count { float: right; margin-right: 12px; font-size: 12px; color: var(--faint); font-variant-numeric: tabular-nums; }
+  /* Every tool call as it happens, newest last. Capped in height so a
+     sixty-call grep run scrolls instead of pushing the numbers off screen. */
+  .feed { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 4px; max-height: 96px; overflow-y: auto; }
+  .chip {
+    font-size: 11px; padding: 2px 6px; white-space: nowrap;
+    border: 1px solid var(--rule); color: var(--faint);
+  }
+  .chip.model { border-color: var(--model); }
+  .chip.retrieval { border-color: var(--retrieval); }
+  .chip.subagent { border-color: var(--subagent); }
+  /* Still running: filled rather than outlined, so what is in flight reads at
+     a glance - and several filled at once is fan-out, visibly. */
+  .chip.live { color: var(--ink); box-shadow: inset 0 0 0 1px currentColor; }
+  /* A call the subagent made inside its own loop, not one the caller made. */
+  .chip.nested { border-style: dashed; margin-left: 10px; }
+  @media (prefers-reduced-motion: reduce) { .seg.open { animation: none; } .seg { transition: none; } }
   .split { display: flex; gap: 14px; margin-top: 8px; font-size: 11.5px; color: var(--soft); flex-wrap: wrap; }
   .split b { font-weight: 500; color: var(--ink); font-variant-numeric: tabular-nums; }
   table { width: 100%; border-collapse: collapse; margin-top: 16px; font-size: 12.5px; }
   th, td { text-align: right; padding: 5px 0; border-top: 1px solid var(--rule); font-variant-numeric: tabular-nums; }
   th:first-child, td:first-child { text-align: left; color: var(--soft); font-weight: 400; }
+  /* What the customer actually pays: their model bill plus our charge. It is
+     the number a buyer compares against their own invoice, so it reads as the
+     bottom line rather than as one row among seven. */
+  tr.bottomline th, tr.bottomline td { border-top: 2px solid var(--rule); padding-top: 7px; color: var(--ink); }
+  tr.bottomline th:first-child { color: var(--ink); font-weight: 500; }
   .answer {
     margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--rule);
     font-size: 12.5px; color: var(--soft); white-space: pre-wrap; word-break: break-word;
@@ -92,10 +132,10 @@
 
 <div class="fixture" id="fixture" hidden>FIXTURE MODE — invented data. No model ran, no question was answered. Nothing on this page is a measurement.</div>
 
-<h1>Sonnet + grep &nbsp;vs&nbsp; Sonnet + infino</h1>
-<p class="sub">Ask your own question. Both arms run at once, and each bar fills as its run happens, coloured by where the time is going.</p>
+<h1>Sonnet: grep &nbsp;vs&nbsp; index only &nbsp;vs&nbsp; index + subagents</h1>
+<p class="sub">Ask your own question. All three arms run at once, each bar fills as its own run happens, coloured by where the time is going, and each panel settles the moment that arm finishes.</p>
 
-<div class="corpus" id="corpus">
+<div class="corpus" id="corpus-panel">
   <h3>What you're asking about</h3>
   <p>
     <b>infino</b> — the engine repository: a retrieval engine that stores data on object storage and runs
@@ -106,17 +146,20 @@
   <div class="facts" id="facts"></div>
   <p class="subsystems" id="subsystems"></p>
   <p>
-    Both arms see the same checkout. The grep arm reads it off disk; the infino arm queries the index of it.
-    Questions that make an agent sweep many files are where the two diverge — a question one agent answers
-    from a single file usually comes out level.
+    All three arms see the same checkout. The grep arm reads it off disk; the other two query an index of it —
+    one with the caller driving retrieval itself, one that can also hand a search to a loop of ours. Questions
+    that make an agent sweep many files are where they diverge; a question answered from a single named file
+    usually comes out level.
   </p>
 </div>
 
 <form id="ask">
+  <select id="corpus" title="which repository the three arms look at"></select>
   <input type="text" id="q" placeholder="e.g. how does the manifest commit stay atomic under a concurrent writer?" autocomplete="off">
-  <button type="submit" id="go">Run both</button>
+  <button type="submit" id="go">Run</button>
 </form>
-<p class="examples-label">Or start from one of these and edit it:</p>
+<p class="corpus-note" id="corpus-note" hidden></p>
+<p class="examples-label" id="examples-label">Or start from one of these and edit it:</p>
 <div class="examples" id="examples"></div>
 
 <div class="legend">
@@ -128,12 +171,6 @@
 <div class="status" id="status">Ready.</div>
 <div class="arms" id="arms"></div>
 
-<p class="note">
-  One question is an anecdote, not a benchmark: the published comparison is 36 questions with a blind
-  judge, and a single pair will sometimes go the other way. The saving concentrates on questions that
-  make an agent fan out — on the recorded set, nine of thirty-six questions carried two thirds of the
-  grep arm's whole bill.
-</p>
 
 <script>
 /** Where this page's own endpoints live. Served on its own port the page sits
@@ -146,12 +183,6 @@ const BASE = location.pathname.replace(/\/index\.html$/, "").replace(/\/$/, "");
 const api = (path) => `${BASE}/${path}`;
 
 const PHASES = ["model", "retrieval", "subagent"];
-const EXAMPLES = [
-  "How does compaction decide which superfiles to merge, and how does it run?",
-  "Which files hold the most code about tombstones?",
-  "Where is the BM25 score actually computed?",
-  "How does the manifest commit stay atomic under a concurrent writer?",
-];
 
 const armsEl = document.getElementById("arms");
 const statusEl = document.getElementById("status");
@@ -159,19 +190,56 @@ const form = document.getElementById("ask");
 const input = document.getElementById("q");
 const go = document.getElementById("go");
 
-for (const text of EXAMPLES) {
-  const b = document.createElement("button");
-  b.type = "button";
-  b.textContent = text.length > 52 ? text.slice(0, 50) + "…" : text;
-  b.title = text;
-  // Fill the box rather than fire: an example is a starting point to edit,
-  // not a canned run.
-  b.onclick = () => { input.value = text; input.focus(); };
-  document.getElementById("examples").append(b);
+/** Draw the chosen corpus's starters. Called on every corpus change, so the
+ * questions on screen always name the repository the arms are about. */
+function drawExamples(examples) {
+  const host = document.getElementById("examples");
+  host.innerHTML = "";
+  document.getElementById("examples-label").hidden = !examples.length;
+  for (const text of examples) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = text.length > 52 ? text.slice(0, 50) + "…" : text;
+    b.title = text;
+    // Fill the box rather than fire: an example is a starting point to edit,
+    // not a canned run.
+    b.onclick = () => { input.value = text; input.focus(); };
+    host.append(b);
+  }
 }
 
-// What the arms are looking at, from the index's own manifest.
-fetch(api("corpus")).then((r) => r.json()).then((c) => {
+const corpusEl = document.getElementById("corpus");
+const corpusNoteEl = document.getElementById("corpus-note");
+
+/** Describe whichever corpus is selected, and say plainly when its hosted
+ * table is incomplete — that corpus runs fewer arms, and a reader who did
+ * not know would read a one-arm run as the comparison. */
+function loadCorpus(id) {
+  fetch(api(`corpus${id ? `?corpus=${encodeURIComponent(id)}` : ""}`))
+    .then((r) => r.json())
+    .then((c) => {
+      if (!corpusEl.options.length && Array.isArray(c.choices)) {
+        for (const choice of c.choices) {
+          const option = document.createElement("option");
+          option.value = choice.id;
+          option.textContent = choice.label;
+          corpusEl.append(option);
+        }
+        corpusEl.value = c.chosen;
+      }
+      drawExamples(c.examples ?? []);
+      corpusNoteEl.hidden = c.ready !== false;
+      corpusNoteEl.textContent = c.ready === false ? `Grep arm only — ${c.note}` : "";
+      describeCorpus(c);
+    })
+    .catch(() => {
+      document.getElementById("corpus-panel").hidden = true;
+    });
+}
+corpusEl.onchange = () => loadCorpus(corpusEl.value);
+
+// What the arms are looking at, from the chosen index's own manifest.
+function describeCorpus(c) {
   const facts = [];
   if (c.files) facts.push(["files", c.files.toLocaleString()]);
   if (c.chunks) facts.push(["indexed chunks", c.chunks.toLocaleString()]);
@@ -181,11 +249,13 @@ fetch(api("corpus")).then((r) => r.json()).then((c) => {
   document.getElementById("facts").innerHTML = facts
     .map(([k, v]) => `<span>${k} <b>${escapeHtml(v)}</b></span>`)
     .join("");
-  if (c.subsystems && c.subsystems.length) {
-    document.getElementById("subsystems").innerHTML =
-      "subsystems: " + c.subsystems.map((s) => `<code>${escapeHtml(s)}</code>`).join(" · ");
-  }
-}).catch(() => { document.getElementById("corpus").hidden = true; });
+  document.getElementById("subsystems").innerHTML =
+    c.subsystems && c.subsystems.length
+      ? "subsystems: " + c.subsystems.map((s) => `<code>${escapeHtml(s)}</code>`).join(" · ")
+      : "";
+}
+
+loadCorpus();
 
 /** Live state for one arm: the segments drawn so far plus the one still
  * growing. A segment is {phase, from, to} in milliseconds since the arm began;
@@ -195,9 +265,12 @@ function newArm(meta) {
   el.className = "arm";
   el.innerHTML = `
     <span class="clock" data-clock>0.0s</span>
+    <span class="count" data-count>0 calls</span>
     <h2>${meta.label}</h2>
     <p class="lane">lane ${meta.lane}</p>
     <div class="track" data-track></div>
+    <div class="now" data-now></div>
+    <div class="feed" data-feed></div>
     <div class="split" data-split></div>
     <div data-body></div>`;
   armsEl.append(el);
@@ -206,12 +279,60 @@ function newArm(meta) {
     track: el.querySelector("[data-track]"),
     splitEl: el.querySelector("[data-split]"),
     clockEl: el.querySelector("[data-clock]"),
+    nowEl: el.querySelector("[data-now]"),
+    countEl: el.querySelector("[data-count]"),
+    feedEl: el.querySelector("[data-feed]"),
     bodyEl: el.querySelector("[data-body]"),
     segments: [{ phase: "model", from: 0 }],
     lastAt: 0,
     finishedAt: null,
     nodes: [],
+    // Live call accounting. `calls` counts every call the run makes, the
+    // subagent's own included, so it converges on the `tool calls` figure the
+    // finished arm reports rather than disagreeing with it. `open` maps a
+    // call's key to the chips waiting for their result, as a queue: two
+    // identical calls issued at once share a key and must be closed in order.
+    calls: 0,
+    subagents: 0,
+    inFlight: 0,
+    open: new Map(),
   };
+}
+
+/** One tool call arriving, drawn as a chip the moment it starts and filled in
+ * when its result comes back. This is the whole of the "what is it doing right
+ * now" answer: before it existed the page showed a grey bar for the first six
+ * seconds and a number at the end. */
+function feedStart(arm, d) {
+  arm.calls += 1;
+  arm.inFlight += 1;
+  // A subagent is counted when the caller launches one, not when it comes
+  // back, so the number rises the moment the work is handed over.
+  if (SUBAGENT_TOOLS.has(d.tool) && !d.inSubagent) arm.subagents += 1;
+  arm.countEl.textContent =
+    `${arm.calls} call${arm.calls === 1 ? "" : "s"}` +
+    (arm.subagents ? ` · ${arm.subagents} subagent${arm.subagents === 1 ? "" : "s"}` : "");
+  const chip = document.createElement("span");
+  const phase = d.inSubagent ? "subagent" : (d.phase ?? "model");
+  chip.className = `chip ${phase} live${d.inSubagent ? " nested" : ""}`;
+  chip.textContent = d.tool;
+  chip.title = d.inSubagent ? `${d.tool} — inside the subagent's own loop` : d.tool;
+  arm.feedEl.append(chip);
+  arm.feedEl.scrollTop = arm.feedEl.scrollHeight;
+  const key = `${d.tool}#${d.inSubagent ? "sub" : "top"}`;
+  const queue = arm.open.get(key) ?? [];
+  queue.push(chip);
+  arm.open.set(key, queue);
+}
+
+/** The result came back: stop filling that chip. */
+function feedEnd(arm, d) {
+  arm.inFlight = Math.max(0, arm.inFlight - 1);
+  const key = `${d.tool}#${d.inSubagent ? "sub" : "top"}`;
+  const queue = arm.open.get(key);
+  const chip = queue?.shift();
+  if (chip) chip.classList.remove("live");
+  if (queue && !queue.length) arm.open.delete(key);
 }
 
 /** Close the open segment at `at` and open one for `phase` — unless the phase
@@ -237,11 +358,48 @@ function paint(arm, now) {
   arm.segments.forEach((s, i) => {
     const end = s.to ?? now;
     const node = arm.nodes[i];
-    node.className = `seg ${s.phase}`;
+    // Only the last segment of a running arm is still growing, and only that
+    // one sweeps.
+    const growing = i === arm.segments.length - 1 && arm.finishedAt === null;
+    node.className = `seg ${s.phase}${growing ? " open" : ""}`;
     node.style.width = `${Math.max(0, ((end - s.from) / total) * 100)}%`;
   });
   arm.clockEl.textContent = `${(now / 1000).toFixed(1)}s`;
+  // What the arm is doing right now and for how long, so a long first model
+  // turn is legible instead of being a flat grey stretch.
+  if (arm.nowEl) {
+    const open = arm.segments[arm.segments.length - 1];
+    // More than one call in flight is the caller fanning out, which is worth
+    // saying in words as well as showing as two filled chips.
+    arm.nowEl.textContent =
+      arm.finishedAt === null
+        ? `${PHASE_NOW[open.phase] ?? open.phase}` +
+          `${arm.inFlight > 1 ? ` · ${arm.inFlight} in flight` : ""}` +
+          ` · ${((now - open.from) / 1000).toFixed(1)}s`
+        : "";
+  }
 }
+
+/** What each phase is called while it is still running. The legend names the
+ * colours; this names the activity. */
+const PHASE_NOW = { model: "thinking", retrieval: "searching", subagent: "subagent running" };
+
+/** What the customer pays in total for one arm: their model bill plus our
+ * charge, or null when either half is unpriced.
+ *
+ * This is the only honest basis for "cheaper". The grep arm pays us nothing,
+ * so comparing model bills alone credits our arms with a saving the customer
+ * does not get — and the gap is largest exactly where we earn most, on the
+ * subagent arm, whose inference markup is the whole revenue line. */
+function totalCustomerUsd(r) {
+  const theirs = r.cost.theirModelBillUsd;
+  if (theirs === null || theirs === undefined || !r.cost.ours.priced) return null;
+  return theirs + r.cost.ours.totalUsd;
+}
+
+/** The tools that hand a question to a loop of ours, so the page can count
+ * how many were launched. */
+const SUBAGENT_TOOLS = new Set(["cx:ask", "cx:explore"]);
 
 /** The finished arm's own numbers, from the server rather than from the bar —
  * the bar is a drawing, the split is the measurement. */
@@ -260,11 +418,19 @@ function render(arm, r) {
     <table>
       <tr><th>wall clock</th><td>${(r.wallMs / 1000).toFixed(1)}s</td></tr>
       <tr><th>tool calls</th><td>${n(r.calls)}</td></tr>
+      <tr><th>subagents launched</th><td>${n(r.subagents ?? 0)}${
+        r.subagentTurns ? ` <span style="color:var(--faint)">(${n(r.subagentTurns)} turns)</span>` : ""
+      }</td></tr>
       <tr><th>caller tokens</th><td>${n(r.tokens)}</td></tr>
       <tr><th>their model bill</th><td>${money(r.cost.theirModelBillUsd)}</td></tr>
       <tr><th>our read tokens</th><td>${n(m.readTokens)}</td></tr>
       <tr><th>our inference tokens</th><td>${n(m.modelTokens)}</td></tr>
-      <tr><th>our charge</th><td>${ours.priced ? money(ours.totalUsd) : "unpriced"}</td></tr>
+      <tr><th>our charge · retrieval</th><td>${ours.retrievalUsd === null ? "unpriced" : money(ours.retrievalUsd)}</td></tr>
+      <tr><th>our charge · inference</th><td>${ours.inferenceUsd === null ? "unpriced" : money(ours.inferenceUsd)}</td></tr>
+      <tr><th>our charge · total</th><td>${ours.priced ? money(ours.totalUsd) : "unpriced"}</td></tr>
+      <tr class="bottomline"><th>total customer charge</th><td>${
+        r.cost.theirModelBillUsd !== null && ours.priced ? money(r.cost.theirModelBillUsd + ours.totalUsd) : "—"
+      }</td></tr>
     </table>
     ${r.error ? `<div class="answer err">${escapeHtml(r.error)}</div>` : `<div class="answer">${escapeHtml(r.answer || "(no answer)")}</div>`}
     <div class="tools">${r.toolCalls.length ? escapeHtml(r.toolCalls.join(" · ")) : "no tool calls"}</div>`;
@@ -284,7 +450,13 @@ form.onsubmit = (e) => {
 
   const arms = new Map();
   const started = performance.now();
-  const source = new EventSource(api(`run?q=${encodeURIComponent(question)}`));
+  // The corpus travels with the question. Without it the server falls back to
+  // the first corpus, so a reader who picked OpenSearch got an agent pointed at
+  // the engine repository instead - a wrong answer that looks like a real one.
+  const chosen = corpusEl.value;
+  const source = new EventSource(
+    api(`run?q=${encodeURIComponent(question)}${chosen ? `&corpus=${encodeURIComponent(chosen)}` : ""}`),
+  );
   live = source;
 
   // The bar has to keep growing between events, or a 60-second subagent call
@@ -315,16 +487,36 @@ form.onsubmit = (e) => {
     statusEl.textContent = `Running both arms — run ${d.run} of ${d.of}. This takes tens of seconds; the grep arm can take minutes.`;
   });
 
-  for (const kind of ["arm_start", "tool_start", "tool_end"]) {
-    source.addEventListener(kind, (e) => {
-      const d = JSON.parse(e.data);
-      const arm = arms.get(d.arm);
-      if (!arm) return;
-      if (d.nowIn) switchPhase(arm, d.at, d.nowIn);
-      arm.lastAt = d.at;
-      paint(arm, Math.max(d.at, performance.now() - arm.startedAt));
-    });
-  }
+  /** Move the bar to where this event puts it. Only calls the CALLER made
+   * reach this: a subagent's inner calls would repaint the growing edge with
+   * their own colour inside their parent's span. */
+  const advance = (arm, d) => {
+    if (d.nowIn) switchPhase(arm, d.at, d.nowIn);
+    arm.lastAt = d.at;
+    paint(arm, Math.max(d.at, performance.now() - arm.startedAt));
+  };
+
+  source.addEventListener("arm_start", (e) => {
+    const d = JSON.parse(e.data);
+    const arm = arms.get(d.arm);
+    if (arm) advance(arm, d);
+  });
+
+  source.addEventListener("tool_start", (e) => {
+    const d = JSON.parse(e.data);
+    const arm = arms.get(d.arm);
+    if (!arm) return;
+    feedStart(arm, d);
+    if (!d.inSubagent) advance(arm, d);
+  });
+
+  source.addEventListener("tool_end", (e) => {
+    const d = JSON.parse(e.data);
+    const arm = arms.get(d.arm);
+    if (!arm) return;
+    feedEnd(arm, d);
+    if (!d.inSubagent) advance(arm, d);
+  });
 
   /** Settle one arm from its own result. Setting `finishedAt` is what stops
    * the animation loop extending that arm's bar, so an arm that finished at
@@ -356,12 +548,30 @@ form.onsubmit = (e) => {
     // Every arm has normally rendered from its own arm_done already; this
     // settles any whose frame did not arrive.
     for (const r of d.results) finish(r);
-    const [a, b] = d.results;
-    if (a && b && !a.error && !b.error) {
-      const faster = (a.wallMs / b.wallMs).toFixed(1);
-      const cheaper = a.cost.theirModelBillUsd && b.cost.theirModelBillUsd
-        ? (a.cost.theirModelBillUsd / b.cost.theirModelBillUsd).toFixed(1) : null;
-      statusEl.textContent = `Done. infino was ${faster}× the speed${cheaper ? ` and ${cheaper}× cheaper on the model bill` : ""} on this one question.`;
+    // grep is the baseline the other arms are read against — the comparison
+    // the tokenomics work is about is each of ours against what a developer
+    // has today, not one of ours against the other.
+    const base = d.results.find((r) => r.arm === "grep");
+    const ours = d.results.filter((r) => r.arm !== "grep" && !r.error);
+    if (base && !base.error && ours.length) {
+      const parts = ours.map((r) => {
+        const speed = r.wallMs > 0 ? `${(base.wallMs / r.wallMs).toFixed(1)}× the speed` : null;
+        // Tokens are the cleanest of the three: a counter rather than a
+        // judgement, and the one that grows with the corpus — grep's cost is
+        // what it pulls into context, a ranked query's is capped by k.
+        const tokens = r.tokens > 0 && base.tokens > 0 ? `${(base.tokens / r.tokens).toFixed(1)}× fewer tokens` : null;
+        // Cheaper on what the CUSTOMER pays: their model bill plus our
+        // charge. Dividing model bills alone ignores the inference markup,
+        // which on the subagent arm is most of what we bill — it made that
+        // arm look cheaper than it is, against grep, which we charge nothing
+        // for at all.
+        const mine = totalCustomerUsd(r);
+        const theirs = totalCustomerUsd(base);
+        const bill = mine !== null && theirs !== null && mine > 0 ? `${(theirs / mine).toFixed(1)}× cheaper` : null;
+        const short = r.label.replace(/^Sonnet \+ /, "");
+        return `${short}: ${[speed, bill, tokens].filter(Boolean).join(", ") || "no comparison available"}`;
+      });
+      statusEl.textContent = `Done. Against grep on this one question — ${parts.join(" · ")}.`;
     } else {
       statusEl.textContent = "Done, with an error on at least one arm.";
     }

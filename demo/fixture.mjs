@@ -41,13 +41,37 @@ const GREP_SCRIPT = [
   { at: 37_200, kind: "tool_end", name: "Read", batch: 3 },
 ];
 
-/** The infino arm: one search, one find, one explore. */
-const INFINO_SCRIPT = [
+/** The index-only arm: the caller drives retrieval itself - a search, a SQL
+ * aggregate, a find - and no loop of ours ever runs, so there is no subagent
+ * span in this one at all. */
+const INDEX_SCRIPT = [
+  { at: 2100, kind: "tool_start", name: "cx:search", batch: 0 },
+  { at: 2290, kind: "tool_end", name: "cx:search", batch: 0 },
+  { at: 3900, kind: "tool_start", name: "cx:sql", batch: 1 },
+  { at: 4480, kind: "tool_end", name: "cx:sql", batch: 1 },
+  { at: 6200, kind: "tool_start", name: "cx:find", batch: 2 },
+  { at: 6310, kind: "tool_end", name: "cx:find", batch: 2 },
+  { at: 8000, kind: "tool_start", name: "Read", batch: 3 },
+  { at: 8600, kind: "tool_end", name: "Read", batch: 3 },
+];
+
+/** The subagent arm: one search, one find, one explore - and, inside that
+ * explore, the calls the subagent's own loop makes. Those carry `sub: true`:
+ * they belong in the call feed, which is where the page shows what our loop
+ * does that grep's does not, but never in the bar, whose growing edge stays
+ * the parent's colour for the whole span. */
+const SUBAGENT_SCRIPT = [
   { at: 2200, kind: "tool_start", name: "cx:search", batch: 0 },
   { at: 2380, kind: "tool_end", name: "cx:search", batch: 0 },
   { at: 4100, kind: "tool_start", name: "cx:find", batch: 1 },
   { at: 4210, kind: "tool_end", name: "cx:find", batch: 1 },
   { at: 6000, kind: "tool_start", name: "cx:explore", batch: 2 },
+  { at: 7100, kind: "tool_start", name: "search", batch: 2, sub: true },
+  { at: 7900, kind: "tool_end", name: "search", batch: 2, sub: true },
+  { at: 9200, kind: "tool_start", name: "query_sql", batch: 2, sub: true },
+  { at: 10_400, kind: "tool_end", name: "query_sql", batch: 2, sub: true },
+  { at: 12_000, kind: "tool_start", name: "search", batch: 2, sub: true },
+  { at: 13_100, kind: "tool_end", name: "search", batch: 2, sub: true },
   { at: 17_500, kind: "tool_end", name: "cx:explore", batch: 2 },
   { at: 19_000, kind: "tool_start", name: "Read", batch: 3 },
   { at: 19_600, kind: "tool_end", name: "Read", batch: 3 },
@@ -64,8 +88,24 @@ const SCRIPTS = {
       "FIXTURE - no model ran. In a real run this pane holds the grep arm's answer, " +
       "which on the recorded set was about the same quality as the infino arm's and cost three times as much.",
   },
-  infino: {
-    script: INFINO_SCRIPT,
+  index: {
+    script: INDEX_SCRIPT,
+    wallMs: 22_000,
+    costUsd: 0.0861,
+    tokens: 43_206,
+    // No agentModelTokens on any line: the index-only arm runs no loop of
+    // ours, so read tokens are the whole of what it meters.
+    entries: [
+      { tool: "search", platform: { rttMs: 118, readTokens: 12 } },
+      { tool: "sql", platform: { rttMs: 0, readTokens: 0 } },
+      { tool: "find", platform: { rttMs: 0, readTokens: 0 } },
+    ],
+    answer:
+      "FIXTURE - no model ran. In a real run this pane holds the index-only arm's answer, " +
+      "which the caller reached by querying the index itself.",
+  },
+  subagents: {
+    script: SUBAGENT_SCRIPT,
     wallMs: 22_000,
     costUsd: 0.0795,
     tokens: 39_036,
@@ -76,8 +116,8 @@ const SCRIPTS = {
       { tool: "explore", agentTurns: 14, agentModelTokens: 211_300, platform: { rttMs: 11_302, readTokens: 37 } },
     ],
     answer:
-      "FIXTURE - no model ran. In a real run this pane holds the infino arm's answer, " +
-      "reached in a third of the tool calls.",
+      "FIXTURE - no model ran. In a real run this pane holds the subagent arm's answer, " +
+      "reached by handing the search to our loop.",
   },
 };
 
@@ -98,6 +138,16 @@ export async function fixtureArm(arm, emit) {
   for (const step of script) {
     await sleep(Math.max(0, (step.at - elapsed) / FIXTURE_SPEED));
     elapsed = step.at;
+    // A subagent's inner call is counted like any other - `calls` on a real
+    // row includes them - but it never touches `open`, so the bar's phase does
+    // not flicker inside its parent's span. The same split the server makes.
+    if (step.sub) {
+      if (step.kind === "tool_start") {
+        toolDetails.push({ name: step.name, input: {}, tookMs: null, usage: null, batch: step.batch, inSubagent: true, startedAt: step.at });
+      }
+      emit({ arm: arm.id, kind: step.kind, at: step.at, tool: step.name, inSubagent: true });
+      continue;
+    }
     const key = `${step.name}#${step.batch}`;
     if (step.kind === "tool_start") {
       const detail = { name: step.name, input: {}, tookMs: null, usage: null, batch: step.batch, startedAt: step.at };
