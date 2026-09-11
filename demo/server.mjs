@@ -93,6 +93,12 @@ export const CORPORA = [
   {
     id: "infino",
     label: "infino — the engine, 450 files",
+    name: "infino",
+    blurb:
+      "The engine repository: a retrieval engine that stores data on object storage and runs SQL, " +
+      "full-text search and vector search over it. One file (a \"superfile\") is a valid Parquet file " +
+      "with BM25 and vector indexes spliced in; the supertable layer composes many superfiles into a " +
+      "queryable table with snapshot-isolated reads and an atomic-commit manifest.",
     repo: "/home/ubuntu/infino-ai/workspace/bench-repos/infino-ed4e020",
     index: "/home/ubuntu/infino-ai/workspace/bench-repos/infino-ed4e020/.infino-hosted",
     table: "chunks",
@@ -112,6 +118,13 @@ export const CORPORA = [
   {
     id: "opensearch",
     label: "OpenSearch — 17,092 files, 38x",
+    name: "OpenSearch",
+    blurb:
+      "The search engine: a distributed search and analytics engine in Java. A REST layer takes a " +
+      "query, the coordinating node fans it out to the shards that hold the data, each shard scores " +
+      "its own segments with Lucene, and the results are merged back. Thirty-eight times the engine " +
+      "repository's file count, which is the point - it is the size at which sweeping the tree stops " +
+      "being free.",
     repo: "/home/ubuntu/infino-ai/workspace/bench-repos/opensearch-shallow",
     index: "/home/ubuntu/infino-ai/workspace/bench-repos/opensearch-shallow/.infino",
     table: "chunks_opensearch",
@@ -501,6 +514,11 @@ function corpus(chosen) {
   }
   return {
     repo: chosen.repo.split("/").pop(),
+    // The page used to carry one hard-coded paragraph about infino and show
+    // it whatever corpus was chosen, so a reader asking about OpenSearch was
+    // told they were asking about the engine.
+    name: chosen.name ?? chosen.label,
+    blurb: chosen.blurb ?? "",
     files: manifest.files ?? null,
     chunks: manifest.chunks ?? null,
     vectors: manifest.vectors ?? null,

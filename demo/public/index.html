@@ -23,6 +23,9 @@
     --hit: rgba(240, 86, 42, .16);
     --grade-a: #45d38f; --grade-b: #e0b562; --grade-c: #ff7a66; --grade-f: #e04b4b;
     --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    /* One radius scale: panels take --r, controls and inset boxes --r-sm,
+       and anything that reads as a token or a bar goes fully round. */
+    --r: 12px; --r-sm: 7px;
   }
   :root[data-theme="light"] {
     --ground: #f7f6f2; --panel: #fff; --ink: #14181e; --soft: #4c5563; --faint: #7b8494;
@@ -52,8 +55,8 @@
   h1 { font-size: 15px; font-weight: 500; margin: 0; letter-spacing: -.01em; flex: 1 1 auto; }
   h1 .prompt { color: var(--accent); margin-right: .5em; }
   .theme {
-    background: transparent; color: var(--faint); border: 1px solid var(--rule); padding: 3px 9px;
-    font: inherit; font-size: 12px; cursor: pointer; line-height: 1.4;
+    background: transparent; color: var(--faint); border: 1px solid var(--rule); padding: 3px 11px;
+    font: inherit; font-size: 12px; cursor: pointer; line-height: 1.4; border-radius: 999px;
   }
   .theme:hover { color: var(--ink); border-color: var(--soft); }
   .theme:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
@@ -61,31 +64,46 @@
   form { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
   input[type=text] {
     flex: 1 1 420px; min-width: 0; background: var(--panel); color: var(--ink);
-    border: 1px solid var(--rule); border-radius: 0; padding: 10px 12px; font: inherit;
+    border: 1px solid var(--rule); border-radius: var(--r-sm); padding: 10px 13px; font: inherit;
   }
   input[type=text]:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
   button {
-    background: var(--accent); color: var(--accent-ink); border: 0; border-radius: 0;
+    background: var(--accent); color: var(--accent-ink); border: 0; border-radius: var(--r-sm);
     padding: 10px 18px; font: inherit; font-weight: 500; cursor: pointer;
   }
   button:hover:not(:disabled) { filter: brightness(1.08); }
   button:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
   button:disabled { background: var(--rule); color: var(--faint); cursor: default; filter: none; }
-  .corpus {
-    background: var(--panel); border: 1px solid var(--rule);
-    padding: 14px 16px; margin-bottom: 18px; font-size: 12.5px; color: var(--soft);
+  /* What the arms are looking at. One line by default - the repository, its
+     size, the commit - with the paragraph explaining the corpus and the three
+     arms folded away behind it. The facts are the part a reader checks at a
+     glance; the prose is the part they read once. */
+  .about {
+    background: var(--panel); border: 1px solid var(--rule); border-radius: var(--r);
+    padding: 10px 14px; margin-bottom: 14px; font-size: 12.5px; color: var(--soft);
   }
-  .corpus h3 { font-size: 12.5px; font-weight: 500; color: var(--ink); margin: 0 0 6px; }
-  .corpus p { margin: 0 0 8px; }
-  .corpus p:last-child { margin-bottom: 0; }
-  .facts { display: flex; gap: 16px; flex-wrap: wrap; margin: 10px 0; font-variant-numeric: tabular-nums; }
+  .about > summary {
+    cursor: pointer; list-style: none; display: flex; gap: 14px; align-items: baseline; flex-wrap: wrap;
+  }
+  .about > summary::-webkit-details-marker { display: none; }
+  .about > summary::after {
+    content: "about this corpus ▸"; color: var(--faint); font-size: 11.5px; margin-left: auto;
+  }
+  .about[open] > summary::after { content: "about this corpus ▾"; }
+  .about > summary:hover::after { color: var(--ink); }
+  .about > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 4px; }
+  .about .who { color: var(--ink); font-weight: 500; }
+  .about .body { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--rule); }
+  .about .body p { margin: 0 0 8px; }
+  .about .body p:last-child { margin-bottom: 0; }
+  .facts { display: flex; gap: 14px; flex-wrap: wrap; font-variant-numeric: tabular-nums; }
   .facts span { color: var(--faint); }
   .facts b { color: var(--ink); font-weight: 500; }
   .subsystems { color: var(--faint); }
   .subsystems code { color: var(--soft); }
   select {
     background: var(--panel); color: var(--ink); border: 1px solid var(--rule);
-    padding: 10px 12px; font: inherit; border-radius: 0;
+    padding: 10px 13px; font: inherit; border-radius: var(--r-sm);
   }
   /* Said in the warning colour because it is a limit on what the run means,
      not a note about it: a corpus whose hosted table is incomplete runs
@@ -95,18 +113,55 @@
   .examples { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 20px; }
   .examples button {
     background: transparent; color: var(--soft); border: 1px solid var(--rule);
-    padding: 4px 9px; font-size: 12px; font-weight: 400;
+    padding: 4px 11px; font-size: 12px; font-weight: 400; border-radius: 999px;
   }
   .examples button:hover { color: var(--ink); border-color: var(--accent); filter: none; }
-  .legend { display: flex; gap: 18px; margin-bottom: 14px; font-size: 12px; color: var(--soft); flex-wrap: wrap; }
-  .swatch { display: inline-block; width: 10px; height: 10px; margin-right: 6px; vertical-align: -1px; }
+  /* The legend and the third-arm switch share one line: both are controls for
+     how the panels below read, and two stacked strips of small grey text was
+     most of what made the page look busy. */
+  .controls {
+    display: flex; gap: 18px 22px; align-items: center; flex-wrap: wrap;
+    margin-bottom: 14px; font-size: 12px; color: var(--soft);
+  }
+  .swatch { display: inline-block; width: 10px; height: 10px; margin-right: 6px; vertical-align: -1px; border-radius: 3px; }
+  .third { margin-left: auto; display: inline-flex; gap: 7px; align-items: center; cursor: pointer; color: var(--faint); }
+  .third:hover { color: var(--ink); }
+  .third input { accent-color: var(--accent); margin: 0; cursor: pointer; }
+  /* The headline: what the run actually showed, as figures rather than a
+     sentence. A reader who takes one thing from the page takes this, so it is
+     the largest type on it and sits above the panels it summarises. */
+  .headline { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+  .hgroup {
+    flex: 1 1 300px; background: var(--panel); border: 1px solid var(--rule);
+    border-radius: var(--r); padding: 12px 16px 14px;
+  }
+  .hgroup.subagents { border-color: color-mix(in srgb, var(--subagent) 40%, var(--rule)); }
+  .hgroup h3 {
+    margin: 0 0 10px; font-size: 11.5px; font-weight: 500; color: var(--faint);
+    letter-spacing: .04em; text-transform: lowercase;
+  }
+  .hgroup h3 b { color: var(--ink); font-weight: 500; }
+  .stats { display: flex; gap: 26px; flex-wrap: wrap; }
+  .stat { display: flex; flex-direction: column; gap: 1px; }
+  .stat b {
+    font-size: clamp(24px, 3.4vw, 34px); font-weight: 600; line-height: 1.05;
+    color: var(--accent); font-variant-numeric: tabular-nums; letter-spacing: -.02em;
+  }
+  .stat span { font-size: 11.5px; color: var(--faint); }
+  /* A figure that went the wrong way is not dressed up as a win. */
+  .stat.worse b { color: var(--soft); }
   .status { color: var(--faint); font-size: 12.5px; min-height: 1.6em; margin-bottom: 14px; }
   .arms { display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); gap: 16px; }
-  .arm { background: var(--panel); border: 1px solid var(--rule); padding: 16px 18px 18px; }
+  /* The third arm is off by default: the pair a reader came to compare is
+     grep against the index, and a third panel competing with it is the first
+     thing that made the page dense. The run is unchanged - it still happens,
+     and the switch reveals it. */
+  .arms.no-third .arm[data-arm="subagents"], .headline.no-third .hgroup.subagents { display: none; }
+  .arm { background: var(--panel); border: 1px solid var(--rule); border-radius: var(--r); padding: 16px 18px 18px; }
   .arm h2 { font-size: 13px; font-weight: 500; margin: 0 0 2px; }
   .lane { color: var(--faint); font-size: 11.5px; margin: 0 0 14px; }
   .clock { float: right; font-variant-numeric: tabular-nums; color: var(--soft); font-size: 12px; }
-  .track { height: 26px; background: var(--ground); border: 1px solid var(--rule); display: flex; overflow: hidden; }
+  .track { height: 26px; background: var(--ground); border: 1px solid var(--rule); display: flex; overflow: hidden; border-radius: 999px; }
   .seg { height: 100%; transition: width .12s linear; }
   .seg.model { background: var(--model); }
   .seg.retrieval { background: var(--retrieval); }
@@ -126,7 +181,7 @@
      sixty-call grep run scrolls instead of pushing the numbers off screen. */
   .feed { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 4px; max-height: 96px; overflow-y: auto; }
   .chip {
-    font-size: 11px; padding: 2px 6px; white-space: nowrap;
+    font-size: 11px; padding: 2px 8px; white-space: nowrap; border-radius: 999px;
     border: 1px solid var(--rule); color: var(--faint);
   }
   .chip.model { border-color: var(--model); }
@@ -160,7 +215,7 @@
   .cite { color: var(--accent); text-decoration: underline dotted; text-underline-offset: 2px; cursor: pointer; }
   .cite:hover { text-decoration-style: solid; }
   .code {
-    margin: 10px 0 4px; background: var(--ground); border: 1px solid var(--rule);
+    margin: 10px 0 4px; background: var(--ground); border: 1px solid var(--rule); border-radius: var(--r-sm);
     font-size: 11.5px; line-height: 1.5; max-height: 360px; overflow: auto;
   }
   .code header {
@@ -178,12 +233,12 @@
   .err { color: var(--warn); }
   .note { margin-top: 26px; color: var(--faint); font-size: 11.5px; max-width: 70ch; }
   .fixture {
-    background: var(--warn); color: #1a0c0c; padding: 8px 12px; margin-bottom: 16px;
-    font-size: 12px; font-weight: 500;
+    background: var(--warn); color: #1a0c0c; padding: 8px 13px; margin-bottom: 16px;
+    font-size: 12px; font-weight: 500; border-radius: var(--r-sm);
   }
 /* The judge's grade above each answer: the letter, what it means, the
    one-line reason. Colour says the grade; the words say why. */
-.judge { display: flex; flex-wrap: wrap; gap: .4rem .7rem; align-items: baseline; margin: .9rem 0 .4rem; padding: .55rem .7rem; border-left: 4px solid var(--faint); background: var(--judge-bg); font-size: .9rem; }
+.judge { display: flex; flex-wrap: wrap; gap: .4rem .7rem; align-items: baseline; margin: .9rem 0 .4rem; padding: .55rem .75rem; border-left: 4px solid var(--faint); border-radius: var(--r-sm); background: var(--judge-bg); font-size: .9rem; }
 .judge.pending { color: var(--faint); font-style: italic; }
 .judge .grade { font-size: 1.25rem; font-weight: 700; letter-spacing: .02em; min-width: 1.4rem; }
 .judge .meaning { color: var(--faint); }
@@ -215,23 +270,27 @@
 </div>
 <p class="sub">Ask your own question. All three arms run at once, each bar fills as its own run happens, coloured by where the time is going, and each panel settles the moment that arm finishes.</p>
 
-<div class="corpus" id="corpus-panel">
-  <h3>What you're asking about</h3>
-  <p>
-    <b>infino</b> — the engine repository: a retrieval engine that stores data on object storage and runs
-    SQL, full-text search and vector search over it. One file (a "superfile") is a valid Parquet file with
-    BM25 and vector indexes spliced in; the supertable layer composes many superfiles into a queryable
-    table with snapshot-isolated reads and an atomic-commit manifest.
-  </p>
-  <div class="facts" id="facts"></div>
-  <p class="subsystems" id="subsystems"></p>
-  <p>
-    All three arms see the same checkout. The grep arm reads it off disk; the other two query an index of it —
-    one with the caller driving retrieval itself, one that can also hand a search to a loop of ours. Questions
-    that make an agent sweep many files are where they diverge; a question answered from a single named file
-    usually comes out level.
-  </p>
-</div>
+<details class="about" id="corpus-panel">
+  <summary>
+    <span class="who" id="corpus-name">infino</span>
+    <span class="facts" id="facts"></span>
+  </summary>
+  <div class="body">
+    <p id="corpus-blurb">
+      The engine repository: a retrieval engine that stores data on object storage and runs
+      SQL, full-text search and vector search over it. One file (a "superfile") is a valid Parquet file with
+      BM25 and vector indexes spliced in; the supertable layer composes many superfiles into a queryable
+      table with snapshot-isolated reads and an atomic-commit manifest.
+    </p>
+    <p class="subsystems" id="subsystems"></p>
+    <p>
+      Every arm sees the same checkout. The grep arm reads it off disk; the others query an index of it —
+      one with the caller driving retrieval itself, one that can also hand a search to a loop of ours. Questions
+      that make an agent sweep many files are where they diverge; a question answered from a single named file
+      usually comes out level.
+    </p>
+  </div>
+</details>
 
 <form id="ask">
   <select id="corpus" title="which repository the three arms look at"></select>
@@ -242,14 +301,18 @@
 <p class="examples-label" id="examples-label">Or start from one of these and edit it:</p>
 <div class="examples" id="examples"></div>
 
-<div class="legend">
+<div class="controls">
   <span><i class="swatch" style="background:var(--model)"></i>model — the caller thinking</span>
   <span><i class="swatch" style="background:var(--retrieval)"></i>retrieval — finding code (grep / the index)</span>
-  <span><i class="swatch" style="background:var(--subagent)"></i>subagent — handed to another loop</span>
+  <span id="legend-subagent" hidden><i class="swatch" style="background:var(--subagent)"></i>subagent — handed to another loop</span>
+  <label class="third" title="the third arm hands searches to a loop of ours; it runs either way, this only shows it">
+    <input type="checkbox" id="show-third"> show the subagent arm
+  </label>
 </div>
 
+<div class="headline no-third" id="headline" hidden></div>
 <div class="status" id="status">Ready.</div>
-<div class="arms" id="arms"></div>
+<div class="arms no-third" id="arms"></div>
 
 
 <script>
@@ -318,8 +381,14 @@ function loadCorpus(id) {
 }
 corpusEl.onchange = () => loadCorpus(corpusEl.value);
 
-// What the arms are looking at, from the chosen index's own manifest.
+// What the arms are looking at, from the chosen index's own manifest - and
+// the corpus's own name and description, which come from the server so that
+// choosing OpenSearch does not leave infino's paragraph on screen.
 function describeCorpus(c) {
+  document.getElementById("corpus-name").textContent = c.name ?? c.repo ?? "";
+  const blurb = document.getElementById("corpus-blurb");
+  blurb.textContent = c.blurb ?? "";
+  blurb.hidden = !c.blurb;
   const facts = [];
   if (c.files) facts.push(["files", c.files.toLocaleString()]);
   if (c.chunks) facts.push(["indexed chunks", c.chunks.toLocaleString()]);
@@ -343,6 +412,9 @@ loadCorpus();
 function newArm(meta) {
   const el = document.createElement("section");
   el.className = "arm";
+  // Which arm this panel is, so the third-arm switch can hide it by rule
+  // rather than by counting children.
+  el.dataset.arm = meta.id;
   el.innerHTML = `
     <span class="clock" data-clock>0.0s</span>
     <span class="count" data-count>0 calls</span>
@@ -590,6 +662,79 @@ armsEl.addEventListener("click", async (e) => {
   }
 });
 
+/** One ratio as the headline shows it: the figure, the word for it, and
+ * whether it went the right way. `times` is ours-against-grep, so above 1 is
+ * the win; below 1 is printed as it is rather than inverted, because a reader
+ * comparing panels must see the same direction in both places.
+ *
+ * A ratio that cannot be formed (an arm that spent nothing, a counter the
+ * harness did not fill) yields null and the tile is simply absent - a "—" in
+ * the largest type on the page reads as a result, and it is not one. */
+function ratioTile(times, label) {
+  if (times === null || !Number.isFinite(times) || times <= 0) return null;
+  const el = document.createElement("div");
+  el.className = `stat${times < 1 ? " worse" : ""}`;
+  el.innerHTML = `<b>${times.toFixed(1)}×</b><span>${escapeHtml(label)}</span>`;
+  return el;
+}
+
+/** What one of our arms did against grep, as figures: the three ratios a
+ * reader takes away, above the panels that show how each was arrived at.
+ *
+ * They are the same three the status line used to spell out in a sentence
+ * nobody finished reading. Wall clock and tokens are counters; the bill is
+ * what the CUSTOMER pays - their model bill plus our charge - which is the
+ * only honest basis for "cheaper", since grep pays us nothing and comparing
+ * model bills alone credits our arms with a saving the customer never sees. */
+function headlineGroup(base, r) {
+  const group = document.createElement("div");
+  group.className = `hgroup ${r.arm}`;
+  const short = r.label.replace(/^Sonnet \+ /, "");
+  const mine = totalCustomerUsd(r);
+  const theirs = totalCustomerUsd(base);
+  const tiles = [
+    ratioTile(r.wallMs > 0 ? base.wallMs / r.wallMs : null, "faster"),
+    ratioTile(mine !== null && theirs !== null && mine > 0 ? theirs / mine : null, "cheaper"),
+    // Tokens are the cleanest of the three: a counter rather than a
+    // judgement, and the one that grows with the corpus - grep's cost is what
+    // it pulls into context, a ranked query's is capped by k.
+    ratioTile(r.tokens > 0 && base.tokens > 0 ? base.tokens / r.tokens : null, "fewer tokens"),
+  ].filter(Boolean);
+  group.innerHTML = `<h3><b>${escapeHtml(short)}</b> vs grep</h3>`;
+  const stats = document.createElement("div");
+  stats.className = "stats";
+  if (tiles.length) stats.append(...tiles);
+  else stats.innerHTML = `<span class="stat"><span>no comparison available</span></span>`;
+  group.append(stats);
+  return group;
+}
+
+/** The third arm - the one that hands a search to a loop of ours - is off by
+ * default. The comparison a reader came for is grep against the index, and a
+ * third panel beside it was the first thing that made the page dense. The arm
+ * still RUNS either way: the switch reveals what already happened, so turning
+ * it on mid-run shows a panel that has been filling all along.
+ *
+ * Remembered per browser like the theme, because whoever wants the third arm
+ * usually wants it every time. */
+const headlineEl = document.getElementById("headline");
+{
+  const box = document.getElementById("show-third");
+  const legend = document.getElementById("legend-subagent");
+  const paint = () => {
+    const on = box.checked;
+    armsEl.classList.toggle("no-third", !on);
+    headlineEl.classList.toggle("no-third", !on);
+    legend.hidden = !on;
+  };
+  try { box.checked = localStorage.getItem("cx-demo-third") === "on"; } catch { /* default: off */ }
+  box.onchange = () => {
+    try { localStorage.setItem("cx-demo-third", box.checked ? "on" : "off"); } catch { /* per-browser convenience only */ }
+    paint();
+  };
+  paint();
+}
+
 /** The theme toggle: dark by default, light on request, remembered per
  * browser. The button names the palette it would switch TO. */
 {
@@ -615,6 +760,8 @@ form.onsubmit = (e) => {
   const question = input.value.trim();
   if (!question || live) return;
   armsEl.innerHTML = "";
+  headlineEl.innerHTML = "";
+  headlineEl.hidden = true;
   go.disabled = true;
   statusEl.textContent = "Queued…";
 
@@ -726,24 +873,9 @@ form.onsubmit = (e) => {
     const base = d.results.find((r) => r.arm === "grep");
     const ours = d.results.filter((r) => r.arm !== "grep" && !r.error);
     if (base && !base.error && ours.length) {
-      const parts = ours.map((r) => {
-        const speed = r.wallMs > 0 ? `${(base.wallMs / r.wallMs).toFixed(1)}× the speed` : null;
-        // Tokens are the cleanest of the three: a counter rather than a
-        // judgement, and the one that grows with the corpus — grep's cost is
-        // what it pulls into context, a ranked query's is capped by k.
-        const tokens = r.tokens > 0 && base.tokens > 0 ? `${(base.tokens / r.tokens).toFixed(1)}× fewer tokens` : null;
-        // Cheaper on what the CUSTOMER pays: their model bill plus our
-        // charge. Dividing model bills alone ignores the inference markup,
-        // which on the subagent arm is most of what we bill — it made that
-        // arm look cheaper than it is, against grep, which we charge nothing
-        // for at all.
-        const mine = totalCustomerUsd(r);
-        const theirs = totalCustomerUsd(base);
-        const bill = mine !== null && theirs !== null && mine > 0 ? `${(theirs / mine).toFixed(1)}× cheaper` : null;
-        const short = r.label.replace(/^Sonnet \+ /, "");
-        return `${short}: ${[speed, bill, tokens].filter(Boolean).join(", ") || "no comparison available"}`;
-      });
-      statusEl.textContent = `Done. Against grep on this one question — ${parts.join(" · ")}.`;
+      for (const r of ours) headlineEl.append(headlineGroup(base, r));
+      headlineEl.hidden = false;
+      statusEl.textContent = "Done — against grep, on this one question.";
     } else {
       statusEl.textContent = "Done, with an error on at least one arm.";
     }
