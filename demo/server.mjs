@@ -56,7 +56,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { DEFAULT_JUDGE_MODEL } from "../bench/judge-core.mjs";
-import { checkLaneEnv, runLane, systemPrompt } from "../bench/lanes.mjs";
+import { checkLaneEnv, dataSystemPrompt, runLane, systemPrompt } from "../bench/lanes.mjs";
 import { armCost, ledgerMark, ledgerSince, ratesFromEnv } from "./charge.mjs";
 import { fixtureArm, isFixture } from "./fixture.mjs";
 import { judgeArms, judgeEnabled } from "./judge.mjs";
@@ -78,14 +78,20 @@ export const ARMS = [
   { id: "subagents", label: "Sonnet + Infino Subagents", lane: "hosted-full-remote", hosted: true },
 ];
 
+/** The job-postings corpus on disk: the same rows the hosted table holds, as
+ * NDJSON the file-tools arm can grep (see its CLAUDE.md for the layout). */
+const JOBS_DIR = "/home/ubuntu/infino-ai/workspace/bench-repos/jobs-ndjson";
+
 /** The corpora the page can ask about.
  *
  * One is the engine repository the recorded comparison was measured on; the
  * other is an OpenSearch checkout thirty-eight times its file count, which is
  * the regime the recorded numbers do NOT cover — at 450 files a tree walk is
- * nearly free, and grep's cost is a tree walk.
+ * nearly free, and grep's cost is a tree walk. The third is not code at all:
+ * 878,682 job postings, a table whose questions are counts, rankings and "who
+ * is hiring for X" — sweeps over rows rather than files.
  *
- * `table` is the hosted table each one lives in, because both share a
+ * `table` is the hosted table each one lives in, because all share a
  * database: the client's table name is a constant that `CX_TABLE` overrides,
  * and a second database is not this key's to create.
  *
@@ -93,6 +99,12 @@ export const ARMS = [
  * incomplete hosted table still answers — with a fraction of the corpus —
  * which is the one failure a demo must not have, so the page says so and the
  * server refuses the hosted arms rather than quietly under-answering.
+ *
+ * `kind` is "code" unless said otherwise; a "data" corpus gets its own system
+ * prompt (`system`, records rather than a checkout), its own paragraph on the
+ * page (`how`), a row count (`rows`) in place of a file count, and no judge
+ * (`judge: false`): the judge verifies claims against a checkout with the
+ * code-grain rules of bench/judge-core.mjs, which say nothing about a row.
  */
 export const CORPORA = [
   {
@@ -154,11 +166,71 @@ export const CORPORA = [
       "Where is the similarity scoring implemented, and which class computes the score?",
     ],
   },
+  {
+    id: "jobs",
+    label: "job postings — 284,622 postings in 878,682 daily rows, Ashby · Greenhouse · Lever",
+    name: "job postings",
+    kind: "data",
+    blurb:
+      "284,622 job postings from three applicant-tracking systems — Ashby, Greenhouse and Lever — as daily " +
+      "snapshots taken 8–11 September 2026 (the open-apply-jobs dataset): 878,682 rows, a posting appearing " +
+      "once per day it was open. Every column is carried: the title, the whole description as HTML, employer, " +
+      "department, locations, remote flag, posting dates, salary range and currency, and the apply link.",
+    how:
+      "Every arm sees the same 878,682 rows. The File Tools arm reads them off disk — one posting per line " +
+      "as JSON, 250 lines per file, 6.4 GB — with Grep, Glob and Read; the others query an Infino table of " +
+      "the same rows, full-text indexed on the title and the description and with a vector index over the " +
+      "titles. A question that spans many postings — a count, a ranking, who is hiring for what — is where " +
+      "they diverge; a question about one named posting usually comes out level.",
+    repo: JOBS_DIR,
+    index: join(JOBS_DIR, ".infino-hosted"),
+    table: "chunks_jobs",
+    rows: 878_682,
+    // Measured on the loaded table (COUNT(DISTINCT id), 0.77 s): the daily
+    // snapshots repeat an open posting, so a count that means postings has to
+    // dedupe by id. The page says both numbers for that reason.
+    postings: 284_622,
+    // Loaded whole on 2026-09-11 by a hydrate job straight from the ten
+    // parquet shards staged under the database root: every column, full-text
+    // on title and description_html (inferred), the vector column from the
+    // title alone — the full descriptions embed at 4.5 texts/s on the GPU
+    // host, which is 54 hours for this many rows; titles take minutes.
+    ready: true,
+    judge: false,
+    system: dataSystemPrompt(
+      JOBS_DIR,
+      "284,622 job postings from Ashby, Greenhouse and Lever, held as 878,682 rows of daily snapshots " +
+        "(a posting repeats once per day it was open, so count postings by distinct id; columns: title, " +
+        "description, employer, department, locations, salary, dates)",
+    ),
+    // UNMEASURED, like the OpenSearch starters. They are the shapes a
+    // recruiting product asks - who is hiring for what, where, at what pay -
+    // each a sweep over hundreds of thousands of rows, which is the regime the
+    // comparison is about.
+    examples: [
+      "Which employers have the most open machine learning engineer roles, and where are they hiring? Ranked list.",
+      "How many postings are remote, and which departments have the highest share of remote roles?",
+      "What salary ranges do entry-level or new-grad software engineering postings list, and which employers pay the most?",
+      "Which companies are hiring for GPU or CUDA experience, and what do those roles ask for?",
+      "Which postings mention a security clearance, and which departments and locations do they cluster in?",
+    ],
+  },
 ];
 
 /** The corpus a request names, or the first. */
 function corpusFor(id) {
   return CORPORA.find((c) => c.id === id) ?? CORPORA[0];
+}
+
+/** The arms a corpus runs. A corpus whose hosted table is incomplete runs the
+ * grep arm only: the index arms would answer from a fraction of it and look
+ * like a fair comparison, which is worse than not running them. A corpus may
+ * also name its arms (`arms`) and give an arm a different lane (`lanes`). */
+function armsFor(corpus) {
+  const ready = corpus.ready ? ARMS : ARMS.filter((arm) => !arm.hosted);
+  return ready
+    .filter((arm) => !corpus.arms || corpus.arms.includes(arm.id))
+    .map((arm) => (corpus.lanes?.[arm.id] ? { ...arm, lane: corpus.lanes[arm.id] } : arm));
 }
 
 /** Longest question accepted. A question is a prompt to an agent holding Bash
@@ -171,6 +243,15 @@ const HOST = process.env.DEMO_HOST ?? "127.0.0.1";
 const REPO_DIR = resolve(process.env.CX_BENCH_REPO ?? "/home/ubuntu/infino-ai/workspace/bench-repos/infino-ed4e020");
 const INDEX_DIR = resolve(process.env.CX_INDEX_DIR ?? join(REPO_DIR, ".infino-hosted"));
 const MAX_RUNS = Number(process.env.DEMO_MAX_RUNS ?? 25);
+
+// A demo run must never build an index. The client's first `find`/`sql`/`ask`
+// on an index dir without a manifest builds one from the checkout — and with
+// a platform database configured that build DROPS and recreates the hosted
+// table named CX_TABLE (indexer `loadPlatform`). Every corpus here is indexed
+// before the page is up, so auto-index has nothing legitimate to do and one
+// missing manifest would otherwise cost a table. The lanes spread this env
+// into the client they spawn.
+process.env.CX_AUTO_INDEX = "0";
 
 // The bench's own prompt, imported rather than copied: the demo and the runner
 // drive the same lanes, so two copies would be two experiments.
@@ -306,7 +387,9 @@ async function runArm(arm, corpus, question, emit) {
   const row = await runLane({
     lane: arm.lane,
     prompt: question,
-    system: systemPrompt(corpus.repo),
+    // A data corpus carries its own prompt (records, not a checkout); a code
+    // corpus gets the bench's, so its runs stay comparable with the runner's.
+    system: corpus.system ?? systemPrompt(corpus.repo),
     repoDir: corpus.repo,
     indexDir,
     onEvent: (e) => {
@@ -385,10 +468,7 @@ async function handleRun(req, res, url) {
   if (question.length > MAX_QUESTION_CHARS) return plain(res, 413, `question over ${MAX_QUESTION_CHARS} characters`);
   if (runsServed >= MAX_RUNS) return plain(res, 429, `this demo has served its ${MAX_RUNS} runs; restart it to serve more`);
   const corpus = corpusFor(url.searchParams.get("corpus"));
-  // A corpus whose hosted table is incomplete runs the grep arm only. The
-  // index arms would answer from a fraction of it and look like a fair
-  // comparison, which is worse than not running them.
-  const arms = corpus.ready ? ARMS : ARMS.filter((arm) => !arm.hosted);
+  const arms = armsFor(corpus);
 
   res.writeHead(200, {
     "content-type": "text/event-stream",
@@ -408,8 +488,10 @@ async function handleRun(req, res, url) {
 
   // The judge grades the answers once every arm is done: a stronger model,
   // blind to the arms, checking each claim against the repository. Off in
-  // fixture mode (there is no model) and with DEMO_JUDGE=0.
-  const judgeOn = judgeEnabled() && !isFixture();
+  // fixture mode (there is no model), with DEMO_JUDGE=0, and for a corpus
+  // that says so - a data corpus has no checkout for the code-grain rules to
+  // verify against.
+  const judgeOn = judgeEnabled() && !isFixture() && corpus.judge !== false;
   send(res, "queued", {
     arms: arms.map(({ id, label, lane }) => ({ id, label, lane })),
     question,
@@ -507,17 +589,15 @@ const HOSTED = (() => {
   }
 })();
 
-/** Whether the hosted `table` carries a vector column, from its schema - the
- * index the Infino arm's `search` actually uses. "ready" / "none", or null
- * when it cannot be reached, in which case the caller keeps the local
- * manifest's answer. Cached per table so the dropdown does not re-ask the
- * platform on every change; best-effort, because a corpus fact is not worth
- * failing the page over. */
-const hostedVectorCache = new Map();
-async function hostedVectors(table) {
+/** The hosted `table`'s schema - its fields as the platform reports them - or
+ * null when it cannot be reached. Cached per table so the dropdown does not
+ * re-ask the platform on every change; best-effort, because a corpus fact is
+ * not worth failing the page over. */
+const hostedSchemaCache = new Map();
+async function hostedSchema(table) {
   if (!HOSTED || !table) return null;
-  if (hostedVectorCache.has(table)) return hostedVectorCache.get(table);
-  let result = null;
+  if (hostedSchemaCache.has(table)) return hostedSchemaCache.get(table);
+  let fields = null;
   try {
     const r = await fetch(`${HOSTED.base}/v1/schema/${HOSTED.database}`, {
       method: "POST",
@@ -526,14 +606,33 @@ async function hostedVectors(table) {
       signal: AbortSignal.timeout(5000),
     });
     if (r.ok) {
-      const fields = await r.json();
-      result = Array.isArray(fields) && fields.some((f) => f?.type === "embedding") ? "ready" : "none";
+      const parsed = await r.json();
+      if (Array.isArray(parsed)) fields = parsed;
     }
   } catch {
     /* platform slow or down: the local manifest's answer stands */
   }
-  hostedVectorCache.set(table, result);
-  return result;
+  hostedSchemaCache.set(table, fields);
+  return fields;
+}
+
+/** Whether the hosted `table` carries a vector column - the index the Infino
+ * arm's `search` actually uses. "ready" / "none", or null when the schema
+ * cannot be reached, in which case the caller keeps the local manifest's
+ * answer. */
+async function hostedVectors(table) {
+  const fields = await hostedSchema(table);
+  if (!fields) return null;
+  return fields.some((f) => f?.type === "embedding") ? "ready" : "none";
+}
+
+/** The hosted `table`'s column names, the vector column left out - what a
+ * reader of a data corpus needs in order to ask about it. Null when the
+ * schema cannot be reached. */
+async function hostedColumns(table) {
+  const fields = await hostedSchema(table);
+  if (!fields) return null;
+  return fields.filter((f) => f?.type !== "embedding" && typeof f?.name === "string").map((f) => f.name);
 }
 
 async function corpus(chosen) {
@@ -569,6 +668,7 @@ async function corpus(chosen) {
   // embedded at hydrate, has them: OpenSearch showed "vectors none" though
   // its `search` runs over a vector index.
   const hostedVec = chosen.ready ? await hostedVectors(chosen.table) : null;
+  const data = chosen.kind === "data";
   return {
     repo: chosen.repo.split("/").pop(),
     // The page used to carry one hard-coded paragraph about infino and show
@@ -576,8 +676,18 @@ async function corpus(chosen) {
     // told they were asking about the engine.
     name: chosen.name ?? chosen.label,
     blurb: chosen.blurb ?? "",
-    files: manifest.files ?? null,
-    chunks: manifest.chunks ?? null,
+    kind: chosen.kind ?? "code",
+    // The corpus's own account of what each arm reads; absent, the page keeps
+    // its paragraph about a checkout, which is true of every code corpus.
+    how: chosen.how ?? null,
+    // A data corpus is rows, not files: the file count here would be the
+    // number of NDJSON shards the grep arm sweeps, which says nothing a
+    // reader wants to know, and its "chunks" are its rows.
+    files: data ? null : (manifest.files ?? null),
+    chunks: data ? null : (manifest.chunks ?? null),
+    rows: chosen.rows ?? null,
+    postings: chosen.postings ?? null,
+    columns: data && chosen.ready ? await hostedColumns(chosen.table) : null,
     vectors: hostedVec ?? manifest.vectors ?? null,
     analyzer: manifest.analyzer ?? null,
     indexedAt: manifest.indexedAt ?? null,
@@ -645,7 +755,10 @@ const server = createServer(async (req, res) => {
 // Fail before the page loads, not on the first click, if the hosted arm has no
 // database or key - the same discipline `checkLaneEnv` gives the bench. The
 // fixture reaches neither the platform nor a model, so it needs neither.
-if (!isFixture()) for (const arm of ARMS) checkLaneEnv(arm.lane);
+if (!isFixture()) {
+  for (const arm of ARMS) checkLaneEnv(arm.lane);
+  for (const c of CORPORA) for (const lane of Object.values(c.lanes ?? {})) checkLaneEnv(lane);
+}
 
 server.listen(PORT, HOST, () => {
   const rates = ratesFromEnv();

@@ -538,6 +538,21 @@ export class HostedDb {
     );
   }
 
+  /** `POST /v1/bm25_search/{db}`: the keyword leg alone over the HOSTED
+   * index, returned as rows. The search a table without an embedding column
+   * gets: there is no vector to fuse, and asking `hybrid_search` for one is
+   * a 400. Same `Or` as the hybrid search, for the same reason. */
+  async bm25Search(table: string, field: string, query: string, k: number, projection: string[]): Promise<RowRecord[]> {
+    return this.rows(
+      await this.postJson(
+        "bm25_search",
+        { table_name: table, field_name: field, query, k, mode: "Or", projection },
+        true,
+      ),
+      "bm25_search",
+    );
+  }
+
   // --- sub_agent ---
 
   /** `POST /v1/sub_agent/{db}`: the platform's retrieval loop. It answers

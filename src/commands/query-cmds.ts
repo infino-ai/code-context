@@ -315,7 +315,17 @@ export async function usageCmd(opts: UsageCmdOptions): Promise<void> {
     const clock = new Date(e.ts).toLocaleTimeString("en-US", { hour12: false });
     const tool = e.tool.padEnd(6);
     const q = cyan(`"${truncate(e.query, 52)}"`);
-    if (e.tool === "search") {
+    if (e.table !== undefined && (e.tool === "search" || e.tool === "find")) {
+      // Rows of a hosted table (the MCP server's CX_REMOTE_SEARCH against a
+      // table that is not the chunks table): the places are row keys with no
+      // line span, so they print bare, and there are no files to count.
+      const hits = e.hits ?? [];
+      console.log(
+        `${dim(clock)}  ${bold(tool)}  ${q}  ${dim(`-> ${e.matches ?? hits.length} rows of ${e.table} | ~${fmtTokens(e.returnedTokens)} tok${e.ranking ? ` | ${e.ranking}` : ""}`)}`,
+      );
+      const keys = hits.slice(0, 5).map((h) => h.path);
+      if (keys.length) console.log(green(`            ${keys.join("  ")}${hits.length > 5 ? dim(`  (+${hits.length - 5} more)`) : ""}`));
+    } else if (e.tool === "search") {
       const hits = e.hits ?? [];
       const files = new Set(hits.map((h) => h.path)).size;
       console.log(

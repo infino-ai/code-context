@@ -313,6 +313,12 @@ export function autoSyncEnabled(): boolean {
   return !OFF_VALUES.includes((process.env.CX_AUTO_SYNC ?? "").toLowerCase());
 }
 
+/** The table this client builds when nothing overrides the name: the one
+ * table a process owns. A process whose `CX_TABLE` names anything else is a
+ * search-only process over a table something else loaded (see TABLE), and
+ * the MCP server refuses to build or sync against it on its own. */
+export const DEFAULT_TABLE = "chunks";
+
 /** The one table every tool reads. Stable across index stages: the staged
  * (keyword-only) build and the final (hybrid) build use the same name, so
  * SQL written against `chunks` keeps working as vectors arrive.
@@ -327,8 +333,10 @@ export function autoSyncEnabled(): boolean {
  * SQL examples the model is shown as well as the queries the client runs.
  *
  * Unset it and nothing changes. Set it and remember that `cx index` DROPS and
- * recreates whatever it names, so it belongs on a search-only process. */
-export const TABLE = process.env.CX_TABLE?.trim() || "chunks";
+ * recreates whatever it names, so it belongs on a search-only process: the
+ * MCP server never auto-builds or auto-syncs a table the override names, only
+ * an explicit `cx index` does. */
+export const TABLE = process.env.CX_TABLE?.trim() || DEFAULT_TABLE;
 
 /** Manifest file inside the index dir - the product's own record of what the
  * local index holds (the engine ignores foreign files in its catalog root). */

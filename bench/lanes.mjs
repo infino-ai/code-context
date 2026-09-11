@@ -910,13 +910,31 @@ export const sfTookMs = (toolDetails) => tookMsOf(toolDetails, isSfTool);
  * here: few calls, and a sweep handed to the tool built for it, AND the
  * independent ones issued together. A run under this wording is not
  * comparable to the recorded set; the baseline has to be re-run beside it. */
-export const systemPrompt = (repoDir) =>
-  `You answer questions about the repository checked out at ${repoDir}. ` +
-  `Use the available tools to find the answer. Cite file paths (with line ranges when you have them). ` +
+/** The efficiency guidance every lane gets, whatever the corpus is. One
+ * constant so the code prompt and the data prompt below cannot drift apart on
+ * the part the measurement is about. */
+const PROMPT_EFFICIENCY =
   `Be efficient: prefer few, well-chosen tool calls, and hand a sweep across many files to a tool ` +
   `built for it rather than searching by hand. When two or more calls do not depend on each other, ` +
   `issue them in the SAME turn rather than one after another - the wait is then the slowest of them ` +
   `instead of their sum.`;
+
+export const systemPrompt = (repoDir) =>
+  `You answer questions about the repository checked out at ${repoDir}. ` +
+  `Use the available tools to find the answer. Cite file paths (with line ranges when you have them). ` +
+  PROMPT_EFFICIENCY;
+
+/** The same prompt for a corpus that is records rather than code - a table of
+ * job postings, say - which sits at `dir` as data files (one record per line)
+ * and in the hosted table the search tools read. Only the framing and the
+ * citation unit change: a record is cited by its id or a file path with line
+ * numbers, not by a symbol. The efficiency text is the shared constant, so a
+ * data run is measured under the same instructions as a code run. */
+export const dataSystemPrompt = (dir, subject) =>
+  `You answer questions about ${subject}, held at ${dir} as data files and in the table the search tools read. ` +
+  `Use the available tools to find the answer. Cite the records you relied on - an id or a title, ` +
+  `or a file path with line numbers when you have one. ` +
+  PROMPT_EFFICIENCY;
 
 /** Run one agent conversation; returns the measured record.
  *

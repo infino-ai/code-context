@@ -30,6 +30,10 @@ export const PLATFORM_EMBEDDER_PROVIDER = "platform";
  * name, so the manifest can only say where it runs. */
 export const PLATFORM_EMBEDDER_MODEL = "server-side";
 
+/** The FTS-indexed column of the chunks table, local and platform alike -
+ * the one every door queries when the table is the chunks table. */
+export const CONTENT_COLUMN = "content";
+
 /** The vector column of the chunks table, local and platform alike. */
 export const EMBEDDING_COLUMN = "embedding";
 

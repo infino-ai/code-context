@@ -10,13 +10,16 @@
 // fact rows - each that names a place in the code (path, start_line,
 // end_line) as a search-shaped hit with whatever content the query selected,
 // the rest as aggregate rows (counts, rankings) - with the platform's
-// coverage of the result. The loop's transcript is its own business and is
-// never requested. The loop's spend (turns, tokens) travels beside the
-// result to the usage ledger.
+// coverage of the result. Over a hosted table of another shape (the request
+// carries its TableShape) every fact is a row instead, its text columns cut
+// to snippets as a search hit's are. The loop's transcript is its own
+// business and is never requested. The loop's spend (turns, tokens) travels
+// beside the result to the usage ledger.
 
 import type { HostedDb, RowRecord } from "./hosted.js";
 import { DEFAULT_SEARCH_K } from "./config.js";
 import { numberLines } from "./searcher.js";
+import { rowFact, type TableShape } from "./table-shape.js";
 
 /** Place-naming rows kept in one result: as many as a search returns by
  * default, so an ask result costs the outer agent what a search does.
@@ -52,10 +55,11 @@ const COL_SYMBOL = "symbol";
 const COL_LANG = "lang";
 
 /** The columns a search or find fact is asked to carry beside its text and
- * score: the ones that place it in the code, so every fact can be cited, and
- * the definitions the row holds, so a citation can be checked against the
- * definition it names rather than the row's whole span. */
-const FACT_PROJECTION = [COL_PATH, COL_START_LINE, COL_END_LINE, COL_SYMBOL];
+ * score when the request names none: the chunks table's - the ones that
+ * place it in the code, so every fact can be cited, and the definitions the
+ * row holds, so a citation can be checked against the definition it names
+ * rather than the row's whole span. */
+export const FACT_PROJECTION: readonly string[] = [COL_PATH, COL_START_LINE, COL_END_LINE, COL_SYMBOL];
 
 /** Why a loop ended without facts, in the outer agent's terms: each maps a
  * platform `terminate` value to the reason. */
@@ -75,6 +79,30 @@ export interface RetrievalAgentRequest {
    * repository's own instructions (see `devContext`) - and not part of what
    * a result must contain. Sent as the platform's `context` field. */
   context?: string;
+  /** The columns a search or find fact carries beside its text and score,
+   * for a caller who knows which columns place a row in its table. Absent,
+   * the chunks table's (FACT_PROJECTION). Empty, none is sent and the
+   * platform gives each fact its table's key columns, or the engine's row id
+   * when it has none - the form for a table whose key is that id, since the
+   * platform refuses a projection naming no column of any table. */
+  projection?: readonly string[];
+  /** The shape of the table the facts are rows of, when the doors run over
+   * a hosted table of another shape. Every fact is then a row in `rows`,
+   * never a hit - nothing places a row in code - rendered as a search hit
+   * over that table is (`rowFact`): the key, the scalar columns, list cells
+   * as they came, the text columns as snippets, and the statement's own
+   * aliases. A job description runs to thousands of characters of HTML, and
+   * ten of those whole per call cost more than the answer, exactly as they
+   * would in a search. Absent, the chunks table's rule stands unchanged. */
+  shape?: TableShape;
+}
+
+/** The `projection` field of a sub_agent request for `request`: the caller's
+ * columns, the chunks table's when it named none, and no field at all for
+ * an empty list. */
+function factProjection(request: RetrievalAgentRequest): { projection: string[] } | Record<string, never> {
+  const columns = request.projection ?? FACT_PROJECTION;
+  return columns.length > 0 ? { projection: [...columns] } : {};
 }
 
 export interface RetrievalAgentBudget {
@@ -133,7 +161,8 @@ export interface RetrievalAgentResult {
   hits: RetrievalAgentHit[];
   /** The other facts - aggregates such as a count or a rank per path, or rows
    * without the place columns - with their scalar columns as returned; the
-   * first MAX_ROWS. */
+   * first MAX_ROWS. Over a table of another shape (a request with a `shape`),
+   * every fact, as `rowFact` renders it. */
   rows: RowRecord[];
   /** Distinct hits and rows among the facts before the caps. */
   hitsTotal: number;
@@ -187,11 +216,11 @@ export async function runRetrievalAgent(
     question: request.question,
     ...(request.context !== undefined ? { context: request.context } : {}),
     k,
-    projection: FACT_PROJECTION,
+    ...factProjection(request),
     ...(budget.maxTurns !== undefined ? { max_turns: budget.maxTurns } : {}),
     max_wall_secs: budget.maxWallSecs,
   });
-  return retrievalAgentRunFrom(request.question, response, k);
+  return retrievalAgentRunFrom(request.question, response, k, request.shape);
 }
 
 /** Hand the platform's loop one question in `explore` mode: it reads what it
@@ -209,17 +238,23 @@ export async function runExploreAgent(
     ...(request.context !== undefined ? { context: request.context } : {}),
     mode: "explore",
     k,
-    projection: FACT_PROJECTION,
+    ...factProjection(request),
     ...(budget.maxTurns !== undefined ? { max_turns: budget.maxTurns } : {}),
     max_wall_secs: budget.maxWallSecs,
   });
-  return exploreRunFrom(request.question, response, k);
+  return exploreRunFrom(request.question, response, k, request.shape);
 }
 
 /** The explore run for one platform response: the retrieval run of the last
- * query's facts, plus `answer` and `chain`. */
-export function exploreRunFrom(question: string, response: unknown, maxHits: number = MAX_HITS): { result: ExploreResult; spend: RetrievalAgentSpend } {
-  const base = retrievalAgentRunFrom(question, response, maxHits);
+ * query's facts, plus `answer` and `chain`. `shape` as `retrievalAgentRunFrom`
+ * takes it. */
+export function exploreRunFrom(
+  question: string,
+  response: unknown,
+  maxHits: number = MAX_HITS,
+  shape?: TableShape,
+): { result: ExploreResult; spend: RetrievalAgentSpend } {
+  const base = retrievalAgentRunFrom(question, response, maxHits, shape);
   const body = asRecord(response);
   const answer = typeof body.answer === "string" && body.answer.length > 0 ? body.answer : undefined;
   const chain = Array.isArray(body.chain) ? body.chain.filter((s): s is string => typeof s === "string") : [];
@@ -254,8 +289,9 @@ function coverageOf(response: unknown): RetrievalAgentCoverage | undefined {
 /** The run for one platform response. A loop that found no query is still a
  * result, not a tool error: `error` says why, and the outer agent decides
  * what to do next. A body that is not an agent response at all (no
- * `terminate`) is the one thing that throws. */
-export function retrievalAgentRunFrom(question: string, response: unknown, maxHits: number = MAX_HITS): RetrievalAgentRun {
+ * `terminate`) is the one thing that throws. With a `shape` the facts are
+ * rows of that table (see `RetrievalAgentRequest.shape`). */
+export function retrievalAgentRunFrom(question: string, response: unknown, maxHits: number = MAX_HITS, shape?: TableShape): RetrievalAgentRun {
   const body = asRecord(response);
   if (typeof body.terminate !== "string") {
     throw new Error("ask: the platform's response is not an agent result (no `terminate` field)");
@@ -267,7 +303,7 @@ export function retrievalAgentRunFrom(question: string, response: unknown, maxHi
     question,
     ...(statement ? { sql: statement } : {}),
     ...(coverage ? { coverage } : {}),
-    ...factsFrom(factRowsOf(body), maxHits),
+    ...factsFrom(factRowsOf(body), maxHits, shape),
     turns: numberField(body.turns),
   };
   if (terminate !== TERMINATE_ANSWERED) result.error = `${noAnswerMessage(terminate, body.error)} - ${NO_ANSWER_HINT}`;
@@ -302,13 +338,27 @@ function noAnswerMessage(terminate: string, detail: unknown): string {
  * path:start_line; every other row with a scalar column becomes an aggregate
  * row, one per distinct set of scalar cells. Both lists are capped - hits at
  * `maxHits` (the k the call asked for), rows at MAX_ROWS - and the totals
- * count what was seen. */
-export function factsFrom(rows: unknown[], maxHits: number = MAX_HITS): Facts {
+ * count what was seen. With a `shape` every fact is a row of that table
+ * (`rowFact`: text as snippets, list cells kept, the statement's aliases
+ * kept) and `hits` stays empty: a row of a hydrated table names no place in
+ * code even where its columns happen to be called path and start_line. */
+export function factsFrom(rows: unknown[], maxHits: number = MAX_HITS, shape?: TableShape): Facts {
   const hits: RetrievalAgentHit[] = [];
   const aggregates: RowRecord[] = [];
   const seenHits = new Set<string>();
   const seenRows = new Set<string>();
+  const keepRow = (row: RowRecord) => {
+    const key = JSON.stringify(row);
+    if (seenRows.has(key)) return;
+    seenRows.add(key);
+    if (aggregates.length < MAX_ROWS) aggregates.push(row);
+  };
   for (const raw of rows) {
+    if (shape) {
+      const row = rowFact(asRecord(raw), shape);
+      if (Object.keys(row).length > 0) keepRow(row);
+      continue;
+    }
     const hit = hitFromRow(raw);
     if (hit) {
       const key = `${hit.path}:${hit.startLine}`;
@@ -318,11 +368,7 @@ export function factsFrom(rows: unknown[], maxHits: number = MAX_HITS): Facts {
       continue;
     }
     const row = scalarRow(raw);
-    if (row === null) continue;
-    const key = JSON.stringify(row);
-    if (seenRows.has(key)) continue;
-    seenRows.add(key);
-    if (aggregates.length < MAX_ROWS) aggregates.push(row);
+    if (row !== null) keepRow(row);
   }
   return { hits, rows: aggregates, hitsTotal: seenHits.size, rowsTotal: seenRows.size };
 }

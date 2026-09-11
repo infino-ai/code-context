@@ -21,6 +21,7 @@ import {
   TERMINATE_ESCALATED,
   type RetrievalAgentResult,
 } from "../src/core/retrieval-agent.js";
+import { SNIPPET_CHARS, tableShapeFrom } from "../src/core/table-shape.js";
 
 // --- fixtures: the platform's response shape ---------------------------------------------
 
@@ -273,6 +274,74 @@ describe("factsFrom", () => {
   });
 });
 
+// --- facts over a table of another shape ---------------------------------------------------
+
+describe("facts over a table of another shape", () => {
+  /** A hydrated table: a key, a scalar, a long HTML text, a list, and the
+   * platform's embedding. */
+  const JOBS = tableShapeFrom("jobs", [
+    { name: "id", type: "utf8" },
+    { name: "department", type: "utf8" },
+    { name: "description_html", type: "large_utf8" },
+    { name: "locations", type: "list", item: "utf8" },
+    { name: "emb", type: "embedding", source: ["description_html"] },
+  ]);
+
+  /** A whole job description as stored: entity-escaped HTML, thousands of
+   * characters of it. */
+  const LONG_HTML = `&lt;ul&gt;${"&lt;li&gt;Own the platform&lt;/li&gt;".repeat(220)}&lt;/ul&gt;`;
+  const FACT = { id: "j1", department: "Eng", description_html: LONG_HTML, locations: ["Paris, France", "Remote"], emb: [0.1, 0.2], score: 0.5 };
+
+  it("renders every fact as a row of the table: the text a snippet, the list kept, the vector out, and no hits", () => {
+    expect(LONG_HTML.length).toBeGreaterThanOrEqual(8_000);
+    const facts = factsFrom([FACT], MAX_HITS, JOBS);
+    expect(facts.hits).toEqual([]);
+    expect(facts.hitsTotal).toBe(0);
+    expect(facts.rowsTotal).toBe(1);
+    const [row] = facts.rows;
+    expect(Object.keys(row)).toEqual(["score", "id", "department", "locations", "description_html"]);
+    expect(row).toMatchObject({ score: 0.5, id: "j1", department: "Eng", locations: ["Paris, France", "Remote"] });
+    const text = String(row.description_html);
+    expect(text.length).toBe(SNIPPET_CHARS + "...".length);
+    expect(text.startsWith("Own the platform Own the platform")).toBe(true);
+    expect(text).not.toContain("&lt;");
+  });
+
+  it("keeps the statement's own aliases - an aggregate's count is the fact", () => {
+    const facts = factsFrom([{ department: "Eng", n: 42 }, { department: "Ops", n: 7 }], MAX_HITS, JOBS);
+    expect(facts.rows).toEqual([{ department: "Eng", n: 42 }, { department: "Ops", n: 7 }]);
+  });
+
+  it("makes no hit of a row that happens to carry path and start_line: a row of such a table names no place in code", () => {
+    const shape = tableShapeFrom("t", [
+      { name: "path", type: "utf8" },
+      { name: "start_line", type: "i32" },
+      { name: "end_line", type: "i32" },
+    ]);
+    const facts = factsFrom([{ path: "a.ts", start_line: 1, end_line: 2 }], MAX_HITS, shape);
+    expect(facts.hits).toEqual([]);
+    expect(facts.rows).toEqual([{ path: "a.ts", start_line: 1, end_line: 2 }]);
+  });
+
+  it("without a shape the chunks rule stands as it was: whole strings kept, list cells dropped", () => {
+    const facts = factsFrom([FACT]);
+    expect(facts.rows).toEqual([{ id: "j1", department: "Eng", description_html: LONG_HTML, score: 0.5 }]);
+  });
+
+  it("hands the shape through runRetrievalAgent and runExploreAgent to the result", async () => {
+    const hosted = { subAgent: async () => answered({ facts: [{ table: "jobs", row: FACT }], answer: "Eng owns it", chain: ["SELECT ..."] }) };
+    const asked = await runRetrievalAgent(hosted, { question: "q", projection: ["id"], shape: JOBS }, { maxWallSecs: 90 });
+    const explored = await runExploreAgent(hosted, { question: "q", projection: ["id"], shape: JOBS }, { maxWallSecs: 300 });
+    for (const { result } of [asked, explored]) {
+      expect(result.hits).toEqual([]);
+      expect(result.rows).toHaveLength(1);
+      expect(String(result.rows[0].description_html).length).toBe(SNIPPET_CHARS + "...".length);
+      expect(result.rows[0].locations).toEqual(["Paris, France", "Remote"]);
+    }
+    expect(explored.result.answer).toBe("Eng owns it");
+  });
+});
+
 // --- explore mode -----------------------------------------------------------------------------
 
 describe("explore mode", () => {
@@ -389,6 +458,26 @@ describe("runRetrievalAgent", () => {
     const unranked = retrievalAgentRunFrom(QUESTION, answered()).result;
     expect(unranked.coverage).toEqual({ rowsTotal: 2, rowsReturned: 2, truncated: false });
     expect(JSON.stringify(ranked)).not.toContain("some-ranker");
+  });
+
+  it("sends the caller's projection in place of the chunks table's, and no projection at all for an empty one", async () => {
+    // A table of another shape has no path or start_line: the platform
+    // refuses a projection naming no column of any table, so the caller
+    // names the column that keys its rows - or nothing, when the engine's
+    // row id is all the table has, and the platform then supplies that.
+    const sent: Array<Record<string, unknown>> = [];
+    const hosted = {
+      subAgent: async (req: unknown) => {
+        sent.push(req as Record<string, unknown>);
+        return answered();
+      },
+    };
+    await runRetrievalAgent(hosted, { question: "q", projection: ["id"] }, { maxWallSecs: 90 });
+    await runExploreAgent(hosted, { question: "q", projection: ["id"] }, { maxWallSecs: 300 });
+    await runRetrievalAgent(hosted, { question: "q", projection: [] }, { maxWallSecs: 90 });
+    expect(sent[0].projection).toEqual(["id"]);
+    expect(sent[1].projection).toEqual(["id"]);
+    expect("projection" in sent[2]).toBe(false);
   });
 
   it("sends no max_turns when the budget leaves it to the platform", async () => {

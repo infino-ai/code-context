@@ -16,7 +16,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { foldToolMessage, newToolAccounting } from "../bench/lanes.mjs";
+import { dataSystemPrompt, foldToolMessage, newToolAccounting, systemPrompt } from "../bench/lanes.mjs";
 import { ledgerMark, ledgerSince, meteredFrom, ourCharge } from "./charge.mjs";
 import { livePhase, phaseOf, phaseShares, phaseSplit, spansOf, unionMs } from "./phases.mjs";
 
@@ -197,6 +197,27 @@ test("foldToolMessage returns the calls this message started and ended, in strea
 
   // a result for an id nobody opened is ignored rather than invented
   assert.deepEqual(foldToolMessage(acc, result("nope"), 800).ended, []);
+});
+
+// --- the prompts ------------------------------------------------------------
+
+test("the code prompt is byte-for-byte the recorded wording, and the data prompt shares its efficiency text", () => {
+  // The text every figure since 2026-09-11 was measured under. A change here
+  // makes the demo stop showing what the bench measured, so it is pinned.
+  assert.equal(
+    systemPrompt("/repo"),
+    "You answer questions about the repository checked out at /repo. " +
+      "Use the available tools to find the answer. Cite file paths (with line ranges when you have them). " +
+      "Be efficient: prefer few, well-chosen tool calls, and hand a sweep across many files to a tool " +
+      "built for it rather than searching by hand. When two or more calls do not depend on each other, " +
+      "issue them in the SAME turn rather than one after another - the wait is then the slowest of them " +
+      "instead of their sum.",
+  );
+  const data = dataSystemPrompt("/rows", "878,682 job postings");
+  const efficiency = systemPrompt("/repo").slice(systemPrompt("/repo").indexOf("Be efficient:"));
+  assert.ok(data.endsWith(efficiency), "a data run is measured under the same efficiency instructions");
+  assert.ok(data.includes("878,682 job postings") && data.includes("/rows"));
+  assert.ok(!data.includes("repository checked out"), "records, not a checkout");
 });
 
 // --- the charge -------------------------------------------------------------

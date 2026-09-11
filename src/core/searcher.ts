@@ -17,16 +17,19 @@
 //
 // Every door runs against the LOCAL index (the in-process engine on the
 // handle). The platform table the `ask` and `explore` tools read is the
-// same index in another place; these doors never reach for it. What a
-// platform call cost goes to the usage ledger (hostedTelemetry), not into a
-// result.
+// same index in another place; these doors reach for it only when the MCP
+// server is told to (CX_REMOTE_SEARCH): `searchHosted` for the chunks
+// table, and the row doors at the end of this file for a hosted table of
+// another shape. What a platform call cost goes to the usage ledger
+// (hostedTelemetry), not into a result.
 
-import { localDb, EMBEDDING_COLUMN, type IndexHandle } from "./context.js";
+import { localDb, CONTENT_COLUMN, EMBEDDING_COLUMN, type IndexHandle } from "./context.js";
 import { TABLE, DEFAULT_SEARCH_K, DEFAULT_FIND_LIMIT, MAX_FIND_LIMIT } from "./config.js";
 import type { Embedder } from "./embedder.js";
 import type { Manifest } from "./manifest.js";
-import type { HostedDb } from "./hosted.js";
-import { analyzerOf, analyzerTokens, hasIndexableToken } from "./analyzer.js";
+import type { HostedDb, RowRecord } from "./hosted.js";
+import { analyzerOf, analyzerTokens, hasIndexableToken, PLATFORM_DEFAULT_ANALYZER, type Analyzer } from "./analyzer.js";
+import { rowHit, sqlIdentifier, sqlLiteral, type TableShape } from "./table-shape.js";
 
 // The analyzer mirror is re-exported from the door that uses it: `find`
 // decides what the index can look up with `analyzerOf(handle.manifest)`, and
@@ -34,8 +37,9 @@ import { analyzerOf, analyzerTokens, hasIndexableToken } from "./analyzer.js";
 // table has depends on where the table lives (see analyzer.ts).
 export { analyzerOf, analyzerTokens };
 
-/** The FTS-indexed column every door queries. */
-export const CONTENT_COLUMN = "content";
+// The chunks table's text column lives with its vector column (context.ts);
+// it is re-exported here because every door reaches for it as the searcher's.
+export { CONTENT_COLUMN };
 
 /** Refuse to embed a query with a model other than the one the index was
  * built with: a same-dimension swap would return silently wrong vector
@@ -436,28 +440,36 @@ export function excerpt(text: string, at: number, needleLength: number): string 
   return `${start > 0 ? "..." : ""}${text.slice(start, end)}${end < text.length ? "..." : ""}`;
 }
 
-/** Async so a rejected validation surfaces as a rejection like every other
- * door's; the engine call underneath is synchronous. */
-export async function find(handle: IndexHandle, query: string, opts: FindOptions = {}): Promise<FindResult> {
+/** What every find - over chunks or over rows - refuses before it asks the
+ * index: an empty query, a query spanning lines, one the index's analyzer
+ * keeps no token from (it would match nothing and read as "no occurrences"
+ * rather than "cannot look this up"), and a malformed limit (rejected rather
+ * than clamped: NaN would slice to nothing and report nothing, which reads as
+ * "no matches"). Returns the limit to apply. `column` names the searched
+ * column in the message's sql suggestion. */
+function checkFindQuery(query: string, analyzer: Analyzer, column: string, limit: number | undefined): number {
   if (query.length === 0) throw new Error("find needs a non-empty string to look for");
   if (/[\r\n]/.test(query)) {
     throw new Error("find matches within a single line - the query must not contain a newline");
   }
-  const analyzer = analyzerOf(handle.manifest);
   if (!hasIndexableToken(query, analyzer)) {
     throw new Error(
       `find needs at least one word or number the index can look up, and its ${analyzer} analyzer keeps ` +
         "none from this query (only punctuation, or text it does not index) - try search, or sql with " +
-        "regexp_like(content, ...)",
+        `regexp_like(${column}, ...)`,
     );
   }
-  // Reject rather than clamp a malformed limit: NaN would slice to nothing and
-  // report nothing, which reads as "no matches".
-  if (opts.limit !== undefined && (!Number.isInteger(opts.limit) || opts.limit < 1)) {
-    throw new Error(`limit must be a positive integer, got ${opts.limit}`);
+  if (limit !== undefined && (!Number.isInteger(limit) || limit < 1)) {
+    throw new Error(`limit must be a positive integer, got ${limit}`);
   }
+  return Math.min(limit ?? DEFAULT_FIND_LIMIT, MAX_FIND_LIMIT);
+}
+
+/** Async so a rejected validation surfaces as a rejection like every other
+ * door's; the engine call underneath is synchronous. */
+export async function find(handle: IndexHandle, query: string, opts: FindOptions = {}): Promise<FindResult> {
+  const limit = checkFindQuery(query, analyzerOf(handle.manifest), CONTENT_COLUMN, opts.limit);
   const ignoreCase = opts.ignoreCase ?? false;
-  const limit = Math.min(opts.limit ?? DEFAULT_FIND_LIMIT, MAX_FIND_LIMIT);
   const partial = partialIndex(handle.manifest);
 
   const terms = plainTerms(query);
@@ -593,4 +605,164 @@ export async function runSql(
   if (embedder && placeholderNames(guarded).length > 0) checkQueryEmbedder(handle.manifest, embedder);
   const statement = await applyEmbeds(guarded, embeds, embedder);
   return localDb(handle).querySql(statement) as Array<Record<string, unknown>>;
+}
+
+// --- rows: the doors over a hosted table of another shape --------------------
+//
+// With CX_REMOTE_SEARCH the hosted table is the index, and it need not be the
+// chunks table this client builds: CX_TABLE can name a table hydrated from a
+// data set - job postings, tickets - whose columns the doors' constants do not
+// describe. These are the same three doors over such a table, driven by its
+// TableShape (table-shape.ts): `search` fuses the table's own text and
+// embedding columns on the platform, `find` is the token intersection over
+// its text column through the engine's `token_match` relation, and `sql` runs
+// on the platform, where the `{{q:"..."}}` placeholder is embedded with the
+// table's own model. Hits are rows, not chunks: a score, the key, the scalar
+// columns, and the text columns as snippets. Nothing here touches the local
+// engine or the local index, which is the point - a local build would drop
+// and recreate the platform table it was pointed at.
+
+/** One row as a hit: `score`, the key, the scalars, the text as snippets
+ * (see `rowHit`). */
+export type RowHit = RowRecord;
+
+export interface RowSearchResult {
+  query: string;
+  /** "hybrid" when the table has an embedding column; "keyword" when the
+   * platform ranked by BM25 alone because there is none to fuse. */
+  ranking: "hybrid" | "keyword";
+  table: string;
+  /** The column that names a row in `hits`. */
+  key: string;
+  hits: RowHit[];
+}
+
+/** `search` over the rows of a hosted table: the platform fuses BM25 over
+ * the table's text column with the vector leg over its embedding column,
+ * embedding the query with the column's own model, or ranks by BM25 alone
+ * when the table has no embedding column. The projection is the table's
+ * (every column but the vectors), so a hit carries the row. */
+export async function searchRows(
+  hosted: Pick<HostedDb, "hybridSearch" | "bm25Search">,
+  shape: TableShape,
+  query: string,
+  k = DEFAULT_SEARCH_K,
+): Promise<RowSearchResult> {
+  if (shape.primaryText === "") throw new Error(`${shape.table} has no text column to search`);
+  const rows = shape.vectorColumn
+    ? await hosted.hybridSearch(shape.table, shape.primaryText, shape.vectorColumn, query, k, shape.projection)
+    : await hosted.bm25Search(shape.table, shape.primaryText, query, k, shape.projection);
+  return {
+    query,
+    ranking: shape.vectorColumn ? "hybrid" : "keyword",
+    table: shape.table,
+    key: shape.keyColumn,
+    hits: rows.map((row) => rowHit(row, shape)),
+  };
+}
+
+export interface RowFindResult {
+  query: string;
+  table: string;
+  /** The text column every token of the query was matched in. */
+  column: string;
+  /** The column that names a row in `matches`. */
+  key: string;
+  /** Rows holding every token, as hits, cut at the limit. */
+  matches: RowHit[];
+  /** Rows holding every token across the table, before the limit. */
+  total: number;
+  /** Set when `total` exceeded the limit and `matches` was cut. */
+  truncated?: boolean;
+}
+
+/** The alias the table-wide count travels under beside each row: a name no
+ * schema carries, so stripping it from a match can never take a column of
+ * the table's own with it (a table may well have a `total`). */
+const FIND_TOTAL_COLUMN = "__cx_total";
+
+/** The statement a row find runs: every column of the row (the shape's
+ * rowColumns) for the rows whose text column holds every token of `terms`
+ * (`token_match` in `and` mode - the engine's inverted-list intersection,
+ * unranked and complete), cut at `limit`, with the count of all such rows
+ * beside each one. `COUNT(*) OVER ()` runs over the whole relation before
+ * the cut, so the total and the rows come from one snapshot and cost one
+ * metered call rather than a second statement. No search `score`: a token
+ * match has no rank. `terms` travels as a SQL string literal, quotes
+ * doubled. */
+export function findRowsSql(shape: TableShape, terms: string, limit: number): string {
+  const projection = shape.rowColumns.map(sqlIdentifier).join(", ");
+  return (
+    `SELECT COUNT(*) OVER () AS ${FIND_TOTAL_COLUMN}, ${projection} ` +
+    `FROM token_match(${sqlLiteral(shape.table)}, ${sqlLiteral(shape.primaryText)}, ${sqlLiteral(terms)}, 'and') ` +
+    `LIMIT ${limit}`
+  );
+}
+
+/** `find` over the rows of a hosted table: the rows whose text column holds
+ * every token of `query`, matched by the index's own analyzer. Token
+ * semantics, not grep's: a code chunk can be checked line by line for the
+ * literal afterwards, but a row is one long text with no line to cite, so
+ * the index's answer is the answer. The analyzer named in a refusal is the
+ * platform's default for a bare column; both analyzers agree on whether a
+ * query holds a token at all. */
+export async function findRows(
+  hosted: Pick<HostedDb, "querySql">,
+  shape: TableShape,
+  query: string,
+  opts: { limit?: number } = {},
+): Promise<RowFindResult> {
+  if (shape.primaryText === "") throw new Error(`${shape.table} has no text column to match in`);
+  const limit = checkFindQuery(query, PLATFORM_DEFAULT_ANALYZER, shape.primaryText, opts.limit);
+  const rows = await hosted.querySql(findRowsSql(shape, plainTerms(query), limit));
+  const total = rows.length > 0 ? Number(rows[0][FIND_TOTAL_COLUMN]) : 0;
+  const matches = rows.map(({ [FIND_TOTAL_COLUMN]: _total, ...row }) => rowHit(row, shape));
+  return {
+    query,
+    table: shape.table,
+    column: shape.primaryText,
+    key: shape.keyColumn,
+    matches,
+    total,
+    ...(total > matches.length ? { truncated: true } : {}),
+  };
+}
+
+/** The platform's own placeholder - `{{q:"text"}}`, the text embedded with
+ * the table's model before the statement runs - is the only name it reads;
+ * a `{{name}}` from the embed map is folded into it by text alone. */
+const HOSTED_PLACEHOLDER_OPEN = '{{q:"';
+const HOSTED_PLACEHOLDER_CLOSE = '"}}';
+
+/** `sql` with every `{{name}}` placeholder the caller supplied embed text
+ * for rewritten to the platform's inline `{{q:"text"}}`, which the platform
+ * embeds server-side - there is no local embedder in this path, and none is
+ * wanted: the table's column was embedded by the platform's model, and a
+ * query vector from any other would rank against a space it does not belong
+ * to. A placeholder already in the inline form has no `{{name}}` to match
+ * and passes through untouched; a `{{name}}` with no text is the same error
+ * as locally. The platform reads the text up to the first `"}}`, so a text
+ * containing that sequence cannot be sent. */
+export function foldEmbeds(sql: string, embeds: Record<string, string> | undefined): string {
+  const referenced = placeholderNames(sql);
+  if (referenced.length === 0) return sql;
+  if (!embeds) throw noEmbedMap(referenced);
+  return sql.replace(PLACEHOLDER, (full, name: string) => {
+    const text = embedTextFor(name, embeds);
+    if (text.includes(HOSTED_PLACEHOLDER_CLOSE)) {
+      throw new Error(`the embed text for {{${name}}} contains ${HOSTED_PLACEHOLDER_CLOSE}, which ends the platform's placeholder`);
+    }
+    return `${HOSTED_PLACEHOLDER_OPEN}${text}${HOSTED_PLACEHOLDER_CLOSE}`;
+  });
+}
+
+/** `sql` over the rows of a hosted table: the same read-only guard, then the
+ * statement runs on the platform with its placeholders folded into the form
+ * the platform embeds. */
+export async function runSqlRows(
+  hosted: Pick<HostedDb, "querySql">,
+  sql: string,
+  embeds?: Record<string, string>,
+): Promise<RowRecord[]> {
+  return hosted.querySql(foldEmbeds(guardSql(sql), embeds));
 }

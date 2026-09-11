@@ -9,7 +9,7 @@
 
 import { appendFileSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { jsonify, hostedTelemetry, type FindResult, type SearchResult } from "./searcher.js";
+import { jsonify, hostedTelemetry, type FindResult, type RowFindResult, type RowHit, type RowSearchResult, type SearchResult } from "./searcher.js";
 import type { ExploreResult, RetrievalAgentResult, RetrievalAgentSpend } from "./retrieval-agent.js";
 import type { HostedDb } from "./hosted.js";
 
@@ -53,6 +53,12 @@ export interface UsageEntry {
   hits?: Array<{ path: string; startLine: number; endLine: number }>;
   /** find only: matching lines across the repo, before the limit. */
   matches?: number;
+  /** search and find over the rows of a hosted table of another shape (the
+   * MCP server's CX_REMOTE_SEARCH against a table that is not the chunks
+   * table): the table, so a reader of the ledger knows `hits` are its rows -
+   * each row's key where a chunk's path goes, and no line span - and not
+   * places in a repository. */
+  table?: string;
   /** sql only. */
   rows?: number;
   /** sql only: a truncated preview of the returned rows (the answer itself). */
@@ -137,6 +143,46 @@ export function findEntry(result: FindResult, counted = false): UsageEntry {
   };
 }
 
+/** The line span recorded for a row: a row has no lines, and 0 is never a
+ * line number, so it reads as "none" rather than as line zero. */
+const NO_LINE = 0;
+
+/** A row hit as the ledger records a place: its key stands where a chunk's
+ * path does, since it is what a reader would look the row up by. */
+const rowPlace = (hit: RowHit, key: string) => ({ path: String(hit[key] ?? ""), startLine: NO_LINE, endLine: NO_LINE });
+
+/** A search over a hosted table's rows: what it cost is the hits serialized,
+ * since a row hit has no single content cell, and what it points at is each
+ * row's key. No whole-file counterfactual - the rows came from no file. The
+ * platform's metered tokens ride on the entry through `withPlatform`, as
+ * they do for a hosted chunks search. */
+export function rowSearchEntry(result: RowSearchResult): UsageEntry {
+  return {
+    ts: new Date().toISOString(),
+    tool: "search",
+    query: result.query,
+    returnedTokens: estTokens(jsonify(result.hits)),
+    ranking: result.ranking,
+    hits: result.hits.map((h) => rowPlace(h, result.key)),
+    table: result.table,
+  };
+}
+
+/** A find over a hosted table's rows: the matches serialized, each row's key
+ * as its place, and the table-wide total as `matches` - the count is what
+ * was counted, as it is for lines. */
+export function rowFindEntry(result: RowFindResult): UsageEntry {
+  return {
+    ts: new Date().toISOString(),
+    tool: "find",
+    query: result.query,
+    returnedTokens: estTokens(jsonify(result.matches)),
+    hits: result.matches.map((h) => rowPlace(h, result.key)),
+    matches: result.total,
+    table: result.table,
+  };
+}
+
 const ROWS_PREVIEW_CAP = 2000;
 
 export function sqlEntry(query: string, rows: Array<Record<string, unknown>>): UsageEntry {
@@ -218,7 +264,11 @@ const plural = (n: number, one: string, many: string): string => `${n} ${n === 1
  * Mutates and appends the running total when a session is supplied. */
 export function formatReceipt(entry: UsageEntry, session?: SessionUsage): string {
   const parts: string[] = [];
-  if (entry.tool === "search") {
+  if (entry.table !== undefined && (entry.tool === "search" || entry.tool === "find")) {
+    // Rows of a hosted table: there are no files to count, and a find's
+    // count is the table-wide total, as it is the repo-wide one for lines.
+    parts.push(`returned ~${fmtTokens(entry.returnedTokens)} tokens | ${plural(entry.matches ?? entry.hits?.length ?? 0, "row", "rows")}`);
+  } else if (entry.tool === "search") {
     const hits = entry.hits ?? [];
     const files = new Set(hits.map((h) => h.path)).size;
     // Just what was returned - no "vs whole file" counterfactual here: it's an

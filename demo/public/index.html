@@ -283,7 +283,10 @@
       table with snapshot-isolated reads and an atomic-commit manifest.
     </p>
     <p class="subsystems" id="subsystems"></p>
-    <p>
+    <!-- What each arm reads. This text is true of every code corpus; a corpus
+         that is records rather than a checkout sends its own (`how`), and
+         describeCorpus swaps it in. -->
+    <p id="how">
       Every arm sees the same checkout. The File Tools arm reads it off disk with Grep, Glob and Read — what a
       developer has today; the others query an Infino index of it — one with the caller driving retrieval
       itself, one that can also hand a search to a loop of ours. Questions that make an agent sweep many files
@@ -293,7 +296,7 @@
 </details>
 
 <form id="ask">
-  <select id="corpus" title="which repository the three arms look at"></select>
+  <select id="corpus" title="which corpus the three arms look at"></select>
   <input type="text" id="q" placeholder="e.g. how does the manifest commit stay atomic under a concurrent writer?" autocomplete="off">
   <button type="submit" id="go">Run</button>
 </form>
@@ -393,24 +396,39 @@ corpusEl.onchange = () => loadCorpus(corpusEl.value);
 // What the arms are looking at, from the chosen index's own manifest - and
 // the corpus's own name and description, which come from the server so that
 // choosing OpenSearch does not leave infino's paragraph on screen.
+/** The paragraph about a checkout, kept so a reader who switches from a data
+ * corpus back to a code one gets it back. */
+const HOW_CODE = document.getElementById("how").textContent;
+
 function describeCorpus(c) {
   document.getElementById("corpus-name").textContent = c.name ?? c.repo ?? "";
   const blurb = document.getElementById("corpus-blurb");
   blurb.textContent = c.blurb ?? "";
   blurb.hidden = !c.blurb;
+  document.getElementById("how").textContent = c.how ?? HOW_CODE;
   const facts = [];
   if (c.files) facts.push(["files", c.files.toLocaleString()]);
   if (c.chunks) facts.push(["indexed chunks", c.chunks.toLocaleString()]);
+  // A data corpus counts records, not files - and both numbers when the rows
+  // are snapshots of fewer distinct records.
+  if (c.postings) facts.push(["postings", c.postings.toLocaleString()]);
+  if (c.rows) facts.push(["rows", c.rows.toLocaleString()]);
   if (c.vectors) facts.push(["vectors", c.vectors]);
   if (c.hosted) facts.push(["index", "hosted"]);
   if (c.head) facts.push(["at", c.head.split(" ").slice(0, 2).join(" ")]);
   document.getElementById("facts").innerHTML = facts
     .map(([k, v]) => `<span>${k} <b>${escapeHtml(v)}</b></span>`)
     .join("");
-  document.getElementById("subsystems").innerHTML =
-    c.subsystems && c.subsystems.length
-      ? "subsystems: " + c.subsystems.map((s) => `<code>${escapeHtml(s)}</code>`).join(" · ")
-      : "";
+  // The line under the blurb names what a question can be about: a code
+  // corpus its subsystems, a data corpus its columns.
+  const parts = c.subsystems && c.subsystems.length
+    ? ["subsystems", c.subsystems]
+    : c.columns && c.columns.length
+      ? ["columns", c.columns]
+      : null;
+  document.getElementById("subsystems").innerHTML = parts
+    ? `${parts[0]}: ` + parts[1].map((s) => `<code>${escapeHtml(s)}</code>`).join(" · ")
+    : "";
 }
 
 loadCorpus();
@@ -731,8 +749,11 @@ function headlineGroup(base, r) {
  * still RUNS either way: the switch reveals what already happened, so turning
  * it on mid-run shows a panel that has been filling all along.
  *
- * Remembered per browser like the theme, because whoever wants the third arm
- * usually wants it every time. */
+ * Deliberately NOT remembered per browser, unlike the theme: this was stored
+ * once and a browser that had ever turned it on then opened every later run
+ * with three panels, which is exactly what the default exists to avoid. The
+ * page now opens on the two-column comparison every time and the switch lasts
+ * only as long as the tab. */
 const headlineEl = document.getElementById("headline");
 {
   const box = document.getElementById("show-third");
@@ -741,11 +762,8 @@ const headlineEl = document.getElementById("headline");
     armsEl.classList.toggle("no-third", !on);
     headlineEl.classList.toggle("no-third", !on);
   };
-  try { box.checked = localStorage.getItem("cx-demo-third") === "on"; } catch { /* default: off */ }
-  box.onchange = () => {
-    try { localStorage.setItem("cx-demo-third", box.checked ? "on" : "off"); } catch { /* per-browser convenience only */ }
-    paint();
-  };
+  box.checked = false;
+  box.onchange = paint;
   paint();
 }
 
@@ -810,6 +828,12 @@ form.onsubmit = (e) => {
       const arm = newArm(meta);
       arm.startedAt = performance.now();
       arms.set(meta.id, arm);
+    }
+    // A run without the index arm has the subagents arm as its only
+    // comparison, so the third-arm switch must not hide it.
+    if (!d.arms.some((a) => a.id === "index")) {
+      armsEl.classList.remove("no-third");
+      headlineEl.classList.remove("no-third");
     }
     statusEl.textContent = "Waiting for a slot…";
   });

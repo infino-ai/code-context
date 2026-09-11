@@ -30,16 +30,32 @@
 // not by taste.
 // Results carry took_ms - server-side time for the call (query embedding
 // included where one happens; no transport).
+//
+// With CX_REMOTE_SEARCH the hosted table is the index `search` reads, and
+// when CX_TABLE names a table that is not the chunks table (a hydrated data
+// set) all three doors run over its ROWS, driven by the table's own schema
+// (TableShape): find and sql then never touch the local index either, since
+// a local build would drop and recreate the platform table it was pointed
+// at. Which of the two it is - chunks or rows - is decided ONCE, at startup,
+// from the table's schema (TableMode below) when CX_TABLE names another
+// table, and every call reads that decision: no call asks the platform what
+// it is about to run against, so a local tool never waits on the platform
+// and the tool text registered at startup always describes what the calls
+// do. The default table is never asked about - it is the chunks table this
+// client builds - so its startup is what it always was, and the chunks
+// table keeps every path and every word of tool text it had.
 
 import { existsSync } from "node:fs";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { z } from "zod";
 import { connect } from "@infino-ai/infino";
 import {
   indexDir,
   resolveRoot,
   TABLE,
+  DEFAULT_TABLE,
   DEFAULT_CAPS,
   DEFAULT_SEARCH_K,
   DEFAULT_FIND_LIMIT,
@@ -106,12 +122,15 @@ export function refusalHint(err: unknown): string {
 }
 import { hostedDbFor, localDb, newHostedMemo, platformLabel, platformTableReady, type IndexHandle } from "../core/context.js";
 import { devContext, devContextEnabled } from "../core/dev-context.js";
-import { HostedError } from "../core/hosted.js";
+import { HostedError, type HostedOptions, type RowRecord } from "../core/hosted.js";
 import {
   find,
+  findRows,
   search,
   searchHosted,
+  searchRows,
   runSql,
+  runSqlRows,
   jsonify,
   numberRowLines,
   partialIndex,
@@ -122,7 +141,9 @@ import {
   receiptEnabled,
   cardEntry,
   findEntry,
+  rowFindEntry,
   searchEntry,
+  rowSearchEntry,
   sqlEntry,
   exploreEntry,
   subagentEntry,
@@ -130,6 +151,7 @@ import {
   formatReceipt,
   recordUsage,
 } from "../core/usage.js";
+import { ENGINE_ID_COLUMN, resolveTableShape, SNIPPET_CHARS, type TableShape } from "../core/table-shape.js";
 import {
   indexRepoStaged,
   syncRepo,
@@ -274,7 +296,275 @@ export const SQL_DESCRIPTION =
   "unnumbered when it does not, since nothing then places the text. " +
   "The result includes a 'usage' field, a one-line receipt of tokens returned and rows.";
 
-export async function serveMcp(rootPath?: string): Promise<void> {
+// --- the tool text for a hosted table of another shape ---------------------------
+//
+// With CX_REMOTE_SEARCH the hosted table is the index, and when CX_TABLE
+// names a table that is not the chunks table (a hydrated data set - job
+// postings, tickets) the doors run over its rows, driven by its TableShape.
+// The text below describes them for that table: the same doors said for
+// rows, with the table's own column names where the chunks text has its
+// constants. None of it has been through the bench. What it keeps are the
+// chunks descriptions' measured clauses, transposed: hybrid named before
+// bm25, the placeholder marked as the caller's to fill, a total over a
+// search relation reported as ranked and never as the table's count, the
+// scan discouraged by every predicate that reaches for it. Measure before
+// polishing, as with the text above.
+
+/** The columns of a shape as `name type` pairs. */
+function columnList(shape: TableShape): string {
+  return shape.columns.map((c) => `${c.name} ${c.type}`).join(", ");
+}
+
+/** A scalar column to write the examples with - not the key, so a filter or
+ * GROUP BY on it reads as one would on any table; the key when the table
+ * has nothing else. */
+function exampleScalar(shape: TableShape): string {
+  return shape.scalarColumns.find((name) => name !== shape.keyColumn) ?? shape.keyColumn;
+}
+
+/** How a hit names a row and where the rest of the row is: the sentence the
+ * instructions and the search text share. */
+function citeRows(shape: TableShape): string {
+  return (
+    `Answer from the hits and cite a row by its ${shape.keyColumn}; the whole of a row is one sql away ` +
+    `(SELECT * FROM ${shape.table} WHERE ${shape.keyColumn} = '...').`
+  );
+}
+
+export function rowsInstructions(shape: TableShape, platformTools: boolean): string {
+  const { table, keyColumn: key, primaryText: text } = shape;
+  return (
+    `code-context is an index of the ${table} table, one row per record. Which tool for which question:\n` +
+    `- find - every row whose ${text} holds every word of an exact phrase, where you would grep: complete ` +
+    "and unranked, with the table-wide count.\n" +
+    `- search - which rows are about X: exact terms and meaning in one ranked pass over ${text}.\n` +
+    "- sql - counts, rankings, filters and aggregates across the table, including ranking rows by how " +
+    "much they are about a topic (rank by hybrid_search, not bm25, when the topic is a concept; a total " +
+    "over a search relation counts the top k, never the table - a complete count comes from token_match, " +
+    `a WHERE, or the ${table} table with no search function).\n` +
+    (platformTools
+      ? "- ask - a question or task in plain language; returns the rows it retrieved (facts as rows, with their columns and the text cut to snippets), not an answer: compose from them. Spawn several in parallel for independent questions.\n" +
+        "- explore - a question that takes several retrievals (how two groups of rows compare, what the rows about X have in common); it queries, reads what it finds and returns a written answer grounded in the rows it lists, with the chain of queries. Slower than ask: use it when one retrieval will not do.\n"
+      : "") +
+    `Hits are rows: a score, the row's ${key}, its scalar columns, and its text columns cut to a snippet of ` +
+    `${SNIPPET_CHARS} characters. ${citeRows(shape)} ` +
+    "Every tool takes an optional 'path' (an absolute repo root) to target a repository instead, whose local " +
+    "code index it then reads."
+  );
+}
+
+export function rowsSearchDescription(shape: TableShape): string {
+  const { table, keyColumn: key, primaryText: text, vectorColumn, vectorSource } = shape;
+  const ranking = vectorColumn
+    ? `fusing exact keyword matching over ${text} with semantic similarity over ${vectorColumn} (the platform's ` +
+      `embedding of ${vectorSource.join(", ") || text}), so it works whether or not you know the words`
+    : `ranked by exact keyword matching (BM25) over ${text} - the table has no embedding column, so use the ` +
+      "words the rows use";
+  return (
+    `Ranked search over the rows of ${table}, ${ranking}. Use it for which rows are about X, rows like ` +
+    `this one, the best matches for a description. Each hit is a row: score, ${key}, the scalar columns ` +
+    `(${shape.scalarColumns.join(", ")}), and ${shape.textColumns.join(", ")} as snippets of at most ` +
+    `${SNIPPET_CHARS} characters. ${citeRows(shape)} When one search is not enough, refine the query and ` +
+    "search again. For every row holding an exact phrase use find; for counts, rankings and filters use " +
+    "sql. The result includes a 'usage' field, a one-line receipt of tokens returned and rows."
+  );
+}
+
+export function rowsFindDescription(shape: TableShape): string {
+  const { table, keyColumn: key, primaryText: text } = shape;
+  return (
+    `Every row of ${table} whose ${text} holds every word of an exact string, like grep over a table: ` +
+    "complete and unranked, with the table-wide total. Matching is by the index's words - case-insensitive, " +
+    "whole words, punctuation ignored - so a match holds the words, not necessarily the phrase in that order; " +
+    "the literal is not checked character by character as it is over a code index. Use it where you would " +
+    `grep: a name, a product, a phrase that must appear. Each match is a row: ${key}, the scalar columns, and ` +
+    "the text columns as snippets. ignoreCase, defines and under describe a code index and do nothing here. " +
+    "For meaning or 'which rows are about X' use search; for counts and rankings use sql. The result includes " +
+    "a 'usage' field, a one-line receipt of tokens returned and rows."
+  );
+}
+
+/** The `sql` description for a hosted table of another shape: the table's
+ * columns with their types, which are indexed for text (said to be inferred
+ * from the schema when no card named them - the type then stands in for the
+ * role, and can name a column the platform embeds but does not index) and
+ * which the platform embeds, and the search functions with the table's real
+ * names - hybrid_search(table, text, terms, vector, {{q:"..."}}, k),
+ * bm25_search, vector_search, token_match - each of which returns _id, the
+ * table's scalar columns and score. */
+export function rowsSqlDescription(shape: TableShape): string {
+  const { table, keyColumn: key, primaryText: text, vectorColumn, vectorSource } = shape;
+  const scalar = exampleScalar(shape);
+  // A card that names no full-text column is a table with no full-text
+  // index (the optimizer probed every text column), so the search functions
+  // are left out of the text rather than shown with an empty column name.
+  const textColumns = shape.textColumns.join(", ") || "none";
+  const ranked = vectorColumn
+    ? `hybrid_search('${table}','${text}','terms','${vectorColumn}', {{q:"..."}}, 300)`
+    : `bm25_search('${table}','${text}','terms', 300)`;
+  const searchGuide = text
+    ? "The search functions are table-valued: a ranked search is a relation, so WHERE, GROUP BY, ORDER BY and " +
+    "joins compose with it in one pass, and one query replaces the several round trips of searching, then " +
+    "filtering, then counting. Rank through a search relation rather than scanning the whole table - with " +
+    `ILIKE, LIKE, regexp_like, or a bare filter on ${scalar}: a scan has no relevance ranking, reads every ` +
+    "row, and answers 'contains this substring' when the question asked which rows are about something. " +
+    (vectorColumn
+      ? `Rank with hybrid_search('${table}','${text}','terms','${vectorColumn}', {{q:"..."}}, k) - 'terms' and ` +
+        'the text inside {{q:"..."}} are yours to fill in, not literals to copy - unless you have a reason not ' +
+        "to: it fuses exact terms with meaning, so it reaches the rows whether or not the question's words are " +
+        "the rows' words, and they rarely are. That covers a concept, a subject, 'rows about X' - the shape of " +
+        "almost every ranking question. "
+      : "") +
+    `bm25_search('${table}','${text}','terms', k) is keyword only: reach for it when the topic is a literal ` +
+    `phrase you know appears in ${text} and you want counts a reader can check as occurrences. ` +
+    (vectorColumn ? `vector_search('${table}','${vectorColumn}', {{q:"..."}}, k) is meaning alone. ` : "") +
+    `token_match('${table}','${text}','terms','and') is unranked and complete: every row holding every term, ` +
+    "with no k, so a COUNT over it is the table's count and not a share of the top k. " +
+    // Measured 2026-09-11 on the jobs table's description_html (6.7 GB): a
+    // caller writing LIKE spent 53 s of retrieval where the same question
+    // through token_match took 0.12 s. The engine's LIKE pushdown expands the
+    // pattern to every indexed term containing it, so the cost follows the
+    // expansion, not the match count - scala (4,215 rows, 10.0 s) cost three
+    // times tableau (12,960 rows, 3.8 s).
+    `On ${textColumns} match WORDS through the search functions, never with LIKE: token_match for a boolean ` +
+    `match ('and' or 'or'), bm25_search when you want a ranking${vectorColumn ? ", hybrid_search when meaning matters too" : ""}. ` +
+    "LIKE '%word%' on an indexed column is not an index lookup: it expands to every indexed term CONTAINING the " +
+    "substring (scala -> scalable, scaling, escalate), so its cost is set by that expansion, which the question " +
+    "cannot predict - measured on one 6.7 GB column: 0.9 s for '%cobol%', 3.8 s for '%tableau%', 10 s for " +
+    "'%scala%', 11 s for '%clearance%', against 0.12 s for the same question through token_match. Keep LIKE for " +
+    "when you mean a substring inside a word. " +
+    (vectorColumn
+      ? 'The {{q:"..."}} placeholder is embedded on the platform with the table\'s own model, so it costs you ' +
+        "nothing but the text (a bare {{q}} with the embed map is folded into it). "
+      : "") +
+    "Every search function returns _id, the table's scalar columns and score, so select and filter them " +
+    `directly: SELECT ${key}, ${scalar}, score FROM ${ranked} WHERE ${scalar} = '...' ORDER BY score DESC ` +
+    `LIMIT 20. Which ${scalar} values have the most rows about a topic, ranked - the whole question in one ` +
+    `statement, with your own words in place of the example's: SELECT ${scalar}, COUNT(*) AS ranked_rows FROM ` +
+    `${ranked} GROUP BY ${scalar} ORDER BY ranked_rows DESC LIMIT 15. What such a total means: a search ` +
+    "relation holds only the top k rows of that query, so a COUNT over it is the rows that ranked within the " +
+    "top k - a share of the table about the topic - and never the table's count; report it as 'rows ranked " +
+    "in the top 300 for <topic>', and expect values outside the top k, including common ones, to be missing " +
+    "from it. A question with no topic in it - how many rows, the largest values, a count over the whole " +
+    `table - comes from ${table} with no search function: SELECT ${scalar}, COUNT(*) AS rows FROM ${table} ` +
+    `GROUP BY ${scalar} ORDER BY rows DESC LIMIT 15. `
+    : "No column here is full-text indexed, so the search functions do not apply to this table: answer from " +
+      `plain SQL over the columns above - SELECT ${scalar}, COUNT(*) AS rows FROM ${table} GROUP BY ${scalar} ` +
+      "ORDER BY rows DESC LIMIT 15. ";
+  const textGuide = text
+    ? `${textColumns} hold long text${/html/i.test(textColumns) ? " (HTML where the name says so)" : ""}: select ` +
+      `substr(${text}, 1, 300) rather than the column unless you mean to quote it, and select ${key} beside it ` +
+      "so a row can be cited. "
+    : "";
+  return (
+    `Read-only SQL, one SELECT or WITH, over ${table}(${columnList(shape)}) - for counts, rankings, filters ` +
+    `and GROUP BY across the whole table. Full-text indexed: ${textColumns}` +
+    (shape.textColumnsInferred
+      ? " (inferred from the schema - the table has no card naming its indexes yet, so its long-text columns " +
+        "are taken as the indexed ones; one the platform only embeds may be among them)"
+      : "") +
+    ". " +
+    (vectorColumn
+      ? `Vector column: ${vectorColumn}, the platform's embedding of ${vectorSource.join(", ") || text}. `
+      : "No vector column: rank by terms alone. ") +
+    searchGuide +
+    (shape.listColumns.length > 0
+      ? `A list column (${shape.listColumns.join(", ")}) holds several values per row: filter it with ` +
+        `array_has(${shape.listColumns[0]}, '...') or unnest it, not with equality. `
+      : "") +
+    textGuide +
+    "The result includes a 'usage' field, a one-line receipt of tokens returned and rows."
+  );
+}
+
+export function rowsAskDescription(shape: TableShape, devContextNote: string): string {
+  const { table, keyColumn: key } = shape;
+  return (
+    `Ask the ${table} table's index a question or task in plain language: a read-only retrieval subagent ` +
+    "searches and ranks across the table itself and returns the facts it retrieved as rows, never as hits - " +
+    `each the row's ${key}, its scalar and list columns, and its text columns cut to a snippet of ` +
+    `${SNIPPET_CHARS} characters - plus aggregate rows (counts, rankings) and the SQL whose rows answer the ` +
+    "question - never a summary. Use it for which rows are about X, how many and where, what the rows about X have in common; " +
+    "spawn several in parallel for independent questions instead of querying yourself. For every row holding " +
+    `an exact phrase use find; for a row you already know, sql by its ${key}. Answer from the rows and cite ` +
+    `them by ${key}. ` +
+    devContextNote +
+    "The result includes a 'usage' field, a one-line receipt of what the call cost."
+  );
+}
+
+export function rowsExploreDescription(shape: TableShape, devContextNote: string): string {
+  const { table, keyColumn: key } = shape;
+  return (
+    `A read-only exploration subagent over the ${table} table's index. Give it a question that takes several ` +
+    "retrievals - how two groups of rows compare, what the rows about X have in common, where a value " +
+    "concentrates; it queries, reads what it finds, queries again, and returns answer, its written answer, " +
+    "grounded in the facts it lists (as rows, never as hits: the rows it ended on, each with its " +
+    `${key}, its scalar and list columns, and its text columns as snippets of at most ${SNIPPET_CHARS} ` +
+    `characters) and the chain of queries it ran. Take the answer and cite rows by ${key} from its rows; it does not need re-reading or ` +
+    "re-checking. Slower and dearer than ask: use ask for one retrieval, explore when one retrieval will not " +
+    "do. Independent explorations run at the same time: issue them in ONE turn rather than waiting for each " +
+    "to come back, because the wait is then the slowest of them instead of the sum. For every row holding an " +
+    "exact phrase use find. " +
+    devContextNote +
+    "The result includes a 'usage' field, a one-line receipt of what the call cost."
+  );
+}
+
+/** What the default root's doors run against, decided once at startup and
+ * never re-asked on a call.
+ *
+ * - `chunks`: the chunks table this client builds. Every path and constant
+ *   as before: find and sql on the local index, search on the hosted index
+ *   under CX_REMOTE_SEARCH. The mode of the default table always, without a
+ *   probe - it is the table this client builds, so there is nothing to ask
+ *   - and the mode without CX_REMOTE_SEARCH.
+ * - `rows`: a hosted table of another shape, whose rows the doors run over
+ *   with its own columns; nothing touches the local index.
+ * - `unresolved`: CX_TABLE names a table that is not the default and the
+ *   platform could not describe it at startup. The rows tools are registered
+ *   - the chunks text would name columns the table does not have - and every
+ *   call reports the cause, because the alternative, the local path, BUILDS
+ *   an index and the build drops and recreates the platform table.
+ *
+ * One decision for the process rather than a lookup per call: a call that
+ * asked the platform first made every local tool wait out a platform outage
+ * (the cold-start budget is two minutes), and a startup probe that could miss
+ * left the chunks text registered over calls that ran rows. */
+export type TableMode = { kind: "chunks" } | { kind: "rows"; shape: TableShape } | { kind: "unresolved"; cause: string };
+
+/** The tool text when the table could not be described (TableMode
+ * `unresolved`): the doors are registered for its rows, say what the table
+ * is, and say that every call reports the cause - so a model reading the
+ * text is not sent to write chunks-shaped SQL against it. */
+export function unresolvedInstructions(table: string, cause: string, platformTools: boolean): string {
+  return (
+    `code-context is an index of the ${table} table on the platform, one row per record. The table could not be ` +
+    `described from the platform when this server started (${cause}), so find, search and sql` +
+    (platformTools ? ", ask and explore" : "") +
+    " each return that error until the server is restarted with the platform reachable; nothing runs against a " +
+    "local index in its place. Every tool takes an optional 'path' (an absolute repo root) to target a repository " +
+    "instead, whose local code index it then reads."
+  );
+}
+
+export function unresolvedDescription(door: string, table: string): string {
+  return (
+    `${door} over the rows of the ${table} table on the platform. The table could not be described from the ` +
+    "platform when this server started, so every call returns that error (with the cause) until the server is " +
+    "restarted with the platform reachable; nothing runs against a local index in its place."
+  );
+}
+
+/** What a test injects: a transport in place of stdio, and the platform
+ * client's options (a scripted fetch) for every client the server builds. */
+export interface ServeOptions {
+  transport?: Transport;
+  hostedOptions?: HostedOptions;
+}
+
+export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {}): Promise<void> {
+  const { hostedOptions } = serveOptions;
   const defaultRoot = resolveRoot(rootPath);
 
   // The platform database (--db <url>), when one is configured: the default
@@ -310,7 +600,10 @@ export async function serveMcp(rootPath?: string): Promise<void> {
   // connection, auto-sync clock, and mutation lock, held in a small LRU so a
   // session that roams across many repos doesn't accumulate connections. Only
   // the default root's context carries the platform client (see RepoRegistry).
-  const registry = new RepoRegistry(defaultRoot, { connect, ...(hosted ? { hosted: { target: hosted } } : {}) });
+  const registry = new RepoRegistry(defaultRoot, {
+    connect,
+    ...(hosted ? { hosted: { target: hosted, ...(hostedOptions ? { options: hostedOptions } : {}) } } : {}),
+  });
   const repoFor = (requested?: string): RepoCtx => registry.get(requested);
 
   // The manifest is re-read per call so staged vector readiness is noticed
@@ -427,11 +720,24 @@ export async function serveMcp(rootPath?: string): Promise<void> {
     return outcome;
   };
 
+  /** Whether this process may write the platform table a build or sync of
+   * `ctx` would write: the context carries no platform client (a repo named
+   * by `path` writes its local index alone), or the table is the default one
+   * this client builds. A CX_TABLE override names a table something else
+   * loaded - a hydrated corpus - and a build DROPS and recreates it, a sync
+   * appends this repository's chunks to it; neither may happen because a
+   * query found no index or a stale one. Ownership, not the table's columns:
+   * a hydrated table that happens to carry path and start_line is no more
+   * this process's than one that does not. `cx index` is the explicit path
+   * and is not gated here. */
+  const ownsTable = (ctx: RepoCtx): boolean => !ctx.hosted || TABLE === DEFAULT_TABLE;
+
   const maybeAutoSync = (ctx: RepoCtx) => {
     // Never under a build's completion: a diff or a second build would race
     // the vector stage or the platform load. The clock is not advanced, so
-    // the first query after the build lands syncs.
-    if (!autoSyncEnabled || ctx.completion || performance.now() - ctx.lastSyncCheck < syncIntervalMs) return;
+    // the first query after the build lands syncs. And never against a
+    // table this process does not own (ownsTable).
+    if (!autoSyncEnabled || !ownsTable(ctx) || ctx.completion || performance.now() - ctx.lastSyncCheck < syncIntervalMs) return;
     ctx.lastSyncCheck = performance.now();
     // Deferred so the triggering query's engine call runs first; the sync's
     // stat walk still shares the process, so on very large repos a
@@ -448,7 +754,7 @@ export async function serveMcp(rootPath?: string): Promise<void> {
    * result and therefore worth waiting a cold start out for; the verdict is
    * not one of those, and sharing that client made a platform outage into
    * a minute-long stall on a local query (see VERDICT_TIMEOUT_MS). */
-  const verdictDb = hosted ? hostedDbFor(hosted, { coldStartSecs: 0, timeoutMs: VERDICT_TIMEOUT_MS }) : null;
+  const verdictDb = hosted ? hostedDbFor(hosted, { ...hostedOptions, coldStartSecs: 0, timeoutMs: VERDICT_TIMEOUT_MS }) : null;
 
   /** The platform's verdict on a `sql` result, or undefined when there is no
    * platform to ask or it could not answer within VERDICT_TIMEOUT_MS.
@@ -469,18 +775,23 @@ export async function serveMcp(rootPath?: string): Promise<void> {
    * Best-effort throughout: the rows are the answer and a check that failed
    * must not take them with it. A caller without a platform database (the
    * local-only server) gets no verdict at all rather than a second
-   * implementation of the rules here, which would drift from the loop's. */
+   * implementation of the rules here, which would drift from the loop's.
+   *
+   * `column` is the text column the refusal is diagnosed against - the
+   * chunks table's content unless the statement ran over a hosted table of
+   * another shape, whose own text column it then is. */
   const platformVerdict = async (
     ctx: RepoCtx,
     statement: string,
     rows: readonly object[],
     question?: string,
+    column: string = CONTENT_COLUMN,
   ): Promise<{ verdict?: Record<string, unknown>; telemetry?: { rttMs: number; readTokens?: number } }> => {
     if (!ctx.hosted || !verdictDb) return {};
     try {
       const verdict = await verdictDb.validate({
         table: TABLE,
-        column: CONTENT_COLUMN,
+        column,
         statement,
         rows,
         ...(question ? { question } : {}),
@@ -520,6 +831,32 @@ export async function serveMcp(rootPath?: string): Promise<void> {
   });
   const noIndex = (ctx: RepoCtx) =>
     fail(`no index for ${ctx.root} yet - run \`cx index\` there once (keyword search is live in seconds).`);
+
+  /** The refusal when a query would build the index but the process does
+   * not own the platform table a build writes (ownsTable): CX_AUTO_INDEX is
+   * not consulted, because no setting makes dropping another loader's table
+   * the right answer to "no index yet". */
+  const foreignTable = (ctx: RepoCtx) =>
+    fail(
+      `no index for ${ctx.root} yet, and this server will not build one: CX_TABLE=${TABLE} names a table this ` +
+        `process does not own at ${platformLabel(ctx.hosted!)} (a build drops and recreates it) - build it with ` +
+        "`cx index` explicitly if that is what you mean",
+    );
+
+  /** The local index a door runs over: the one there is, or the one this
+   * call builds when auto-index is on and the process owns the table its
+   * build would write. Every local door goes through here, so the ownership
+   * rule cannot be missed by one of them. */
+  const localIndex = async (ctx: RepoCtx): Promise<{ handle: IndexHandle; autoIndexed?: IndexStats } | { failed: ReturnType<typeof fail> }> => {
+    let ensured: EnsureResult;
+    try {
+      ensured = await ensureIndexed(ctx, { autoIndexEnabled: autoIndexEnabled && ownsTable(ctx), getHandle, build: buildIndex });
+    } catch (err) {
+      return { failed: fail(`indexing failed: ${(err as Error).message}`) };
+    }
+    if ("needsIndex" in ensured) return { failed: ownsTable(ctx) ? noIndex(ctx) : foreignTable(ctx) };
+    return ensured;
+  };
 
   /** Marker attached to a query result when this call built the index. */
   const autoIndexNote = (stats: IndexStats) => ({
@@ -573,36 +910,110 @@ export async function serveMcp(rootPath?: string): Promise<void> {
   // toward nothing.
   const platformTools = hosted !== null;
 
-  // The table's card, folded into the `sql` description once at startup so
-  // every statement is written knowing the table's shape. Measured worth:
-  // 37% off the wall clock of aggregation questions, with quality level and
-  // cost flat (see CARD_TIER). It is fetched here rather than offered as a
-  // tool because a tool was measured and not called.
+  // What the default root's doors run against (TableMode), decided here and
+  // once. With CX_REMOTE_SEARCH, a platform database and a CX_TABLE that is
+  // not the default, the table's schema says whether it is the chunks table
+  // or another shape, and the tool text below is registered to match - so
+  // the text and the calls cannot disagree, whichever way the probe went.
+  // Resolved through the default root's own client, with its normal
+  // cold-start budget: for that table the answer decides the mode, so a
+  // database still coming up is waited for here, at startup, the one place
+  // a wait costs no query. (The probe's two reads - schema and card - are
+  // per-spawn overhead and go to no ledger: they are the price of knowing
+  // what the tools are, not of any answer.) On a failure the table goes
+  // `unresolved`, because the chunks text over a table of another shape
+  // sends the model to write SQL naming columns it does not have, and the
+  // local path would build.
   //
-  // Best-effort, and deliberately so: a card is a help, not a precondition.
-  // A platform that cannot serve one (no card computed for this table yet -
-  // the optimizer writes it after it first optimizes the table - a refused
-  // key, a database still coming up) leaves `sql` with the description it
-  // always had. Failing the server here would make a help into a
-  // dependency, and the one thing worse than a slower first statement is no
-  // server at all.
-  let sqlDescription = SQL_DESCRIPTION;
+  // The DEFAULT table is not probed. It is the chunks table this client
+  // builds, so the probe's only possible outcome is `chunks` - the fallback
+  // too - and the wait would buy nothing. It would cost a great deal: this
+  // runs before `server.connect`, so a platform that is cold or answering
+  // 503 at spawn would hold the MCP handshake for the whole cold-start
+  // budget (two minutes), past the client's startup timeout (Claude Code
+  // gives a server 30 s), and the session would lose find, search and sql -
+  // three local tools - to a probe whose answer was known. The default
+  // table keeps the startup it always had: the card alone, with no
+  // cold-start retries, below.
+  //
+  // The card comes with the shape (resolving it read the card's roles), so
+  // this is the one card read at startup when the probe runs; otherwise the
+  // card is fetched on its own below, as it always was.
+  let mode: TableMode = { kind: "chunks" };
+  let card: RowRecord | undefined;
+  const noCard = (err: unknown) => console.error(`no table card in the sql description: ${(err as Error).message}`);
+  if (hosted && remoteSearch && TABLE !== DEFAULT_TABLE) {
+    try {
+      const shape = await resolveTableShape(registry.get().hosted!, TABLE, CARD_TIER, noCard);
+      card = shape.card;
+      if (!shape.isChunks) mode = { kind: "rows", shape };
+    } catch (err) {
+      const cause = `${(err as Error).message}${refusalHint(err)}`;
+      console.error(`the ${TABLE} table could not be described (${cause}); every tool call will say so`);
+      mode = { kind: "unresolved", cause };
+    }
+  } else if (platformTools) {
+    // The table's card, folded into the `sql` description once at startup so
+    // every statement is written knowing the table's shape. Measured worth:
+    // 37% off the wall clock of aggregation questions, with quality level and
+    // cost flat (see CARD_TIER). It is fetched here rather than offered as a
+    // tool because a tool was measured and not called.
+    //
+    // Best-effort, and deliberately so: a card is a help, not a precondition.
+    // A platform that cannot serve one (no card computed for this table yet -
+    // the optimizer writes it after it first optimizes the table - a refused
+    // key, a database still coming up) leaves `sql` with the description it
+    // always had. Failing the server here would make a help into a
+    // dependency, and the one thing worse than a slower first statement is no
+    // server at all. No cold-start retries (`coldStartSecs: 0`), for the
+    // reason above: one attempt, and the handshake goes ahead.
+    try {
+      const record = await hostedDbFor(hosted, { ...hostedOptions, coldStartSecs: 0 }).tableCard(TABLE, CARD_TIER);
+      card = (record.card ?? record) as RowRecord;
+    } catch (err) {
+      noCard(err);
+    }
+  }
+
+  /** The rows a call on `ctx` runs over, read off the startup decision - no
+   * platform call, no await: the shape when the context carries the platform
+   * client (the default root) and the table is of another shape; `failed`
+   * when it could not be described; null for every other case, where the
+   * call takes the path it always took. */
+  const rowsOver = (tool: string, ctx: RepoCtx): { shape: TableShape } | { failed: ReturnType<typeof fail> } | null => {
+    if (!ctx.hosted || mode.kind === "chunks") return null;
+    if (mode.kind === "rows") return { shape: mode.shape };
+    return {
+      failed: fail(
+        `${tool} failed: table ${TABLE} could not be described from the platform at ${platformLabel(ctx.hosted)} when ` +
+          `this server started: ${mode.cause}; nothing runs against a local index in its place - restart the server ` +
+          "with the platform reachable",
+      ),
+    };
+  };
+
+  /** The `projection` the platform's loop is asked for in rows mode: the
+   * column that keys a row, so every fact can be cited by it; none when the
+   * table has no key of its own and the engine's id stands in, since that
+   * is no column of the table's and the platform refuses a projection
+   * naming none - omitted, it gives each fact the row id itself. */
+  const rowsProjection = (shape: TableShape): readonly string[] => (shape.keyColumn === ENGINE_ID_COLUMN ? [] : [shape.keyColumn]);
+
+  const rows = mode.kind === "rows" ? mode.shape : null;
+  let sqlDescription = rows ? rowsSqlDescription(rows) : mode.kind === "unresolved" ? unresolvedDescription("Read-only SQL", TABLE) : SQL_DESCRIPTION;
   if (platformTools) {
     sqlDescription += VALIDATION_NOTE;
-    try {
-      const record = await hostedDbFor(hosted, { coldStartSecs: 0 }).tableCard(TABLE, CARD_TIER);
-      const card = JSON.stringify(record.card ?? record);
-      sqlDescription += CARD_PREAMBLE + card;
-    } catch (err) {
-      console.error(`no table card in the sql description: ${(err as Error).message}`);
-    }
+    if (card) sqlDescription += CARD_PREAMBLE + JSON.stringify(card);
   }
 
   const server = new McpServer(
     { name: "code-context", version: "0.1.2" },
     {
-      instructions:
-        "code-context is a local index of this repository. Which tool for which question:\n" +
+      instructions: rows
+        ? rowsInstructions(rows, platformTools)
+        : mode.kind === "unresolved"
+        ? unresolvedInstructions(TABLE, mode.cause, platformTools)
+        : "code-context is a local index of this repository. Which tool for which question:\n" +
         "- find - every line containing an exact string, where you would grep.\n" +
         "- search - how does X work, where is Y handled, code by meaning.\n" +
         "- sql - counts, rankings, and aggregates across the repo, including ranking files by how " +
@@ -627,8 +1038,11 @@ export async function serveMcp(rootPath?: string): Promise<void> {
     "search",
     {
       title: "Code search (exact terms + meaning)",
-      description:
-        "Ranked code search fusing exact keyword matching with semantic similarity, so it works " +
+      description: rows
+        ? rowsSearchDescription(rows)
+        : mode.kind === "unresolved"
+        ? unresolvedDescription("Ranked search", TABLE)
+        : "Ranked code search fusing exact keyword matching with semantic similarity, so it works " +
         "whether or not you know the words. Use it for 'how does X work', 'where is Y handled', code " +
         "by meaning, context before a change, similar implementations. Each hit carries path, line " +
         "range, and the chunk content: answer from the hits. The content shows each line with its " +
@@ -656,6 +1070,32 @@ export async function serveMcp(rootPath?: string): Promise<void> {
         ctx = repoFor(path);
       } catch (err) {
         return fail((err as Error).message);
+      }
+      // Over the rows of a hosted table of another shape: the platform
+      // fuses the table's own text and embedding columns. No local index, no
+      // readiness probe - the startup decision already said the table is
+      // there and what it is (rowsOver).
+      const over = rowsOver("search", ctx);
+      if (over && "failed" in over) return over.failed;
+      if (over) {
+        try {
+          const t0 = performance.now();
+          const result = await searchRows(ctx.hosted!, over.shape, query, k);
+          let usage: string | undefined;
+          if (receiptOn) {
+            const entry = withPlatform(rowSearchEntry(result), ctx);
+            recordUsage(ctx.dir, entry);
+            usage = formatReceipt(entry, session);
+          }
+          return ok({
+            ...result,
+            index: "platform",
+            took_ms: Math.round((performance.now() - t0) * 1000) / 1000,
+            ...(usage ? { usage } : {}),
+          });
+        } catch (err) {
+          return fail(`search failed: ${(err as Error).message}${refusalHint(err)}`);
+        }
       }
       // Reading the hosted index needs no local index at all, so this comes
       // before ensureIndexed: requiring a local build first would make the
@@ -688,13 +1128,8 @@ export async function serveMcp(rootPath?: string): Promise<void> {
           return fail(`search failed: ${(err as Error).message}${refusalHint(err)}`);
         }
       }
-      let ensured: EnsureResult;
-      try {
-        ensured = await ensureIndexed(ctx, { autoIndexEnabled, getHandle, build: buildIndex });
-      } catch (err) {
-        return fail(`indexing failed: ${(err as Error).message}`);
-      }
-      if ("needsIndex" in ensured) return noIndex(ctx);
+      const ensured = await localIndex(ctx);
+      if ("failed" in ensured) return ensured.failed;
       const { handle, autoIndexed } = ensured;
       if (!autoIndexed) maybeAutoSync(ctx); // a fresh build is already current
       try {
@@ -722,8 +1157,11 @@ export async function serveMcp(rootPath?: string): Promise<void> {
     "find",
     {
       title: "Find exact text (every occurrence, like grep -n)",
-      description:
-        "Every line in the repository containing an exact string, like grep -n: complete and " +
+      description: rows
+        ? rowsFindDescription(rows)
+        : mode.kind === "unresolved"
+        ? unresolvedDescription("Every row holding every word of an exact string", TABLE)
+        : "Every line in the repository containing an exact string, like grep -n: complete and " +
         "unranked, with the repo-wide total and per-file counts (byFile, the grep -c answer). " +
         "Literal text within one line, case-sensitive unless ignoreCase. Use it where you would " +
         "grep: every use or definition of an identifier, an error message, a config key. Set defines " +
@@ -783,13 +1221,37 @@ export async function serveMcp(rootPath?: string): Promise<void> {
       } catch (err) {
         return fail((err as Error).message);
       }
-      let ensured: EnsureResult;
-      try {
-        ensured = await ensureIndexed(ctx, { autoIndexEnabled, getHandle, build: buildIndex });
-      } catch (err) {
-        return fail(`indexing failed: ${(err as Error).message}`);
+      // Over the rows of a hosted table of another shape the find needs no
+      // local index, so this comes before the local index - which would be
+      // built, and with it drop the platform table (see ownsTable). The
+      // code-index options (ignoreCase, defines, under) have no meaning for a
+      // row and are left out, as the tool text says. Read off the startup
+      // decision: in chunks mode this is the local tool it always was, and
+      // nothing here waits on the platform.
+      const over = rowsOver("find", ctx);
+      if (over && "failed" in over) return over.failed;
+      if (over) {
+        try {
+          const t0 = performance.now();
+          const result = await findRows(ctx.hosted!, over.shape, query, { limit });
+          let usage: string | undefined;
+          if (receiptOn) {
+            const entry = withPlatform(rowFindEntry(result), ctx);
+            recordUsage(ctx.dir, entry);
+            usage = formatReceipt(entry, session);
+          }
+          return ok({
+            ...result,
+            index: "platform",
+            took_ms: Math.round((performance.now() - t0) * 1000) / 1000,
+            ...(usage ? { usage } : {}),
+          });
+        } catch (err) {
+          return fail(`find failed: ${(err as Error).message}${refusalHint(err)}`);
+        }
       }
-      if ("needsIndex" in ensured) return noIndex(ctx);
+      const ensured = await localIndex(ctx);
+      if ("failed" in ensured) return ensured.failed;
       const { handle, autoIndexed } = ensured;
       if (!autoIndexed) maybeAutoSync(ctx); // a fresh build is already current
       try {
@@ -850,13 +1312,50 @@ export async function serveMcp(rootPath?: string): Promise<void> {
       } catch (err) {
         return fail((err as Error).message);
       }
-      let ensured: EnsureResult;
-      try {
-        ensured = await ensureIndexed(ctx, { autoIndexEnabled, getHandle, build: buildIndex });
-      } catch (err) {
-        return fail(`indexing failed: ${(err as Error).message}`);
+      // Over the rows of a hosted table of another shape the statement runs
+      // on the platform, which embeds its {{q:"..."}} placeholders with the
+      // table's own model, so no local index and no local embedder come into
+      // it - and this comes before the local index for the reason find's
+      // does. The rows are returned as the platform gave them: a table of
+      // rows has no lines to number (numberRowLines is for chunks, where a
+      // start_line places the text). The verdict is diagnosed against the
+      // table's own text column.
+      const over = rowsOver("sql", ctx);
+      if (over && "failed" in over) return over.failed;
+      if (over) {
+        try {
+          const t0 = performance.now();
+          const rowsOut = await runSqlRows(ctx.hosted!, query, embed as Record<string, string> | undefined);
+          const { verdict, telemetry } = await platformVerdict(ctx, query, rowsOut, question, over.shape.primaryText);
+          let usage: string | undefined;
+          if (receiptOn) {
+            // The statement's own metered tokens, then the verdict's: two
+            // platform reads, one ledger line, so the charge shows both.
+            const entry = withPlatform(sqlEntry(query, rowsOut), ctx);
+            if (telemetry) {
+              entry.platform = {
+                rttMs: (entry.platform?.rttMs ?? 0) + telemetry.rttMs,
+                ...(entry.platform?.readTokens !== undefined || telemetry.readTokens !== undefined
+                  ? { readTokens: (entry.platform?.readTokens ?? 0) + (telemetry.readTokens ?? 0) }
+                  : {}),
+              };
+            }
+            recordUsage(ctx.dir, entry);
+            usage = formatReceipt(entry, session);
+          }
+          return ok({
+            rows: rowsOut,
+            ...(verdict ? { validation: verdict } : {}),
+            index: "platform",
+            took_ms: Math.round((performance.now() - t0) * 1000) / 1000,
+            ...(usage ? { usage } : {}),
+          });
+        } catch (err) {
+          return fail(`sql failed: ${(err as Error).message}${refusalHint(err)}`);
+        }
       }
-      if ("needsIndex" in ensured) return noIndex(ctx);
+      const ensured = await localIndex(ctx);
+      if ("failed" in ensured) return ensured.failed;
       const { handle, autoIndexed } = ensured;
       if (!autoIndexed) maybeAutoSync(ctx); // a fresh build is already current
       try {
@@ -909,8 +1408,11 @@ export async function serveMcp(rootPath?: string): Promise<void> {
       "ask",
       {
         title: "Ask the repository index: one retrieval, the facts back",
-        description:
-          "Ask the repository index a question or task in plain language: a read-only retrieval " +
+        description: rows
+          ? rowsAskDescription(rows, DEV_CONTEXT_NOTE)
+          : mode.kind === "unresolved"
+          ? unresolvedDescription("A question or task in plain language, answered with the rows it retrieved,", TABLE)
+          : "Ask the repository index a question or task in plain language: a read-only retrieval " +
           "subagent searches and ranks across the index itself and returns the facts it " +
           "retrieved - the top rows with exact path, start_line, end_line and the code, in the shape of " +
           "search hits, plus aggregate rows (counts, rankings) and the SQL whose rows answer the " +
@@ -948,16 +1450,21 @@ export async function serveMcp(rootPath?: string): Promise<void> {
         // anything useful.
         const missing = noPlatform("ask", ctx);
         if (missing) return missing;
-        let ensured: EnsureResult;
-        try {
-          ensured = await ensureIndexed(ctx, { autoIndexEnabled, getHandle, build: buildIndex });
-        } catch (err) {
-          return fail(`indexing failed: ${(err as Error).message}`);
+        // Over a hosted table of another shape there is no local index to
+        // build or sync - and a build would drop that table (see ownsTable)
+        // - and no readiness to probe: the startup decision saw the table.
+        // The facts are keyed by the table's own key column, not the chunks
+        // table's place columns (rowsProjection), and come back as rows of
+        // that shape, text cut to snippets as a search hit's is.
+        const over = rowsOver("ask", ctx);
+        if (over && "failed" in over) return over.failed;
+        if (!over) {
+          const ensured = await localIndex(ctx);
+          if ("failed" in ensured) return ensured.failed;
+          if (!ensured.autoIndexed) maybeAutoSync(ctx); // a fresh build is already current
+          const notReady = await platformNotReady("ask", ctx);
+          if (notReady) return notReady;
         }
-        if ("needsIndex" in ensured) return noIndex(ctx);
-        if (!ensured.autoIndexed) maybeAutoSync(ctx); // a fresh build is already current
-        const notReady = await platformNotReady("ask", ctx);
-        if (notReady) return notReady;
         try {
           const t0 = performance.now();
           // The spend (turns, tokens) goes to the ledger and the receipt only;
@@ -968,7 +1475,7 @@ export async function serveMcp(rootPath?: string): Promise<void> {
           const context = devContextEnabled() ? devContext(ctx.root) : undefined;
           const { result, spend } = await runRetrievalAgent(
             ctx.hosted!,
-            { question, ...(context !== undefined ? { context } : {}) },
+            { question, ...(context !== undefined ? { context } : {}), ...(over ? { projection: rowsProjection(over.shape), shape: over.shape } : {}) },
             { maxTurns: subagentMaxTurns(), maxWallSecs: subagentMaxWallSecs(), k: subagentK() },
           );
           let usage: string | undefined;
@@ -992,8 +1499,11 @@ export async function serveMcp(rootPath?: string): Promise<void> {
       "explore",
       {
         title: "Exploration subagent over the repository index",
-        description:
-          "A read-only exploration subagent over the repository index. Give it a question about a " +
+        description: rows
+          ? rowsExploreDescription(rows, DEV_CONTEXT_NOTE)
+          : mode.kind === "unresolved"
+          ? unresolvedDescription("A read-only exploration subagent", TABLE)
+          : "A read-only exploration subagent over the repository index. Give it a question about a " +
           "mechanism that spans files - how X works end to end, what calls what, where a value flows; " +
           "it searches, reads what it finds, follows definitions to their uses, and returns answer, " +
           "its written answer, grounded in the facts it lists (hits: the rows it ended on, with exact " +
@@ -1030,22 +1540,21 @@ export async function serveMcp(rootPath?: string): Promise<void> {
         }
         const missing = noPlatform("explore", ctx);
         if (missing) return missing;
-        let ensured: EnsureResult;
-        try {
-          ensured = await ensureIndexed(ctx, { autoIndexEnabled, getHandle, build: buildIndex });
-        } catch (err) {
-          return fail(`indexing failed: ${(err as Error).message}`);
+        const over = rowsOver("explore", ctx);
+        if (over && "failed" in over) return over.failed;
+        if (!over) {
+          const ensured = await localIndex(ctx);
+          if ("failed" in ensured) return ensured.failed;
+          if (!ensured.autoIndexed) maybeAutoSync(ctx); // a fresh build is already current
+          const notReady = await platformNotReady("explore", ctx);
+          if (notReady) return notReady;
         }
-        if ("needsIndex" in ensured) return noIndex(ctx);
-        if (!ensured.autoIndexed) maybeAutoSync(ctx); // a fresh build is already current
-        const notReady = await platformNotReady("explore", ctx);
-        if (notReady) return notReady;
         try {
           const t0 = performance.now();
           const context = devContextEnabled() ? devContext(ctx.root) : undefined;
           const { result, spend } = await runExploreAgent(
             ctx.hosted!,
-            { question, ...(context !== undefined ? { context } : {}) },
+            { question, ...(context !== undefined ? { context } : {}), ...(over ? { projection: rowsProjection(over.shape), shape: over.shape } : {}) },
             { maxTurns: exploreMaxTurns(), maxWallSecs: exploreMaxWallSecs(), k: subagentK() },
           );
           let usage: string | undefined;
@@ -1066,13 +1575,19 @@ export async function serveMcp(rootPath?: string): Promise<void> {
     );
   }
 
-  const transport = new StdioServerTransport();
+  const transport = serveOptions.transport ?? new StdioServerTransport();
   await server.connect(transport);
   const manifest: Manifest | undefined = readManifest(indexDir(defaultRoot));
   // The platform's host and its embedder, never the key. The table's
   // readiness is not probed here: a cold database can take a while to answer,
-  // and the first platform tool call reports "no chunks table" itself.
-  const platform = hosted ? `, ${TABLE} table also at ${hostedLabel(hosted)} (embedder there: ${platformEmbedderInfo()})` : "";
+  // and the first platform tool call reports "no chunks table" itself. When
+  // the doors run over the rows of a table of another shape, say so and by
+  // what a row is named.
+  const platform = hosted
+    ? `, ${TABLE} table also at ${hostedLabel(hosted)} (embedder there: ${platformEmbedderInfo()})` +
+      (rows ? `; find, search and sql run over its rows, keyed by ${rows.keyColumn}` : "") +
+      (mode.kind === "unresolved" ? "; the table could not be described, so every tool call says so" : "")
+    : "";
   console.error(
     `code-context MCP server ready on stdio (default root: ${defaultRoot}, index: ${
       manifest ? `${manifest.chunks} chunks, vectors ${manifest.vectors}` : "none yet"
