@@ -491,7 +491,52 @@ function handleSource(res, url) {
  * manifest and checkout rather than written down here - a description that
  * drifts from the corpus is worse than none, because a reader would trust it
  * when choosing what to ask. */
-function corpus(chosen) {
+/** The hosted database the arms query, from the same env the lanes read, for
+ * the server's own read-only checks. `null` in fixture mode or a local-only
+ * setup, where the checks are skipped and the local manifest stands. */
+const HOSTED = (() => {
+  const dbUrl = process.env.CX_BENCH_DB_URL;
+  const keyFile = process.env.CX_BENCH_KEY_FILE;
+  if (!dbUrl || !keyFile) return null;
+  try {
+    const key = readFileSync(keyFile, "utf8").trim();
+    if (!key) return null;
+    return { base: dbUrl.replace(/\/[^/]*$/, ""), database: dbUrl.slice(dbUrl.lastIndexOf("/") + 1), key };
+  } catch {
+    return null;
+  }
+})();
+
+/** Whether the hosted `table` carries a vector column, from its schema - the
+ * index the Infino arm's `search` actually uses. "ready" / "none", or null
+ * when it cannot be reached, in which case the caller keeps the local
+ * manifest's answer. Cached per table so the dropdown does not re-ask the
+ * platform on every change; best-effort, because a corpus fact is not worth
+ * failing the page over. */
+const hostedVectorCache = new Map();
+async function hostedVectors(table) {
+  if (!HOSTED || !table) return null;
+  if (hostedVectorCache.has(table)) return hostedVectorCache.get(table);
+  let result = null;
+  try {
+    const r = await fetch(`${HOSTED.base}/v1/schema/${HOSTED.database}`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${HOSTED.key}`, "content-type": "application/json", accept: "application/json" },
+      body: JSON.stringify({ table_name: table }),
+      signal: AbortSignal.timeout(5000),
+    });
+    if (r.ok) {
+      const fields = await r.json();
+      result = Array.isArray(fields) && fields.some((f) => f?.type === "embedding") ? "ready" : "none";
+    }
+  } catch {
+    /* platform slow or down: the local manifest's answer stands */
+  }
+  hostedVectorCache.set(table, result);
+  return result;
+}
+
+async function corpus(chosen) {
   let manifest = {};
   try {
     manifest = JSON.parse(readFileSync(join(chosen.index, "platform.json"), "utf8"));
@@ -517,6 +562,13 @@ function corpus(chosen) {
   } catch {
     /* no src/ */
   }
+  // For a hosted corpus the vectors that matter are the HOSTED table's - the
+  // index the Infino arm searches - not the local build. A large corpus's
+  // local index is built keyword-only (embedding tens of thousands of files
+  // locally is not done), so it reported "none" while the hosted table,
+  // embedded at hydrate, has them: OpenSearch showed "vectors none" though
+  // its `search` runs over a vector index.
+  const hostedVec = chosen.ready ? await hostedVectors(chosen.table) : null;
   return {
     repo: chosen.repo.split("/").pop(),
     // The page used to carry one hard-coded paragraph about infino and show
@@ -526,7 +578,7 @@ function corpus(chosen) {
     blurb: chosen.blurb ?? "",
     files: manifest.files ?? null,
     chunks: manifest.chunks ?? null,
-    vectors: manifest.vectors ?? null,
+    vectors: hostedVec ?? manifest.vectors ?? null,
     analyzer: manifest.analyzer ?? null,
     indexedAt: manifest.indexedAt ?? null,
     hosted: manifest.origin === "hosted",
@@ -562,7 +614,7 @@ const server = createServer(async (req, res) => {
     res.writeHead(200, { "content-type": "application/json" });
     return res.end(
       JSON.stringify({
-        ...corpus(chosen),
+        ...(await corpus(chosen)),
         // `name` is what the selector shows: the line above it already says
         // what the corpus is and how big, so the option repeating that in
         // prose was two descriptions of one thing. `label` stays for callers
