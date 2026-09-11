@@ -20,6 +20,7 @@
     --subagent: #e0b562;   /* work handed to another loop */
     --warn: #ff8f85;
     --judge-bg: rgba(255, 255, 255, .04);
+    --hit: rgba(240, 86, 42, .16);
     --grade-a: #45d38f; --grade-b: #e0b562; --grade-c: #ff7a66; --grade-f: #e04b4b;
     --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
   }
@@ -29,6 +30,7 @@
     --accent: #d9481f; --accent-ink: #fff;
     --model: #b3bac4; --retrieval: #d9481f; --subagent: #a8801f; --warn: #8c2f2f;
     --judge-bg: rgba(0, 0, 0, .03);
+    --hit: rgba(217, 72, 31, .12);
     --grade-a: #1a7f4b; --grade-b: #b7791f; --grade-c: #c0392b; --grade-f: #7a1f1f;
   }
   * { box-sizing: border-box; }
@@ -152,6 +154,27 @@
     max-height: 320px; overflow-y: auto;
   }
   .tools { margin-top: 10px; font-size: 11px; color: var(--faint); word-break: break-word; }
+  /* A citation in an answer is a link: click it and the cited stretch of the
+     file opens under the answer, cited lines marked, so a claim can be
+     checked where it is made instead of taken on trust. */
+  .cite { color: var(--accent); text-decoration: underline dotted; text-underline-offset: 2px; cursor: pointer; }
+  .cite:hover { text-decoration-style: solid; }
+  .code {
+    margin: 10px 0 4px; background: var(--ground); border: 1px solid var(--rule);
+    font-size: 11.5px; line-height: 1.5; max-height: 360px; overflow: auto;
+  }
+  .code header {
+    display: flex; gap: 12px; align-items: baseline; padding: 6px 10px; border-bottom: 1px solid var(--rule);
+    color: var(--faint); font-size: 11px; position: sticky; top: 0; background: var(--ground);
+  }
+  .code header b { color: var(--ink); font-weight: 500; }
+  .code header .close { margin-left: auto; cursor: pointer; color: var(--faint); }
+  .code header .close:hover { color: var(--ink); }
+  .code pre { margin: 0; padding: 6px 10px 8px; white-space: pre; tab-size: 4; }
+  .code .ln { display: inline-block; width: 5ch; margin-right: 1.5ch; text-align: right; color: var(--faint); user-select: none; }
+  .code .hit { background: var(--hit); display: inline-block; width: 100%; }
+  .code .hit .ln { color: var(--accent); }
+  .code .err { padding: 8px 10px; }
   .err { color: var(--warn); }
   .note { margin-top: 26px; color: var(--faint); font-size: 11.5px; max-width: 70ch; }
   .fixture {
@@ -489,7 +512,7 @@ function render(arm, r) {
         r.cost.theirModelBillUsd !== null && ours.priced ? money(r.cost.theirModelBillUsd + ours.totalUsd) : "—"
       }</td></tr>
     </table>
-    ${r.error ? `<div class="answer err">${escapeHtml(r.error)}</div>` : `<div class="answer">${escapeHtml(r.answer || "(no answer)")}</div>`}
+    ${r.error ? `<div class="answer err">${escapeHtml(r.error)}</div>` : `<div class="answer">${linkify(r.answer || "(no answer)")}</div>`}
     <div class="tools">${r.toolCalls.length ? escapeHtml(r.toolCalls.join(" · ")) : "no tool calls"}</div>`;
 }
 
@@ -510,6 +533,62 @@ const shortModel = (id) => {
   const m = /(opus|sonnet|haiku|fable)/i.exec(String(id));
   return m ? m[1][0].toUpperCase() + m[1].slice(1).toLowerCase() : String(id);
 };
+
+/** The corpus the current run is about, set from the `queued` frame: the
+ * checkout a clicked citation is fetched from. */
+let runCorpus = "";
+
+/** A citation as answers write it: a repository-relative path with at least
+ * one directory, an extension, a line, and optionally a line range -
+ * `src/supertable/manifest/commit.rs:418`, `Foo.java:53-61`. A bare file
+ * name is not linked: the checkout cannot be asked for it unambiguously. */
+const CITE_RE = /(?<![\w/.\-])((?:[\w.\-]+\/)+[\w.\-]+\.[A-Za-z0-9]{1,8}):(\d+)(?:\s*[-–]\s*(\d+))?/g;
+
+/** Escaped text with every citation made a link that opens the cited lines.
+ * Escaping first, then linking, is safe because no character escapeHtml
+ * rewrites can appear in a path this pattern accepts. */
+function linkify(text) {
+  return escapeHtml(text).replace(CITE_RE, (m, path, line, end) =>
+    `<a class="cite" href="#" data-path="${path}" data-line="${line}" data-end="${end ?? line}">${m}</a>`);
+}
+
+/** Click a citation: the cited stretch of the file opens under the answer
+ * (or the judge's reason) it was cited in, cited lines marked; click it
+ * again, or its ×, to close. One open stretch per answer at a time. */
+armsEl.addEventListener("click", async (e) => {
+  const close = e.target.closest(".code .close");
+  if (close) { close.closest(".code").remove(); return; }
+  const a = e.target.closest("a.cite");
+  if (!a) return;
+  e.preventDefault();
+  const host = a.closest(".answer, .judge") ?? a.parentElement;
+  const key = `${a.dataset.path}:${a.dataset.line}-${a.dataset.end}`;
+  const open = host.nextElementSibling?.classList.contains("code") ? host.nextElementSibling : null;
+  if (open) { open.remove(); if (open.dataset.key === key) return; }
+  const box = document.createElement("div");
+  box.className = "code";
+  box.dataset.key = key;
+  const header = (note) => `<header><b>${escapeHtml(a.dataset.path)}</b><span>${note}</span><span class="close" title="close">×</span></header>`;
+  box.innerHTML = header("fetching…");
+  host.insertAdjacentElement("afterend", box);
+  const q = new URLSearchParams({ corpus: runCorpus, path: a.dataset.path, line: a.dataset.line, end: a.dataset.end });
+  try {
+    const r = await fetch(api(`source?${q}`));
+    if (!r.ok) { box.innerHTML = header("") + `<div class="err">${escapeHtml(await r.text())}</div>`; return; }
+    const w = await r.json();
+    const rows = w.lines.map((text, i) => {
+      const n = w.from + i;
+      const hit = n >= w.line && n <= w.end;
+      return `<span class="${hit ? "hit" : "row"}"><span class="ln">${n}</span>${escapeHtml(text)}</span>`;
+    });
+    const cited = w.end !== w.line ? `${w.line}–${w.end}` : `${w.line}`;
+    box.innerHTML = header(`lines ${w.from}–${w.to} of ${w.total} · cited ${cited}`) + `<pre>${rows.join("\n")}</pre>`;
+    // Bring the cited line into view inside the box, not the page.
+    box.querySelector(".hit")?.scrollIntoView({ block: "center" });
+  } catch (err) {
+    box.innerHTML = header("") + `<div class="err">${escapeHtml(String(err.message ?? err))}</div>`;
+  }
+});
 
 /** The theme toggle: dark by default, light on request, remembered per
  * browser. The button names the palette it would switch TO. */
@@ -564,6 +643,8 @@ form.onsubmit = (e) => {
   source.addEventListener("queued", (e) => {
     const d = JSON.parse(e.data);
     document.getElementById("fixture").hidden = !d.fixture;
+    // Citations in this run's answers fetch from this corpus's checkout.
+    runCorpus = d.corpus?.id ?? runCorpus;
     for (const meta of d.arms) {
       const arm = newArm(meta);
       arm.startedAt = performance.now();
@@ -705,7 +786,7 @@ form.onsubmit = (e) => {
         `<b class="grade">${g.grade}</b>` +
         `<span class="meaning">${escapeHtml(GRADE_MEANING[g.grade] ?? "")}` +
         `${g.unsupported !== null && g.unsupported !== undefined ? ` · ${g.unsupported} unsupported claim${g.unsupported === 1 ? "" : "s"}` : ""}</span>` +
-        `${g.reason ? `<span class="reason">${escapeHtml(g.reason)}</span>` : ""}`;
+        `${g.reason ? `<span class="reason">${linkify(g.reason)}</span>` : ""}`;
     }
     const line = v.grades.map((g) => `${g.label.replace(/^Sonnet \+ /, "")} ${g.grade}`).join(" · ");
     const cost = v.costUsd !== null && v.costUsd !== undefined ? ` · $${v.costUsd.toFixed(2)}` : "";

@@ -61,6 +61,7 @@ import { armCost, ledgerMark, ledgerSince, ratesFromEnv } from "./charge.mjs";
 import { fixtureArm, isFixture } from "./fixture.mjs";
 import { judgeArms, judgeEnabled } from "./judge.mjs";
 import { livePhase, phaseOf, phaseSplit } from "./phases.mjs";
+import { sourceWindow } from "./source.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -451,6 +452,23 @@ function plain(res, status, body) {
   res.end(`${body}\n`);
 }
 
+/** GET /source?corpus=&path=&line=&end= - the cited stretch of a file in the
+ * chosen corpus's checkout, for the page to show when a citation is clicked.
+ * The reading stays inside the checkout (see source.mjs); a refusal comes
+ * back as the status it deserves, in plain text. */
+function handleSource(res, url) {
+  const corpus = corpusFor(url.searchParams.get("corpus"));
+  const window = sourceWindow({
+    root: corpus.repo,
+    rel: url.searchParams.get("path"),
+    line: url.searchParams.get("line"),
+    end: url.searchParams.get("end") ?? undefined,
+  });
+  if (!window.ok) return plain(res, window.status, window.error);
+  res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
+  res.end(JSON.stringify({ corpus: corpus.id, ...window }));
+}
+
 /** What the arms are actually looking at, read from the chosen corpus's own
  * manifest and checkout rather than written down here - a description that
  * drifts from the corpus is worse than none, because a reader would trust it
@@ -514,6 +532,7 @@ const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
   const path = route(url.pathname);
   if (path === "/run") return handleRun(req, res, url);
+  if (path === "/source") return handleSource(res, url);
   if (path === "/health") return plain(res, 200, "ok");
   if (path === "/corpus") {
     const chosen = corpusFor(url.searchParams.get("corpus"));

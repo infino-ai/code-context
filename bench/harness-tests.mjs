@@ -47,6 +47,8 @@ import { snowflakeSettings, CHUNK_COLUMNS } from "./snowflake-rest.mjs";
 import { readOnlyError, findSql, searchSql, splitTerms, tableName } from "./snowflake-mcp.mjs";
 import { budgetRule, judgeRules, parseVerdict, queriesBlock, VERIFICATION_RULES } from "./judge-core.mjs";
 import { DEFAULT_DEMO_JUDGE_MAX_TURNS, GRADES, blind, demoJudgeMaxTurns, gradingPrompt, gradingSystem, readGrades } from "../demo/judge.mjs";
+import { SOURCE_CONTEXT_LINES, sourceWindow } from "../demo/source.mjs";
+import { symlinkSync } from "node:fs";
 
 const FAKE_URL = "https://api.example.test/bench-db";
 const FAKE_KEY = "inf_secret_value_that_must_not_leak";
@@ -1079,4 +1081,41 @@ test("readGrades maps the verdict back onto the arms and refuses a half verdict"
   );
   assert.equal(parseVerdict("no braces"), null);
   assert.equal(parseVerdict("{not json}"), null);
+});
+
+// --- the cited-source window ----------------------------------------------
+
+test("sourceWindow shows the cited lines with context, clamped to the file, and refuses to leave the corpus", () => {
+  const root = mkdtempSync(join(tmpdir(), "cx-source-"));
+  const outside = mkdtempSync(join(tmpdir(), "cx-outside-"));
+  writeFileSync(join(outside, "secret.txt"), "not yours\n");
+  const lines = Array.from({ length: 100 }, (_, i) => `line ${i + 1}`);
+  writeFileSync(join(root, "a.rs"), lines.join("\n"));
+  symlinkSync(join(outside, "secret.txt"), join(root, "escape.txt"));
+
+  // A cited line in the middle: context on both sides, the cited range kept.
+  const mid = sourceWindow({ root, rel: "./a.rs", line: 50, end: 52 });
+  assert.equal(mid.ok, true);
+  assert.equal(mid.path, "a.rs", "the ./ is dropped");
+  assert.deepEqual([mid.from, mid.to, mid.line, mid.end, mid.total], [50 - SOURCE_CONTEXT_LINES, 52 + SOURCE_CONTEXT_LINES, 50, 52, 100]);
+  assert.equal(mid.lines[0], `line ${mid.from}`);
+  assert.equal(mid.lines.at(-1), `line ${mid.to}`);
+  // At the ends the window is clamped, and a line past the file is pulled
+  // back to its last line rather than refused.
+  const top = sourceWindow({ root, rel: "a.rs", line: 2 });
+  assert.deepEqual([top.from, top.to, top.line, top.end], [1, 2 + SOURCE_CONTEXT_LINES, 2, 2]);
+  const past = sourceWindow({ root, rel: "a.rs", line: 500 });
+  assert.deepEqual([past.line, past.end, past.to], [100, 100, 100]);
+  // An end before the start is a single line.
+  assert.deepEqual((({ line, end }) => [line, end])(sourceWindow({ root, rel: "a.rs", line: 10, end: 5 })), [10, 10]);
+
+  // Out of the corpus by any route: ".." in the path, an absolute path, a
+  // symlink that resolves outside. None reads a byte.
+  for (const rel of ["../secret.txt", `${outside}/secret.txt`, "escape.txt"]) {
+    const refused = sourceWindow({ root, rel, line: 1 });
+    assert.equal(refused.ok, false, rel);
+    assert.equal(refused.status, 400, rel);
+  }
+  assert.equal(sourceWindow({ root, rel: "missing.rs", line: 1 }).status, 404);
+  assert.equal(sourceWindow({ root, rel: "", line: 1 }).status, 400);
 });
