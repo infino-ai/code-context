@@ -5,39 +5,70 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>grep vs index vs index + subagents</title>
 <style>
+  /* infino's own scheme (infino.ai): near-black ground with a faint grid,
+     warm white text, ONE accent - the orange - and monospace throughout. Dark
+     is the default whatever the OS says, as on the site; the light palette is
+     one click away (the toggle, remembered per browser) rather than a thing
+     the OS decides, because this page is shown, not read in bed. */
   :root {
-    --ground: #0e1116; --panel: #161b22; --ink: #e8ecf1; --soft: #a7b0bd; --faint: #7b8494;
-    --rule: #262d37;
-    --model: #4c5563;      /* the caller model thinking */
-    --retrieval: #2f9e8f;  /* finding code: grep on one side, the index on the other */
-    --subagent: #d9b465;   /* work handed to another loop */
-    --warn: #e39191;
+    --ground: #0b0d12; --panel: #12161d; --ink: #f2f0ea; --soft: #b5b9c2; --faint: #858b96;
+    --rule: #262b35; --grid: rgba(255, 255, 255, .035);
+    --accent: #f0562a;     /* infino orange: the wordmark, the prompt, the button, the index */
+    --accent-ink: #fff;
+    --model: #4a5160;      /* the caller model thinking */
+    --retrieval: #f0562a;  /* finding code: grep on one side, the index on the other */
+    --subagent: #e0b562;   /* work handed to another loop */
+    --warn: #ff8f85;
+    --judge-bg: rgba(255, 255, 255, .04);
+    --grade-a: #45d38f; --grade-b: #e0b562; --grade-c: #ff7a66; --grade-f: #e04b4b;
     --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
   }
-  @media (prefers-color-scheme: light) {
-    :root:not([data-theme="dark"]) {
-      --ground: #f6f7f9; --panel: #fff; --ink: #14181e; --soft: #4c5563; --faint: #7b8494;
-      --rule: #dfe3e9; --model: #b3bac4; --retrieval: #0f7d70; --subagent: #a8801f; --warn: #8c2f2f;
-    }
+  :root[data-theme="light"] {
+    --ground: #f7f6f2; --panel: #fff; --ink: #14181e; --soft: #4c5563; --faint: #7b8494;
+    --rule: #dfe3e9; --grid: rgba(0, 0, 0, .04);
+    --accent: #d9481f; --accent-ink: #fff;
+    --model: #b3bac4; --retrieval: #d9481f; --subagent: #a8801f; --warn: #8c2f2f;
+    --judge-bg: rgba(0, 0, 0, .03);
+    --grade-a: #1a7f4b; --grade-b: #b7791f; --grade-c: #c0392b; --grade-f: #7a1f1f;
   }
   * { box-sizing: border-box; }
   body {
-    margin: 0; background: var(--ground); color: var(--ink);
+    margin: 0; color: var(--ink);
+    /* The site's grid: hairlines every 40px over the ground, faint enough to
+       be texture rather than lines. */
+    background:
+      linear-gradient(var(--grid) 1px, transparent 1px) 0 0 / 40px 40px,
+      linear-gradient(90deg, var(--grid) 1px, transparent 1px) 0 0 / 40px 40px,
+      var(--ground);
     font: 14px/1.55 var(--mono); padding: clamp(16px, 3vw, 36px);
   }
-  h1 { font-size: 17px; font-weight: 500; margin: 0 0 4px; letter-spacing: -.01em; }
+  /* The top line, as the site has it: the wordmark, the page's name behind a
+     prompt, the theme toggle at the far right. */
+  .top { display: flex; align-items: baseline; gap: 18px; margin: 0 0 6px; flex-wrap: wrap; }
+  .brand { color: var(--accent); font-weight: 600; letter-spacing: .06em; font-size: 15px; text-decoration: none; }
+  .brand:hover { text-decoration: underline; }
+  h1 { font-size: 15px; font-weight: 500; margin: 0; letter-spacing: -.01em; flex: 1 1 auto; }
+  h1 .prompt { color: var(--accent); margin-right: .5em; }
+  .theme {
+    background: transparent; color: var(--faint); border: 1px solid var(--rule); padding: 3px 9px;
+    font: inherit; font-size: 12px; cursor: pointer; line-height: 1.4;
+  }
+  .theme:hover { color: var(--ink); border-color: var(--soft); }
+  .theme:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   .sub { color: var(--faint); font-size: 12.5px; margin: 0 0 22px; }
   form { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
   input[type=text] {
     flex: 1 1 420px; min-width: 0; background: var(--panel); color: var(--ink);
     border: 1px solid var(--rule); border-radius: 0; padding: 10px 12px; font: inherit;
   }
-  input[type=text]:focus { outline: 2px solid var(--retrieval); outline-offset: -1px; }
+  input[type=text]:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
   button {
-    background: var(--retrieval); color: #06110f; border: 0; border-radius: 0;
+    background: var(--accent); color: var(--accent-ink); border: 0; border-radius: 0;
     padding: 10px 18px; font: inherit; font-weight: 500; cursor: pointer;
   }
-  button:disabled { background: var(--rule); color: var(--faint); cursor: default; }
+  button:hover:not(:disabled) { filter: brightness(1.08); }
+  button:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+  button:disabled { background: var(--rule); color: var(--faint); cursor: default; filter: none; }
   .corpus {
     background: var(--panel); border: 1px solid var(--rule);
     padding: 14px 16px; margin-bottom: 18px; font-size: 12.5px; color: var(--soft);
@@ -64,6 +95,7 @@
     background: transparent; color: var(--soft); border: 1px solid var(--rule);
     padding: 4px 9px; font-size: 12px; font-weight: 400;
   }
+  .examples button:hover { color: var(--ink); border-color: var(--accent); filter: none; }
   .legend { display: flex; gap: 18px; margin-bottom: 14px; font-size: 12px; color: var(--soft); flex-wrap: wrap; }
   .swatch { display: inline-block; width: 10px; height: 10px; margin-right: 6px; vertical-align: -1px; }
   .status { color: var(--faint); font-size: 12.5px; min-height: 1.6em; margin-bottom: 14px; }
@@ -128,22 +160,36 @@
   }
 /* The judge's grade above each answer: the letter, what it means, the
    one-line reason. Colour says the grade; the words say why. */
-.judge { display: flex; flex-wrap: wrap; gap: .4rem .7rem; align-items: baseline; margin: .9rem 0 .4rem; padding: .55rem .7rem; border-left: 4px solid var(--faint); background: rgba(0,0,0,.03); font-size: .9rem; }
+.judge { display: flex; flex-wrap: wrap; gap: .4rem .7rem; align-items: baseline; margin: .9rem 0 .4rem; padding: .55rem .7rem; border-left: 4px solid var(--faint); background: var(--judge-bg); font-size: .9rem; }
 .judge.pending { color: var(--faint); font-style: italic; }
 .judge .grade { font-size: 1.25rem; font-weight: 700; letter-spacing: .02em; min-width: 1.4rem; }
 .judge .meaning { color: var(--faint); }
 .judge .reason { flex-basis: 100%; }
-.judge.grade-A { border-left-color: #1a7f4b; } .judge.grade-A .grade { color: #1a7f4b; }
-.judge.grade-B { border-left-color: #b7791f; } .judge.grade-B .grade { color: #b7791f; }
-.judge.grade-C { border-left-color: #c0392b; } .judge.grade-C .grade { color: #c0392b; }
-.judge.grade-F { border-left-color: #7a1f1f; } .judge.grade-F .grade { color: #7a1f1f; }
+.judge.grade-A { border-left-color: var(--grade-a); } .judge.grade-A .grade { color: var(--grade-a); }
+.judge.grade-B { border-left-color: var(--grade-b); } .judge.grade-B .grade { color: var(--grade-b); }
+.judge.grade-C { border-left-color: var(--grade-c); } .judge.grade-C .grade { color: var(--grade-c); }
+.judge.grade-F { border-left-color: var(--grade-f); } .judge.grade-F .grade { color: var(--grade-f); }
 </style>
 </head>
 <body>
+<script>
+// The remembered theme, applied before anything paints so a light-theme
+// reader never sees a dark flash (and the reverse). Dark is the default.
+(() => {
+  try {
+    const saved = localStorage.getItem("cx-demo-theme");
+    if (saved === "light") document.documentElement.dataset.theme = "light";
+  } catch { /* storage unavailable: the default stands */ }
+})();
+</script>
 
 <div class="fixture" id="fixture" hidden>FIXTURE MODE — invented data. No model ran, no question was answered. Nothing on this page is a measurement.</div>
 
-<h1>Sonnet: grep &nbsp;vs&nbsp; index only &nbsp;vs&nbsp; index + subagents</h1>
+<div class="top">
+  <a class="brand" href="https://infino.ai" target="_blank" rel="noopener">infino</a>
+  <h1><span class="prompt" aria-hidden="true">❯</span>Sonnet: grep &nbsp;vs&nbsp; index only &nbsp;vs&nbsp; index + subagents</h1>
+  <button type="button" class="theme" id="theme" title="switch between the dark and light palette">☀ light</button>
+</div>
 <p class="sub">Ask your own question. All three arms run at once, each bar fills as its own run happens, coloured by where the time is going, and each panel settles the moment that arm finishes.</p>
 
 <div class="corpus" id="corpus-panel">
@@ -464,6 +510,24 @@ const shortModel = (id) => {
   const m = /(opus|sonnet|haiku|fable)/i.exec(String(id));
   return m ? m[1][0].toUpperCase() + m[1].slice(1).toLowerCase() : String(id);
 };
+
+/** The theme toggle: dark by default, light on request, remembered per
+ * browser. The button names the palette it would switch TO. */
+{
+  const themeBtn = document.getElementById("theme");
+  const paint = () => {
+    const light = document.documentElement.dataset.theme === "light";
+    themeBtn.textContent = light ? "☾ dark" : "☀ light";
+  };
+  themeBtn.onclick = () => {
+    const light = document.documentElement.dataset.theme === "light";
+    if (light) delete document.documentElement.dataset.theme;
+    else document.documentElement.dataset.theme = "light";
+    try { localStorage.setItem("cx-demo-theme", light ? "dark" : "light"); } catch { /* per-browser convenience only */ }
+    paint();
+  };
+  paint();
+}
 
 let live = null;
 
