@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>grep vs index vs index + subagents</title>
+<title>Sonnet: File Tools vs Infino</title>
 <style>
   /* infino's own scheme (infino.ai): near-black ground with a faint grid,
      warm white text, ONE accent - the orange - and monospace throughout. Dark
@@ -265,7 +265,7 @@
 
 <div class="top">
   <a class="brand" href="https://infino.ai" target="_blank" rel="noopener">infino</a>
-  <h1><span class="prompt" aria-hidden="true">❯</span>Sonnet: grep &nbsp;vs&nbsp; index only &nbsp;vs&nbsp; index + subagents</h1>
+  <h1><span class="prompt" aria-hidden="true">❯</span>Sonnet: File Tools &nbsp;vs&nbsp; Infino</h1>
   <button type="button" class="theme" id="theme" title="switch between the dark and light palette">☀ light</button>
 </div>
 <p class="sub">Ask your own question. All three arms run at once, each bar fills as its own run happens, coloured by where the time is going, and each panel settles the moment that arm finishes.</p>
@@ -284,10 +284,10 @@
     </p>
     <p class="subsystems" id="subsystems"></p>
     <p>
-      Every arm sees the same checkout. The grep arm reads it off disk; the others query an index of it —
-      one with the caller driving retrieval itself, one that can also hand a search to a loop of ours. Questions
-      that make an agent sweep many files are where they diverge; a question answered from a single named file
-      usually comes out level.
+      Every arm sees the same checkout. The File Tools arm reads it off disk with Grep, Glob and Read — what a
+      developer has today; the others query an Infino index of it — one with the caller driving retrieval
+      itself, one that can also hand a search to a loop of ours. Questions that make an agent sweep many files
+      are where they diverge; a question answered from a single named file usually comes out level.
     </p>
   </div>
 </details>
@@ -303,10 +303,10 @@
 
 <div class="controls">
   <span><i class="swatch" style="background:var(--model)"></i>model — the caller thinking</span>
-  <span><i class="swatch" style="background:var(--retrieval)"></i>retrieval — finding code (grep / the index)</span>
+  <span><i class="swatch" style="background:var(--retrieval)"></i>retrieval — finding code (file tools / the index)</span>
   <span id="legend-subagent" hidden><i class="swatch" style="background:var(--subagent)"></i>subagent — handed to another loop</span>
   <label class="third" title="the third arm hands searches to a loop of ours; it runs either way, this only shows it">
-    <input type="checkbox" id="show-third"> show the subagent arm
+    <input type="checkbox" id="show-third"> show Infino Subagents
   </label>
 </div>
 
@@ -372,7 +372,7 @@ function loadCorpus(id) {
       }
       drawExamples(c.examples ?? []);
       corpusNoteEl.hidden = c.ready !== false;
-      corpusNoteEl.textContent = c.ready === false ? `Grep arm only — ${c.note}` : "";
+      corpusNoteEl.textContent = c.ready === false ? `File Tools arm only — ${c.note}` : "";
       describeCorpus(c);
     })
     .catch(() => {
@@ -700,7 +700,7 @@ function headlineGroup(base, r) {
     // it pulls into context, a ranked query's is capped by k.
     ratioTile(r.tokens > 0 && base.tokens > 0 ? base.tokens / r.tokens : null, "fewer tokens"),
   ].filter(Boolean);
-  group.innerHTML = `<h3><b>${escapeHtml(short)}</b> vs grep</h3>`;
+  group.innerHTML = `<h3><b>${escapeHtml(short)}</b> vs File Tools</h3>`;
   const stats = document.createElement("div");
   stats.className = "stats";
   if (tiles.length) stats.append(...tiles);
@@ -710,8 +710,8 @@ function headlineGroup(base, r) {
 }
 
 /** The third arm - the one that hands a search to a loop of ours - is off by
- * default. The comparison a reader came for is grep against the index, and a
- * third panel beside it was the first thing that made the page dense. The arm
+ * default. The comparison a reader came for is File Tools against Infino, and
+ * a third panel beside it was the first thing that made the page dense. The arm
  * still RUNS either way: the switch reveals what already happened, so turning
  * it on mid-run shows a panel that has been filling all along.
  *
@@ -803,7 +803,7 @@ form.onsubmit = (e) => {
   source.addEventListener("started", (e) => {
     const d = JSON.parse(e.data);
     for (const arm of arms.values()) arm.startedAt = performance.now();
-    statusEl.textContent = `Running both arms — run ${d.run} of ${d.of}. This takes tens of seconds; the grep arm can take minutes.`;
+    statusEl.textContent = `Running — run ${d.run} of ${d.of}. This takes tens of seconds; the File Tools arm can take minutes.`;
   });
 
   /** Move the bar to where this event puts it. Only calls the CALLER made
@@ -875,7 +875,7 @@ form.onsubmit = (e) => {
     if (base && !base.error && ours.length) {
       for (const r of ours) headlineEl.append(headlineGroup(base, r));
       headlineEl.hidden = false;
-      statusEl.textContent = "Done — against grep, on this one question.";
+      statusEl.textContent = "Done — against File Tools, on this one question.";
     } else {
       statusEl.textContent = "Done, with an error on at least one arm.";
     }

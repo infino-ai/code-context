@@ -85,8 +85,8 @@ const SCRIPTS = {
     tokens: 216_665,
     entries: [],
     answer:
-      "FIXTURE - no model ran. In a real run this pane holds the grep arm's answer, " +
-      "which on the recorded set was about the same quality as the infino arm's and cost three times as much.",
+      "FIXTURE - no model ran. In a real run this pane holds the File Tools arm's answer, " +
+      "which on the recorded set was about the same quality as the Infino arm's and cost three times as much.",
   },
   index: {
     script: INDEX_SCRIPT,

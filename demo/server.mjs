@@ -65,12 +65,17 @@ import { sourceWindow } from "./source.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
-/** The two arms, in the order they are drawn. `id` reaches the browser; `lane`
- * is the harness lane that defines the tool surface. */
+/** The arms, in the order they are drawn. `id` reaches the browser; `lane`
+ * is the harness lane that defines the tool surface.
+ *
+ * The ids are the internal names and stay as they are - `grep` is the
+ * baseline everything is read against, in the results, the fixture and the
+ * page's own rules - while the LABELS are what a reader sees and name the
+ * products rather than the mechanism. */
 export const ARMS = [
-  { id: "grep", label: "Sonnet + grep", lane: "stock-explore", hosted: false },
-  { id: "index", label: "Sonnet + index only", lane: "hosted-index", hosted: true },
-  { id: "subagents", label: "Sonnet + index + subagents", lane: "hosted-full-remote", hosted: true },
+  { id: "grep", label: "Sonnet + File Tools", lane: "stock-explore", hosted: false },
+  { id: "index", label: "Sonnet + Infino", lane: "hosted-index", hosted: true },
+  { id: "subagents", label: "Sonnet + Infino Subagents", lane: "hosted-full-remote", hosted: true },
 ];
 
 /** The corpora the page can ask about.
