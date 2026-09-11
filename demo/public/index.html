@@ -303,13 +303,14 @@
 
 <div class="controls">
   <span><i class="swatch" style="background:var(--model)"></i>model — the caller thinking</span>
-  <span><i class="swatch" style="background:var(--retrieval)"></i>retrieval — finding code (file tools / the index)</span>
-  <!-- Always shown, whichever arms are on screen: the legend names the three
-       PHASES a bar is drawn in, and every arm can spend time in all three.
-       The File Tools arm delegates to the caller's own Explore subagent and
-       is usually mostly gold, so hiding this key with the third arm left the
-       widest band on the first panel unexplained. -->
-  <span><i class="swatch" style="background:var(--subagent)"></i>subagent — handed to another loop</span>
+  <!-- The split is WHO ran the search, not which tool: `spansOf` counts a call
+       as retrieval only when the caller made it itself (!inSubagent), so the
+       File Tools arm - which hands almost everything to its own Explore -
+       measures ~0% retrieval and ~80% subagent, and the old wording
+       ("file tools / the index") named a band that panel never shows.
+       Both keys are always on screen: every arm can spend time in all three. -->
+  <span><i class="swatch" style="background:var(--retrieval)"></i>retrieval — the caller searching itself</span>
+  <span><i class="swatch" style="background:var(--subagent)"></i>subagent — handed to another loop, its own searching inside</span>
   <label class="third" title="the third arm hands searches to a loop of ours; it runs either way, this only shows it">
     <input type="checkbox" id="show-third"> show Infino Subagents
   </label>
@@ -571,6 +572,17 @@ function render(arm, r) {
   const n = (v) => (v === null || v === undefined ? "—" : v.toLocaleString());
   const ours = r.cost.ours;
   const m = r.cost.metered;
+  // The charge breaks down into retrieval and inference only on the subagent
+  // arm, where our loop runs models: that is the one place an inference line
+  // is anything but zero. On the other two it was four rows of zeros between
+  // the model bill and the total, so they show the total alone.
+  const breakdown = arm.meta.id === "subagents"
+    ? `
+      <tr><th>our read tokens</th><td>${n(m.readTokens)}</td></tr>
+      <tr><th>our inference tokens</th><td>${n(m.modelTokens)}</td></tr>
+      <tr><th>our charge · retrieval</th><td>${ours.retrievalUsd === null ? "unpriced" : money(ours.retrievalUsd)}</td></tr>
+      <tr><th>our charge · inference</th><td>${ours.inferenceUsd === null ? "unpriced" : money(ours.inferenceUsd)}</td></tr>`
+    : "";
   arm.bodyEl.innerHTML = `
     <table>
       <tr><th>wall clock</th><td>${(r.wallMs / 1000).toFixed(1)}s</td></tr>
@@ -579,12 +591,8 @@ function render(arm, r) {
         r.subagentTurns ? ` <span style="color:var(--faint)">(${n(r.subagentTurns)} turns)</span>` : ""
       }</td></tr>
       <tr><th>caller tokens</th><td>${n(r.tokens)}</td></tr>
-      <tr><th>their model bill</th><td>${money(r.cost.theirModelBillUsd)}</td></tr>
-      <tr><th>our read tokens</th><td>${n(m.readTokens)}</td></tr>
-      <tr><th>our inference tokens</th><td>${n(m.modelTokens)}</td></tr>
-      <tr><th>our charge · retrieval</th><td>${ours.retrievalUsd === null ? "unpriced" : money(ours.retrievalUsd)}</td></tr>
-      <tr><th>our charge · inference</th><td>${ours.inferenceUsd === null ? "unpriced" : money(ours.inferenceUsd)}</td></tr>
-      <tr><th>our charge · total</th><td>${ours.priced ? money(ours.totalUsd) : "unpriced"}</td></tr>
+      <tr><th>their model bill</th><td>${money(r.cost.theirModelBillUsd)}</td></tr>${breakdown}
+      <tr><th>our charge${arm.meta.id === "subagents" ? " · total" : ""}</th><td>${ours.priced ? money(ours.totalUsd) : "unpriced"}</td></tr>
       <tr class="bottomline"><th>total customer charge</th><td>${
         r.cost.theirModelBillUsd !== null && ours.priced ? money(r.cost.theirModelBillUsd + ours.totalUsd) : "—"
       }</td></tr>
