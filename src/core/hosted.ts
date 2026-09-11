@@ -14,6 +14,8 @@
 import * as arrow from "apache-arrow";
 import { Agent, fetch as undiciFetch } from "undici";
 
+import { jsonify } from "./json.js";
+
 // --- constants ------------------------------------------------------------------
 
 /** The HTTP agent every platform call goes through. Node's global fetch runs
@@ -379,6 +381,36 @@ export class HostedDb {
    * purge to true; it is sent explicitly so the request says what it does. */
   async dropTable(table: string, purge = true): Promise<void> {
     await this.postJson("drop_table", { table_name: table, purge }, false);
+  }
+
+  /** `POST /v1/validate/{db}`: did this result answer this question? The
+   * retrieval-contract check the platform's own answering loop gates every
+   * query on, over the caller's statement, rows and (optionally) question.
+   *
+   * No table read and no model on the platform side, so it is fast and
+   * cannot fail for a platform reason; metered as a read at the floor, with
+   * the billed tokens on the response header like every other call. It is
+   * the platform's own copy of the rules rather than a second implementation
+   * here, which would drift from the loop's within a release.
+   *
+   * `valid: true` means the result would be accepted as the answer, NOT that
+   * the answer is correct: rows that name the question's terms and say
+   * something false pass. */
+  async validate(req: { statement: string; rows: readonly object[]; question?: string }): Promise<RowRecord> {
+    const body: RowRecord = { statement: req.statement, rows: req.rows };
+    if (req.question !== undefined) body.question = req.question;
+    // jsonify, not JSON.stringify: rows off the local engine carry bigint
+    // cells (a COUNT(*) is one), and the aggregate case is the one this
+    // check exists for - the first live run lost exactly that case here.
+    const exchange = await this.call({
+      op: "validate",
+      method: "POST",
+      body: jsonify(body),
+      contentType: JSON_CONTENT_TYPE,
+      acceptJson: true,
+      timeoutMs: this.timeoutMs,
+    });
+    return this.parseJson(exchange, "validate") as RowRecord;
   }
 
   /** `GET /v1/table_card/{db}?table=[&tier=]`: the table's card - its schema

@@ -74,14 +74,10 @@ export function partialIndex(manifest: Manifest): PartialIndex | undefined {
   };
 }
 
-/** JSON.stringify that survives the engine's bigint row values. */
-export function jsonify(value: unknown, pretty = false): string {
-  return JSON.stringify(
-    value,
-    (_k, v) => (typeof v === "bigint" ? Number(v) : v),
-    pretty ? 2 : undefined,
-  );
-}
+// The bigint-safe JSON.stringify lives in json.ts so the hosted client can
+// share it without importing this module (and the local engine with it); it
+// is re-exported here for the callers that always found it on the searcher.
+export { jsonify } from "./json.js";
 
 /** The ledger's record of what the platform call behind an `ask` or
  * `explore` result cost: the round trip of the answering request and the
@@ -129,6 +125,37 @@ export interface SearchResult {
 }
 
 const PROJECTION = ["path", "start_line", "end_line", "lang", "symbol", "content", "score"];
+
+/** `text` as a SQL string literal: single-quoted, with each quote doubled -
+ * the engine's own quoting, and the platform's (`sql_literal`). */
+export function sqlLiteral(text: string): string {
+  return `'${text.replace(/'/g, "''")}'`;
+}
+
+// --- statements -------------------------------------------------------------
+//
+// A search or a find is not written as SQL by the caller, but the platform's
+// retrieval contract reads the statement that produced a result to tell an
+// aggregate from a row-returning query (and never for its literals). These
+// render each call the way the platform's own answering loop names the same
+// call beside its rows - `hybrid_search(...)`, `bm25_search(...)`, `find(...)`
+// - so the verdict on a client search is the verdict the loop would reach on
+// its own.
+
+/** The statement a `search` ran as, in the loop's own shape for the same call. */
+export function searchStatement(query: string, k: number, ranking: "hybrid" | "keyword"): string {
+  const projection = PROJECTION.join(", ");
+  return ranking === "hybrid"
+    ? `SELECT ${projection} FROM hybrid_search(${sqlLiteral(TABLE)}, ${sqlLiteral(CONTENT_COLUMN)}, ${sqlLiteral(query)}, ${sqlLiteral(EMBEDDING_COLUMN)}, {{q}}, ${k})`
+    : `SELECT ${projection} FROM bm25_search(${sqlLiteral(TABLE)}, ${sqlLiteral(CONTENT_COLUMN)}, ${sqlLiteral(query)}, ${k})`;
+}
+
+/** The statement a `find` ran as: `find(<table>, <column>, <literal>)`, the
+ * loop's own name for a line-grain literal search, which its contract never
+ * reads as an aggregate whatever the literal says. */
+export function findStatement(query: string): string {
+  return `find(${sqlLiteral(TABLE)}, ${sqlLiteral(CONTENT_COLUMN)}, ${sqlLiteral(query)})`;
+}
 
 /** One engine row as a hit. Shared by the local and the hosted search so the
  * two cannot drift: a caller must not be able to tell from the shape of a hit
