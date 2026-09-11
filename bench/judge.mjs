@@ -33,7 +33,7 @@
 // Model: JUDGE_MODEL (default claude-opus-5). Concurrency: CX_BENCH_CONCURRENCY.
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { DEFAULT_JUDGE_MODEL, VERIFICATION_RULES, judgeOnce, parseVerdict, queriesBlock } from "./judge-core.mjs";
+import { DEFAULT_JUDGE_MODEL, JUDGE_MAX_TURNS, judgeOnce, judgeRules, parseVerdict, queriesBlock } from "./judge-core.mjs";
 import { RESULTS, record, laneDef, recordedQueries } from "./lanes.mjs";
 
 const [repoArg, baselineArg, candidateArg, resultsArg, catsArg, laneArg] = process.argv.slice(2);
@@ -120,7 +120,7 @@ console.log(`judge=${JUDGE_MODEL}  rule=${JUDGE_RULE}  lane=${laneWanted}  basel
 // what counts as supported.
 const system =
   `You are judging two answers to a question about the repository checked out at ${repoDir}. ` +
-  `${VERIFICATION_RULES} ` +
+  `${judgeRules(JUDGE_MAX_TURNS)} ` +
   `Finish with a single JSON object and nothing ` +
   `after it: {"winner":"A"|"B"|"tie","confidence":<0..1>,"unsupported_a":<int>,"unsupported_b":<int>,"reason":"<one sentence>"} ` +
   `where unsupported_* counts the claims in that answer the repository does not support.`;

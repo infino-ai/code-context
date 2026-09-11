@@ -45,8 +45,8 @@ import { warmHosted, splitDbUrl, DEFAULT_RETRY_AFTER_SECS } from "./warm-hosted.
 import { indexArgs, runIndexBuild, hostOf } from "./load-hosted.mjs";
 import { snowflakeSettings, CHUNK_COLUMNS } from "./snowflake-rest.mjs";
 import { readOnlyError, findSql, searchSql, splitTerms, tableName } from "./snowflake-mcp.mjs";
-import { parseVerdict, queriesBlock, VERIFICATION_RULES } from "./judge-core.mjs";
-import { GRADES, blind, gradingPrompt, gradingSystem, readGrades } from "../demo/judge.mjs";
+import { budgetRule, judgeRules, parseVerdict, queriesBlock, VERIFICATION_RULES } from "./judge-core.mjs";
+import { DEFAULT_DEMO_JUDGE_MAX_TURNS, GRADES, blind, demoJudgeMaxTurns, gradingPrompt, gradingSystem, readGrades } from "../demo/judge.mjs";
 
 const FAKE_URL = "https://api.example.test/bench-db";
 const FAKE_KEY = "inf_secret_value_that_must_not_leak";
@@ -1029,9 +1029,18 @@ test("the grading prompt carries every answer under its label with its recorded 
   assert.equal(queriesBlock(undefined).startsWith("(this run's queries were not recorded"), true);
 });
 
-test("the grading system prompt is the shared verification rules plus the rubric and the verdict shape", () => {
-  const system = gradingSystem("/r");
+test("the grading system prompt is the shared verification rules plus the turn budget, the rubric and the verdict shape", () => {
+  const system = gradingSystem("/r", 45);
   assert.equal(system.includes(VERIFICATION_RULES), true);
+  // The budget is the cap less the writing turns, and the bench's judge
+  // states it the same way from the same rule.
+  assert.equal(system.includes(budgetRule(45)), true);
+  assert.match(budgetRule(45), /at most 43 tool calls/);
+  assert.match(budgetRule(30), /at most 28 tool calls/);
+  assert.equal(judgeRules(30), `${VERIFICATION_RULES} ${budgetRule(30)}`);
+  assert.equal(demoJudgeMaxTurns({}), DEFAULT_DEMO_JUDGE_MAX_TURNS);
+  assert.equal(demoJudgeMaxTurns({ DEMO_JUDGE_MAX_TURNS: "60" }), 60);
+  assert.throws(() => demoJudgeMaxTurns({ DEMO_JUDGE_MAX_TURNS: "2" }), /DEMO_JUDGE_MAX_TURNS/);
   for (const g of GRADES) assert.match(system, new RegExp(`${g}: `));
   assert.match(system, /"grades":\{"1":/);
   assert.match(system, /bare label number/);

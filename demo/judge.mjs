@@ -13,7 +13,24 @@
 //
 // The judge's own cost is reported beside the grades and kept out of every
 // arm's numbers; it is the price of the measurement, not of any arm.
-import { DEFAULT_JUDGE_MODEL, VERIFICATION_RULES, judgeOnce, parseVerdict, queriesBlock } from "../bench/judge-core.mjs";
+import { DEFAULT_JUDGE_MODEL, judgeOnce, judgeRules, parseVerdict, queriesBlock } from "../bench/judge-core.mjs";
+
+/** Turns the demo's judge may take. The bench's judge has 30 for two
+ * answers; the demo grades three, about mechanisms that span layers, and on
+ * 2026-09-11 the first live run reached 30 with no verdict written. 45 is
+ * that, scaled to three answers, with the writing turns kept. Each turn is a
+ * strong-model call, so this is also the ceiling on what a grade costs.
+ * DEMO_JUDGE_MAX_TURNS overrides. */
+export const DEFAULT_DEMO_JUDGE_MAX_TURNS = 45;
+const JUDGE_MAX_TURNS_ENV = "DEMO_JUDGE_MAX_TURNS";
+
+export function demoJudgeMaxTurns(env = process.env) {
+  const raw = env[JUDGE_MAX_TURNS_ENV]?.trim();
+  if (raw === undefined || raw.length === 0) return DEFAULT_DEMO_JUDGE_MAX_TURNS;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 3) throw new Error(`${JUDGE_MAX_TURNS_ENV} must be an integer of at least 3, got "${raw}"`);
+  return n;
+}
 
 /** The grades, best first, and what each one means - shown to the judge as
  * the rubric and to the reader as the legend, so both read the same words. */
@@ -44,11 +61,11 @@ export function blind(results, random = Math.random) {
 
 /** The judge's instructions: the shared verification rules with the demo's
  * rubric and verdict shape around them. */
-export function gradingSystem(repoDir) {
+export function gradingSystem(repoDir, maxTurns = demoJudgeMaxTurns()) {
   const rubric = GRADES.map((g) => `${g}: ${GRADE_MEANING[g]}`).join("; ");
   return (
     `You are grading answers to one question about the repository checked out at ${repoDir}. ` +
-    `${VERIFICATION_RULES} Grade each answer on accuracy alone - ${rubric}. ` +
+    `${judgeRules(maxTurns)} Grade each answer on accuracy alone - ${rubric}. ` +
     `Finish with a single JSON object and nothing after it: ` +
     `{"grades":{"1":"A"|"B"|"C"|"F",...},"unsupported":{"1":<int>,...},"reasons":{"1":"<one sentence>",...}} ` +
     `keyed by each answer's bare label number, one entry per answer, where unsupported counts the ` +
@@ -109,25 +126,42 @@ export function readGrades(text, labelled) {
  * original order with the judge's cost beside them; on a failure the grades
  * are null and `error` says why, so the page can say "unjudged" rather than
  * invent a verdict. */
-export async function judgeArms({ repoDir, indexDir, question, results, rows = new Map(), model = DEFAULT_JUDGE_MODEL, random = Math.random }) {
+export async function judgeArms({
+  repoDir,
+  indexDir,
+  question,
+  results,
+  rows = new Map(),
+  model = DEFAULT_JUDGE_MODEL,
+  maxTurns = demoJudgeMaxTurns(),
+  random = Math.random,
+}) {
   const labelled = blind(results, random);
   const run = await judgeOnce({
     repoDir,
     indexDir,
     model,
-    system: gradingSystem(repoDir),
+    maxTurns,
+    system: gradingSystem(repoDir, maxTurns),
     prompt: gradingPrompt(question, labelled, rows),
   });
   const byArm = run.error ? null : readGrades(run.text, labelled);
   const grades = byArm ? results.map((r) => byArm.find((g) => g.arm === r.arm)) : null;
+  const noVerdict = run.hitTurnCap
+    ? `the judge reached its ${maxTurns}-turn cap before writing a verdict`
+    : `no verdict in: ${run.text.slice(-200)}`;
   return {
     model: run.model,
     grades,
+    // A verdict written on the last turn still counts; the cap is reported
+    // beside it so a reader knows the grading stopped where the budget did.
+    hitTurnCap: run.hitTurnCap,
+    turns: run.turns,
     costUsd: run.costUsd,
     tokens: run.tokens,
     wallMs: run.wallMs,
     toolCalls: run.toolCalls.length,
     toolErrors: run.toolErrors.length,
-    error: run.error ?? (byArm ? null : `no verdict in: ${run.text.slice(-200)}`),
+    error: run.error ?? (byArm ? null : noVerdict),
   };
 }

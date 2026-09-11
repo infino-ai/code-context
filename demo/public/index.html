@@ -645,9 +645,12 @@ form.onsubmit = (e) => {
     }
     const line = v.grades.map((g) => `${g.label.replace(/^Sonnet \+ /, "")} ${g.grade}`).join(" · ");
     const cost = v.costUsd !== null && v.costUsd !== undefined ? ` · $${v.costUsd.toFixed(2)}` : "";
+    // A verdict given at the turn budget is a verdict on what was checked;
+    // the reader is told the checking stopped there.
+    const capped = v.hitTurnCap ? " · graded at the turn budget, some claims unchecked" : "";
     statusEl.textContent = statusEl.textContent.replace(
       / Grading accuracy.*$/,
-      ` Accuracy by ${judge}, blind and verified against the repository: ${line} (${v.toolCalls} checks${cost}, ${(v.wallMs / 1000).toFixed(0)}s).`,
+      ` Accuracy by ${judge}, blind and verified against the repository: ${line} (${v.toolCalls} checks${cost}, ${(v.wallMs / 1000).toFixed(0)}s${capped}).`,
     );
     stop();
   });

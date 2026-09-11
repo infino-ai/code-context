@@ -47,6 +47,25 @@ export const VERIFICATION_RULES =
   `unsupported. An answer whose queries were not recorded is verified with your own queries. ` +
   `Judge correctness and how well each claim is supported; do not reward length or formatting.`;
 
+/** How the judge spends a bounded number of turns, so it grades rather than
+ * runs out. Three long answers about a layered mechanism took the demo's
+ * judge past 30 turns with no verdict written (2026-09-11), and the bench's
+ * hit the same wall on two recorded questions. The budget is stated in tool
+ * calls, two short of the cap: the last turns are for writing. */
+export function budgetRule(maxTurns) {
+  const calls = Math.max(1, maxTurns - 2);
+  return (
+    `You have at most ${calls} tool calls in total. Spend them in this order: rerun each answer's ` +
+    `recorded queries, then check the claims that carry the most weight in each answer. When the ` +
+    `budget is nearly spent, stop checking and give the verdict from what you have verified - say in ` +
+    `each reason which claims went unchecked. A verdict on verified claims beats no verdict.`
+  );
+}
+
+/** The rules a judging call runs under: how a claim is verified, and how the
+ * turns are spent doing it. */
+export const judgeRules = (maxTurns) => `${VERIFICATION_RULES} ${budgetRule(maxTurns)}`;
+
 /** The queries one answer's run made, as the judge is handed them; a run
  * written before inputs were kept says so, and the judge falls back to its
  * own queries for that side. */
@@ -82,14 +101,22 @@ export function parseVerdict(text) {
 /** One grounded judging call. The model reads `prompt` under `system` with
  * the checkout's tools and the local index's, and what comes back is its
  * final text and what the call cost - the caller parses the verdict, because
- * only the caller knows what shape it asked for. */
+ * only the caller knows what shape it asked for.
+ *
+ * `text` is the run's final result, or - when the run ended in an error such
+ * as the turn cap - the last thing the model wrote, so a verdict given on
+ * the final turn is not replaced by the error's wording. `hitTurnCap` says
+ * the cap ended the run. */
 export async function judgeOnce({ repoDir, indexDir, system, prompt, model = DEFAULT_JUDGE_MODEL, maxTurns = JUDGE_MAX_TURNS }) {
   const t0 = performance.now();
   const acc = newToolAccounting();
   let text = "";
+  let lastWritten = "";
   let costUsd = null;
   let usage = null;
   let error = null;
+  let hitTurnCap = false;
+  let turns = null;
   try {
     for await (const m of query({
       prompt,
@@ -107,10 +134,15 @@ export async function judgeOnce({ repoDir, indexDir, system, prompt, model = DEF
       },
     })) {
       foldToolMessage(acc, m);
+      if (m.type === "assistant") {
+        for (const b of m.message?.content ?? []) if (b.type === "text" && b.text) lastWritten = b.text;
+      }
       if (m.type === "result") {
         usage = m.usage ?? null;
         costUsd = m.total_cost_usd ?? null;
-        if (m.result) text = m.result;
+        turns = m.num_turns ?? null;
+        hitTurnCap = m.subtype === "error_max_turns" || /maximum number of turns/i.test(String(m.result ?? ""));
+        text = m.is_error ? lastWritten : (m.result || lastWritten);
       }
     }
   } catch (err) {
@@ -120,6 +152,8 @@ export async function judgeOnce({ repoDir, indexDir, system, prompt, model = DEF
   return {
     model,
     text,
+    hitTurnCap,
+    turns,
     costUsd,
     tokens: (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.output_tokens ?? 0),
     wallMs: Math.round(performance.now() - t0),
