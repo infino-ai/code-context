@@ -475,8 +475,8 @@ export async function serveMcp(rootPath?: string): Promise<void> {
     statement: string,
     rows: readonly object[],
     question?: string,
-  ): Promise<Record<string, unknown> | undefined> => {
-    if (!ctx.hosted || !verdictDb) return undefined;
+  ): Promise<{ verdict?: Record<string, unknown>; telemetry?: { rttMs: number; readTokens?: number } }> => {
+    if (!ctx.hosted || !verdictDb) return {};
     try {
       const verdict = await verdictDb.validate({
         table: TABLE,
@@ -485,17 +485,31 @@ export async function serveMcp(rootPath?: string): Promise<void> {
         rows,
         ...(question ? { question } : {}),
       });
+      // The validate call is a metered platform read (a floor Read Token),
+      // so its cost belongs in the ledger like a search's - otherwise the
+      // gateway bills it and the demo's "our charge" never shows it. Captured
+      // here, right after the await, so a concurrent verdict cannot overwrite
+      // `lastCall` before the caller reads it. It goes through its own client,
+      // which is why `withPlatform(entry, ctx)` (reading ctx.hosted) would
+      // miss it.
+      const info = verdictDb.lastCall();
+      const telemetry = info
+        ? { rttMs: info.rttMs, ...(info.readTokens !== undefined ? { readTokens: info.readTokens } : {}) }
+        : undefined;
       // `anchors` and `rows` are the check's own working, not news to the
       // caller, and on a valid result the whole verdict is one word; the
       // reason is the part worth prompt space - with the terms the corpus
       // does not hold and the rewrite to run, when the platform found them.
-      if (verdict.valid === true) return { valid: true, check: verdict.check };
+      if (verdict.valid === true) return { verdict: { valid: true, check: verdict.check }, telemetry };
       const absent = Array.isArray(verdict.absent) && verdict.absent.length > 0 ? { absent: verdict.absent } : {};
       const suggestion = typeof verdict.suggestion === "string" ? { suggestion: verdict.suggestion } : {};
-      return { valid: false, check: verdict.check, reason: verdict.reason, ...absent, ...suggestion };
+      return {
+        verdict: { valid: false, check: verdict.check, reason: verdict.reason, ...absent, ...suggestion },
+        telemetry,
+      };
     } catch (err) {
       console.error(`validation unavailable: ${(err as Error).message}`);
-      return undefined;
+      return {};
     }
   };
 
@@ -866,10 +880,13 @@ export async function serveMcp(rootPath?: string): Promise<void> {
         // no question the aggregate half still applies, and that is the half
         // that matters for a ranking or a count - the case where a statement
         // runs, returns a row of zeros, and reads as an answer.
-        const verdict = await platformVerdict(ctx, query, rows, question);
+        const { verdict, telemetry } = await platformVerdict(ctx, query, rows, question);
         let usage: string | undefined;
         if (receiptOn) {
           const entry = sqlEntry(query, rows);
+          // The validate call's metered Read Tokens: filed so "our charge"
+          // reflects what the platform actually billed for this sql.
+          if (telemetry) entry.platform = telemetry;
           recordUsage(ctx.dir, entry);
           usage = formatReceipt(entry, session);
         }
