@@ -432,7 +432,9 @@ export function rowsSqlDescription(shape: TableShape): string {
     "substring (scala -> scalable, scaling, escalate), so its cost is set by that expansion, which the question " +
     "cannot predict - measured on one 6.7 GB column: 0.9 s for '%cobol%', 3.8 s for '%tableau%', 10 s for " +
     "'%scala%', 11 s for '%clearance%', against 0.12 s for the same question through token_match. Keep LIKE for " +
-    "when you mean a substring inside a word. " +
+    "when you mean a substring inside a word. Select FROM the search relation itself - it already carries " +
+    `${key} and every scalar column - rather than joining it back with WHERE ${key} IN (SELECT ${key} FROM ` +
+    "token_match(...)), which reads the whole table a second time for nothing. " +
     (vectorColumn
       ? 'The {{q:"..."}} placeholder is embedded on the platform with the table\'s own model, so it costs you ' +
         "nothing but the text (a bare {{q}} with the embed map is folded into it). "
