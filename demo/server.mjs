@@ -563,7 +563,11 @@ const server = createServer(async (req, res) => {
     return res.end(
       JSON.stringify({
         ...corpus(chosen),
-        choices: CORPORA.map(({ id, label, ready, note }) => ({ id, label, ready, note: note ?? null })),
+        // `name` is what the selector shows: the line above it already says
+        // what the corpus is and how big, so the option repeating that in
+        // prose was two descriptions of one thing. `label` stays for callers
+        // that want the long form.
+        choices: CORPORA.map(({ id, name, label, ready, note }) => ({ id, name: name ?? label, label, ready, note: note ?? null })),
         chosen: chosen.id,
         ready: chosen.ready,
         note: chosen.note ?? null,

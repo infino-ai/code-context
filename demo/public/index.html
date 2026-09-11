@@ -371,7 +371,10 @@ function loadCorpus(id) {
         for (const choice of c.choices) {
           const option = document.createElement("option");
           option.value = choice.id;
-          option.textContent = choice.label;
+          // The name alone: the description line above the form carries the
+          // size and the commit, so the option does not repeat them.
+          option.textContent = choice.name ?? choice.label;
+          option.title = choice.label;
           corpusEl.append(option);
         }
         corpusEl.value = c.chosen;
