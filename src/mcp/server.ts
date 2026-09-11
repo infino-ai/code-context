@@ -169,6 +169,19 @@ import { ensureIndexed, type EnsureResult } from "./ensure.js";
  * harm. Move it only with a measurement that says otherwise. */
 const CARD_TIER = "lean";
 
+/** How long `sql` waits for the platform's verdict on its rows before
+ * returning them without one. Short on purpose: the rows are the answer and
+ * the verdict is advice about them, so a platform that is slow or down must
+ * cost the caller a few seconds at most, never the answer.
+ *
+ * Measured the other way first. The verdict went through the client's normal
+ * path, which reads a 503 as a cold start and retries for its whole budget
+ * (two minutes by default). On 2026-09-11 the worker's S3 credential expired
+ * mid-demo, every hosted call went 503, and a LOCAL `sql` - rows already in
+ * hand - sat for 116 s waiting on a best-effort check. That is a regression
+ * against the tool as it was, and a platform outage must not become one. */
+const VERDICT_TIMEOUT_MS = 3_000;
+
 /** What `sql` says about its verdict when a platform is there to give one.
  * It names the parameter and the field, and says what the verdict is NOT,
  * because the one misreading that costs an answer is taking "valid" for
@@ -429,8 +442,16 @@ export async function serveMcp(rootPath?: string): Promise<void> {
     });
   };
 
+  /** The client the verdict is asked through: the same database, a few
+   * seconds' budget, and NO cold-start retries (`coldStartSecs: 0`). The
+   * repo's own client (`ctx.hosted`) is tuned for calls whose answer IS the
+   * result and therefore worth waiting a cold start out for; the verdict is
+   * not one of those, and sharing that client made a platform outage into
+   * a minute-long stall on a local query (see VERDICT_TIMEOUT_MS). */
+  const verdictDb = hosted ? hostedDbFor(hosted, { coldStartSecs: 0, timeoutMs: VERDICT_TIMEOUT_MS }) : null;
+
   /** The platform's verdict on a `sql` result, or undefined when there is no
-   * platform to ask or it could not answer.
+   * platform to ask or it could not answer within VERDICT_TIMEOUT_MS.
    *
    * The platform's answering loop gates every query it runs on this check;
    * a caller driving retrieval itself has the same problem and could not
@@ -455,9 +476,9 @@ export async function serveMcp(rootPath?: string): Promise<void> {
     rows: readonly object[],
     question?: string,
   ): Promise<Record<string, unknown> | undefined> => {
-    if (!ctx.hosted) return undefined;
+    if (!ctx.hosted || !verdictDb) return undefined;
     try {
-      const verdict = await ctx.hosted.validate({
+      const verdict = await verdictDb.validate({
         table: TABLE,
         column: CONTENT_COLUMN,
         statement,
