@@ -27,6 +27,16 @@ const INSTRUCTION_FILES = ["CLAUDE.md", ".claude/CLAUDE.md", "CLAUDE.local.md", 
 const SKILLS_DIR = join(".claude", "skills");
 const SKILL_FILE = "SKILL.md";
 
+/** Whether `ask` and `explore` hand the dev context to the loop at all.
+ * OFF unless CX_DEV_CONTEXT=1 (owner, 2026-09-11: "passing the context to
+ * the subagents in infino is probably not the right idea"). The loop's model
+ * is a retriever - it writes queries against the index and validates rows -
+ * and the repository map is the caller's context for deciding what to ask,
+ * not the loop's for answering it; meanwhile the context rides on every
+ * inner turn at bytes-times-turns. The plumbing stays so the comparison can
+ * be run: one variable turns it on. */
+const ENABLED_ENV = "CX_DEV_CONTEXT";
+
 /** Environment override for the byte budget below. */
 const MAX_BYTES_ENV = "CX_DEV_CONTEXT_MAX_BYTES";
 
@@ -44,6 +54,12 @@ export const DEFAULT_DEV_CONTEXT_MAX_BYTES = 32 * 1024;
 
 /** What is said in place of the part that did not fit. */
 const TRUNCATED_NOTE = (dropped: number) => `\n\n[dev context truncated: ${dropped} more bytes not shown]`;
+
+/** Whether the dev context is sent at all; see `ENABLED_ENV`. */
+export function devContextEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  const raw = env[ENABLED_ENV]?.trim().toLowerCase();
+  return raw === "1" || raw === "true";
+}
 
 export function devContextMaxBytes(env: NodeJS.ProcessEnv = process.env): number {
   const raw = env[MAX_BYTES_ENV]?.trim();

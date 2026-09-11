@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { DEFAULT_DEV_CONTEXT_MAX_BYTES, devContext, devContextMaxBytes, devContextParts } from "../src/core/dev-context.js";
+import { DEFAULT_DEV_CONTEXT_MAX_BYTES, devContext, devContextEnabled, devContextMaxBytes, devContextParts } from "../src/core/dev-context.js";
 
 describe("devContext", () => {
   const roots: string[] = [];
@@ -81,6 +81,14 @@ describe("devContext", () => {
     expect(dropped).toBe(Buffer.byteLength(whole, "utf8") - Buffer.byteLength(kept, "utf8"));
     // Infino's own CLAUDE.md (28 KB) fits the default whole.
     expect(DEFAULT_DEV_CONTEXT_MAX_BYTES).toBeGreaterThan(28 * 1024);
+  });
+
+  it("is off unless CX_DEV_CONTEXT says so", () => {
+    expect(devContextEnabled({})).toBe(false);
+    expect(devContextEnabled({ CX_DEV_CONTEXT: "0" })).toBe(false);
+    expect(devContextEnabled({ CX_DEV_CONTEXT: "yes" })).toBe(false);
+    expect(devContextEnabled({ CX_DEV_CONTEXT: "1" })).toBe(true);
+    expect(devContextEnabled({ CX_DEV_CONTEXT: " TRUE " })).toBe(true);
   });
 
   it("reads the byte budget from CX_DEV_CONTEXT_MAX_BYTES and refuses a value that is not a count", () => {
