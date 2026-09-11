@@ -115,8 +115,6 @@ import {
   jsonify,
   numberRowLines,
   partialIndex,
-  searchStatement,
-  findStatement,
   CONTENT_COLUMN,
 } from "../core/searcher.js";
 import {
@@ -171,11 +169,25 @@ import { ensureIndexed, type EnsureResult } from "./ensure.js";
  * harm. Move it only with a measurement that says otherwise. */
 const CARD_TIER = "lean";
 
-/** What the three retrieval tools say about their verdict when a platform is
- * there to give one. It names the parameter and the field, and says what the
- * verdict is NOT, because the one misreading that costs an answer is taking
- * "valid" for "correct". Absent without a platform: there is then no
- * 'validation' field, and a description promising one would be wrong. */
+/** What `sql` says about its verdict when a platform is there to give one.
+ * It names the parameter and the field, and says what the verdict is NOT,
+ * because the one misreading that costs an answer is taking "valid" for
+ * "correct". Absent without a platform: there is then no 'validation' field,
+ * and a description promising one would be wrong.
+ *
+ * `sql` ONLY. It rode on search and find too and was measured worse: blind
+ * pairwise over 16 questions (lean-0559 against validate-1305, 2026-09-11),
+ * the arm with the verdict lost 8-6-2 overall, and the split was exactly the
+ * tool split - every aggregation question used sql alone and won 6-3-1,
+ * every comprehension question used search/find alone and lost 0-5-1, with
+ * unsupported claims rising 10 to 29 on that half. The anchor check is a
+ * poor judge of a ranked search: a conceptual question's anchors are
+ * capitalized words and identifiers that often do not appear literally in
+ * rows that are genuinely relevant, so it refused good retrievals and sent
+ * the model querying again (calls 37 to 48, tokens +25%) for longer answers
+ * carrying more unsupported claims. The checks that CAN fire on a search are
+ * the ones it does not need: a search result is never an aggregate, and no
+ * rows is already plain. Keep it where the statement's shape is real. */
 const VALIDATION_NOTE =
   " Pass the question you are answering as 'question' and the result carries 'validation': " +
   "whether these rows would be accepted as answering it - no rows, an aggregate of zeros, or rows " +
@@ -417,19 +429,21 @@ export async function serveMcp(rootPath?: string): Promise<void> {
     });
   };
 
-  /** The platform's verdict on a retrieval result - `sql` rows, `search`
-   * hits or `find` matches - or undefined when there is no platform to ask or
-   * it could not answer.
+  /** The platform's verdict on a `sql` result, or undefined when there is no
+   * platform to ask or it could not answer.
    *
    * The platform's answering loop gates every query it runs on this check;
    * a caller driving retrieval itself has the same problem and could not
    * ask. It is attached to the result rather than offered as a tool because
    * a check the model may call is a check the model declines - measured on
-   * the card tool the same day (2026-09-11). `statement` is the call in the
-   * loop's own shape, read only to tell an aggregate from rows; `question`
-   * is the caller's question, not the query: the query's own words count for
+   * the card tool the same day (2026-09-11). `statement` is the statement the
+   * caller wrote, read only to tell an aggregate from rows; `question` is the
+   * caller's question, not the query: the query's own words count for
    * nothing, which is the defect the check exists to catch. Without a
    * question the empty and aggregate halves still apply.
+   *
+   * `sql` alone calls this; see VALIDATION_NOTE for the measurement that took
+   * it off `search` and `find`.
    *
    * Best-effort throughout: the rows are the answer and a check that failed
    * must not take them with it. A caller without a platform database (the
@@ -463,17 +477,6 @@ export async function serveMcp(rootPath?: string): Promise<void> {
       return undefined;
     }
   };
-
-  /** The `question` parameter every retrieval tool takes for its verdict. */
-  const questionParam = () =>
-    z
-      .string()
-      .optional()
-      .describe(
-        "The question this result is meant to answer, in the words it was asked. Used only to check " +
-          "the result against it - the result's 'validation' then says whether it answers the question " +
-          "and what is missing if not.",
-      );
 
   const ok = (value: unknown) => ({ content: [{ type: "text" as const, text: jsonify(value, true) }] });
   const fail = (message: string) => ({
@@ -599,12 +602,10 @@ export async function serveMcp(rootPath?: string): Promise<void> {
         "from the lines you cite it to. When one " +
         "search is not enough, refine the query and search again. For every occurrence of an exact " +
         "string use find; for counts and rankings use sql. The result includes a 'usage' field, a " +
-        "one-line receipt of tokens returned, chunks and files." +
-        (platformTools ? VALIDATION_NOTE : ""),
+        "one-line receipt of tokens returned, chunks and files.",
       inputSchema: {
         query: z.string().describe("What you're looking for - terms, a phrase, or a description."),
         k: z.number().int().positive().max(50).default(DEFAULT_SEARCH_K).describe("Maximum hits."),
-        question: questionParam(),
         path: z
           .string()
           .optional()
@@ -614,7 +615,7 @@ export async function serveMcp(rootPath?: string): Promise<void> {
           ),
       },
     },
-    async ({ query, k, question, path }) => {
+    async ({ query, k, path }) => {
       let ctx: RepoCtx;
       try {
         ctx = repoFor(path);
@@ -642,12 +643,8 @@ export async function serveMcp(rootPath?: string): Promise<void> {
             recordUsage(ctx.dir, entry);
             usage = formatReceipt(entry, session);
           }
-          // After the receipt: the verdict is its own platform call, and the
-          // receipt must describe the search, not the search plus the check.
-          const verdict = await platformVerdict(ctx, searchStatement(query, k, result.ranking), result.hits, question);
           return ok({
             ...result,
-            ...(verdict ? { validation: verdict } : {}),
             index: "platform",
             took_ms: Math.round((performance.now() - t0) * 1000) / 1000,
             ...(usage ? { usage } : {}),
@@ -674,10 +671,8 @@ export async function serveMcp(rootPath?: string): Promise<void> {
           recordUsage(ctx.dir, entry);
           usage = formatReceipt(entry, session);
         }
-        const verdict = await platformVerdict(ctx, searchStatement(query, k, result.ranking), result.hits, question);
         return ok({
           ...result,
-          ...(verdict ? { validation: verdict } : {}),
           ...(autoIndexed ? { auto_indexed: autoIndexNote(autoIndexed) } : {}),
           took_ms: Math.round((performance.now() - t0) * 1000) / 1000,
           ...(usage ? { usage } : {}),
@@ -700,8 +695,7 @@ export async function serveMcp(rootPath?: string): Promise<void> {
         "to get only where a name is defined rather than everywhere it appears. Not for a " +
         "file you already know - Read that file. For meaning or 'how does X work' use search; for " +
         "rankings use sql. The result includes a 'usage' field, a one-line receipt of tokens " +
-        "returned, matches and files." +
-        (platformTools ? VALIDATION_NOTE : ""),
+        "returned, matches and files.",
       inputSchema: {
         query: z
           .string()
@@ -737,7 +731,6 @@ export async function serveMcp(rootPath?: string): Promise<void> {
           .max(MAX_FIND_LIMIT)
           .default(DEFAULT_FIND_LIMIT)
           .describe("Maximum matching lines to return; the result reports the total either way."),
-        question: questionParam(),
         path: z
           .string()
           .optional()
@@ -748,7 +741,7 @@ export async function serveMcp(rootPath?: string): Promise<void> {
           ),
       },
     },
-    async ({ query, ignoreCase, defines, under, limit, question, path }) => {
+    async ({ query, ignoreCase, defines, under, limit, path }) => {
       let ctx: RepoCtx;
       try {
         ctx = repoFor(path);
@@ -773,13 +766,8 @@ export async function serveMcp(rootPath?: string): Promise<void> {
           recordUsage(ctx.dir, entry);
           usage = formatReceipt(entry, session);
         }
-        // The matches are the rows: a find whose lines name nothing the
-        // question named found the literal somewhere the question was not
-        // about, and one with no matches found nothing.
-        const verdict = await platformVerdict(ctx, findStatement(query), result.matches, question);
         return ok({
           ...result,
-          ...(verdict ? { validation: verdict } : {}),
           ...(autoIndexed ? { auto_indexed: autoIndexNote(autoIndexed) } : {}),
           took_ms: Math.round((performance.now() - t0) * 1000) / 1000,
           ...(usage ? { usage } : {}),
@@ -803,7 +791,14 @@ export async function serveMcp(rootPath?: string): Promise<void> {
           .record(z.string(), z.string())
           .optional()
           .describe('Map of placeholder name → query text, embedded server-side. E.g. {"q":"vector indexing"} fills {{q}}.'),
-        question: questionParam(),
+        question: z
+          .string()
+          .optional()
+          .describe(
+            "The question these rows are meant to answer, in the words it was asked. Used only to check " +
+              "the rows against it - the result's 'validation' then says whether they answer it and what " +
+              "is missing if not.",
+          ),
         path: z
           .string()
           .optional()

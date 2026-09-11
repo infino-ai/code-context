@@ -126,36 +126,12 @@ export interface SearchResult {
 
 const PROJECTION = ["path", "start_line", "end_line", "lang", "symbol", "content", "score"];
 
-/** `text` as a SQL string literal: single-quoted, with each quote doubled -
- * the engine's own quoting, and the platform's (`sql_literal`). */
-export function sqlLiteral(text: string): string {
-  return `'${text.replace(/'/g, "''")}'`;
-}
-
-// --- statements -------------------------------------------------------------
-//
-// A search or a find is not written as SQL by the caller, but the platform's
-// retrieval contract reads the statement that produced a result to tell an
-// aggregate from a row-returning query (and never for its literals). These
-// render each call the way the platform's own answering loop names the same
-// call beside its rows - `hybrid_search(...)`, `bm25_search(...)`, `find(...)`
-// - so the verdict on a client search is the verdict the loop would reach on
-// its own.
-
-/** The statement a `search` ran as, in the loop's own shape for the same call. */
-export function searchStatement(query: string, k: number, ranking: "hybrid" | "keyword"): string {
-  const projection = PROJECTION.join(", ");
-  return ranking === "hybrid"
-    ? `SELECT ${projection} FROM hybrid_search(${sqlLiteral(TABLE)}, ${sqlLiteral(CONTENT_COLUMN)}, ${sqlLiteral(query)}, ${sqlLiteral(EMBEDDING_COLUMN)}, {{q}}, ${k})`
-    : `SELECT ${projection} FROM bm25_search(${sqlLiteral(TABLE)}, ${sqlLiteral(CONTENT_COLUMN)}, ${sqlLiteral(query)}, ${k})`;
-}
-
-/** The statement a `find` ran as: `find(<table>, <column>, <literal>)`, the
- * loop's own name for a line-grain literal search, which its contract never
- * reads as an aggregate whatever the literal says. */
-export function findStatement(query: string): string {
-  return `find(${sqlLiteral(TABLE)}, ${sqlLiteral(CONTENT_COLUMN)}, ${sqlLiteral(query)})`;
-}
+// A `search` and a `find` used to be rendered as the statement that produced
+// them, so the platform's retrieval contract could judge their rows the way
+// it judges the answering loop's. Measured 2026-09-11 and removed: the
+// verdict on a ranked search cost quality (see VALIDATION_NOTE in the MCP
+// server). `sql` sends the statement the caller actually wrote, so nothing
+// renders one here any more.
 
 /** One engine row as a hit. Shared by the local and the hosted search so the
  * two cannot drift: a caller must not be able to tell from the shape of a hit
