@@ -304,7 +304,12 @@
 <div class="controls">
   <span><i class="swatch" style="background:var(--model)"></i>model — the caller thinking</span>
   <span><i class="swatch" style="background:var(--retrieval)"></i>retrieval — finding code (file tools / the index)</span>
-  <span id="legend-subagent" hidden><i class="swatch" style="background:var(--subagent)"></i>subagent — handed to another loop</span>
+  <!-- Always shown, whichever arms are on screen: the legend names the three
+       PHASES a bar is drawn in, and every arm can spend time in all three.
+       The File Tools arm delegates to the caller's own Explore subagent and
+       is usually mostly gold, so hiding this key with the third arm left the
+       widest band on the first panel unexplained. -->
+  <span><i class="swatch" style="background:var(--subagent)"></i>subagent — handed to another loop</span>
   <label class="third" title="the third arm hands searches to a loop of ours; it runs either way, this only shows it">
     <input type="checkbox" id="show-third"> show Infino Subagents
   </label>
@@ -720,12 +725,10 @@ function headlineGroup(base, r) {
 const headlineEl = document.getElementById("headline");
 {
   const box = document.getElementById("show-third");
-  const legend = document.getElementById("legend-subagent");
   const paint = () => {
     const on = box.checked;
     armsEl.classList.toggle("no-third", !on);
     headlineEl.classList.toggle("no-third", !on);
-    legend.hidden = !on;
   };
   try { box.checked = localStorage.getItem("cx-demo-third") === "on"; } catch { /* default: off */ }
   box.onchange = () => {
