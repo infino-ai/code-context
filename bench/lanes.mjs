@@ -672,7 +672,23 @@ export function laneOptions(lane, repoDir, indexDir) {
   checkLaneEnv(lane);
   const hermetic = {
     cwd: repoDir,
-    settingSources: [],
+    // The repository's own instructions and skills (CLAUDE.md / AGENTS.md,
+    // `.claude/skills/`) load for EVERY arm, as they do in any session opened
+    // in that checkout: they are the developer's context, not part of either
+    // side of the comparison (owner, 2026-09-11: "claude.md and skills we
+    // should send those to all 3"). Infino's CLAUDE.md is a 28 KB map of the
+    // source tree, exactly what a developer's agent reads before it greps;
+    // `[]` withheld it from every arm until 2026-09-11 and made the grep arm
+    // slower than the real thing. Project scope only: no user settings, so
+    // nothing from this machine's configuration reaches a run; and the
+    // bench repositories carry no `.claude/settings.json`, so no hooks or
+    // permission rules ride in - a repository that did would need them read
+    // before it was benchmarked.
+    //
+    // What DOES differ between the two kinds of arm is the system prompt,
+    // decided in `runLane`: Claude without infino gets Claude Code's own,
+    // Claude with infino gets the prompt infino ships.
+    settingSources: ["project"],
     strictMcpConfig: true,
     tools: def.tools,
     // A lane's `agents` may be a factory rather than a literal, because a
@@ -881,11 +897,26 @@ export const sfTookMs = (toolDetails) => tookMsOf(toolDetails, isSfTool);
  * a second copy of this text is a second experiment: the moment one is edited
  * the demo stops showing what the bench measured, and nothing fails to say so.
  * `run-questions.mjs` appends the table card to it when CX_CARD_TIER asks for
- * one; the base is shared. */
+ * one; the base is shared.
+ *
+ * CHANGED 2026-09-10/11; every figure recorded before then was measured on a
+ * wording that closed with "Be efficient: prefer few, well-chosen tool calls"
+ * and nothing about issuing them together. Across 622 recorded runs no
+ * assistant message ever carried two tool calls, so the caller was serial by
+ * habit. The first rewrite dropped "prefer few" and asked for independent
+ * lookups in one turn; the caller did fan out - at its OWN retrieval: on the
+ * subagents arm Sonnet ran `explore` and then four `search` calls and a Read
+ * on top, 126 s against 44 s for the index-only arm. So both halves are
+ * here: few calls, and a sweep handed to the tool built for it, AND the
+ * independent ones issued together. A run under this wording is not
+ * comparable to the recorded set; the baseline has to be re-run beside it. */
 export const systemPrompt = (repoDir) =>
   `You answer questions about the repository checked out at ${repoDir}. ` +
   `Use the available tools to find the answer. Cite file paths (with line ranges when you have them). ` +
-  `Be efficient: prefer few, well-chosen tool calls.`;
+  `Be efficient: prefer few, well-chosen tool calls, and hand a sweep across many files to a tool ` +
+  `built for it rather than searching by hand. When two or more calls do not depend on each other, ` +
+  `issue them in the SAME turn rather than one after another - the wait is then the slowest of them ` +
+  `instead of their sum.`;
 
 /** Run one agent conversation; returns the measured record.
  *
@@ -920,7 +951,24 @@ export async function runLane({ lane, prompt, system, repoDir, indexDir, maxTurn
       options: {
         model: MODEL,
         maxTurns,
-        systemPrompt: system,
+        // A bare string here is a CUSTOM prompt: the SDK drops Claude Code's
+        // default system prompt entirely, and with it Claude Code's guidance
+        // on its own tools - when to hand an open-ended search to Explore,
+        // when to batch independent calls, how Grep, Glob and Read are meant
+        // to be used.
+        //
+        // Claude WITHOUT infino (no MCP server) therefore gets the preset
+        // with the bench text appended: the session a developer actually
+        // has. Until 2026-09-11 it ran on the bare string, which is why the
+        // grep arm was slower than the real thing; every grep figure recorded
+        // before that date is a handicapped one. Claude WITH infino keeps the
+        // bare string: that prompt is part of what infino ships - it is
+        // where the caller is told to spawn parallel workers and to reach for
+        // hybrid search first - and the owner wants it as infino chooses, not
+        // as stock Claude has it ("we should keep our custom prompts").
+        // Project instructions and skills reach both kinds alike; see
+        // `laneOptions`.
+        systemPrompt: laneDef(lane).mcp ? system : { type: "preset", preset: "claude_code", append: system },
         permissionMode: "bypassPermissions",
         env: { ...process.env, IS_SANDBOX: "1" },
         ...laneOptions(lane, repoDir, indexDir),
