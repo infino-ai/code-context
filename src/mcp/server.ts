@@ -338,13 +338,27 @@ export function rowsInstructions(shape: TableShape, platformTools: boolean): str
     `- find - every row whose ${text} holds every word of an exact phrase, where you would grep: complete ` +
     "and unranked, with the table-wide count.\n" +
     `- search - which rows are about X: exact terms and meaning in one ranked pass over ${text}.\n` +
-    "- sql - counts, rankings, filters and aggregates across the table, including ranking rows by how " +
-    "much they are about a topic (rank by hybrid_search, not bm25, when the topic is a concept; a total " +
-    "over a search relation counts the top k, never the table - a complete count comes from token_match, " +
-    `a WHERE, or the ${table} table with no search function).\n` +
+    // On a table every question reads as counts and rankings, so the code
+    // text's sql line ("counts, rankings, filters") claimed all of them and
+    // the caller never delegated (zero explore, zero ask on the first day's
+    // jobs runs, against explore every hour on the code corpora). The
+    // question shapes a table gets - who has the most X and where, what the
+    // rows about X ask for - are named on ask and explore here, and sql is
+    // the tool for one statement the caller already knows.
+    "- sql - one statement you already know: a count, a filter, a lookup by " +
+    `${key}, a ranking in one SELECT. Ranking rows by how much they are about a topic goes through ` +
+    "hybrid_search, not bm25, when the topic is a concept; a total over a search relation counts the top " +
+    `k, never the table - a complete count comes from token_match, a WHERE, or the ${table} table with no ` +
+    "search function.\n" +
     (platformTools
-      ? "- ask - a question or task in plain language; returns the rows it retrieved (facts as rows, with their columns and the text cut to snippets), not an answer: compose from them. Spawn several in parallel for independent questions.\n" +
-        "- explore - a question that takes several retrievals (how two groups of rows compare, what the rows about X have in common); it queries, reads what it finds and returns a written answer grounded in the rows it lists, with the chain of queries. Slower than ask: use it when one retrieval will not do.\n"
+      ? "- ask - a question or task in plain language about the rows - which rows are about X, how many and " +
+        "where, who has the most and where - it runs the searches and statements itself and returns the rows " +
+        "it retrieved (facts as rows, with their columns and the text cut to snippets), not an answer: compose " +
+        "from them. Spawn several in parallel for independent questions instead of writing the statements yourself.\n" +
+        "- explore - a question that spans the table and takes several retrievals - who is hiring for X and " +
+        "what those roles ask for, how two groups of rows compare, what the rows about X have in common; it " +
+        "queries, reads what it finds, queries again and returns a written answer grounded in the rows it " +
+        "lists, with the chain of queries. Slower than ask: use it when one retrieval will not do.\n"
       : "") +
     `Hits are rows: a score, the row's ${key}, its scalar columns, and its text columns cut to a snippet of ` +
     `${SNIPPET_CHARS} characters. ${citeRows(shape)} ` +
