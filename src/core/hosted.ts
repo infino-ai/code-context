@@ -381,6 +381,25 @@ export class HostedDb {
     await this.postJson("drop_table", { table_name: table, purge }, false);
   }
 
+  /** `GET /v1/table_card/{db}?table=[&tier=]`: the table's card - its schema
+   * with each column's index role, per-column statistics (min, max, distinct)
+   * and sample rows, as the platform's optimizer last computed them from the
+   * table itself. A tier asks for a particular depth (`lean` is the measured
+   * shape; `enriched` adds column descriptions and synonyms; `semantic` adds
+   * the semantic map and is large); absent, the platform serves the best it
+   * has. The one GET on this client: the card is a read of stored state, not
+   * a query, and the platform routes it that way. */
+  async tableCard(table: string, tier?: string): Promise<RowRecord> {
+    const exchange = await this.call({
+      op: "table_card",
+      method: "GET",
+      query: { table, ...(tier ? { tier } : {}) },
+      acceptJson: true,
+      timeoutMs: this.timeoutMs,
+    });
+    return this.parseJson(exchange, "table_card") as RowRecord;
+  }
+
   // --- writes ---
 
   /** `POST /v1/append/{db}?table=T` with an Arrow IPC stream body - the only

@@ -42,7 +42,7 @@ export interface UsageEntry {
   ts: string;
   /** The tool as the model saw it. `subagent` is the name `ask` had before
    * and appears in older ledgers only; nothing writes it now. */
-  tool: "find" | "search" | "sql" | "ask" | "explore" | "subagent";
+  tool: "find" | "search" | "sql" | "card" | "ask" | "explore" | "subagent";
   query: string;
   returnedTokens: number;
   /** search only: whole-file size of the distinct files the hits came from. */
@@ -148,6 +148,19 @@ export function sqlEntry(query: string, rows: Array<Record<string, unknown>>): U
     returnedTokens: estTokens(serialized),
     rows: rows.length,
     rowsPreview: serialized.length > ROWS_PREVIEW_CAP ? serialized.slice(0, ROWS_PREVIEW_CAP) + "..." : serialized,
+  };
+}
+
+/** A card call returns the table's description, so what it cost the caller
+ * is that serialized. It retrieves no code, so it records no places and no
+ * rows: a card is not a hit, and counting it as one would put a saving on
+ * the receipt that no file backs. */
+export function cardEntry(card: Record<string, unknown>): UsageEntry {
+  return {
+    ts: new Date().toISOString(),
+    tool: "card",
+    query: String(card.table ?? ""),
+    returnedTokens: estTokens(jsonify(card)),
   };
 }
 

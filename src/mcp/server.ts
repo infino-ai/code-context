@@ -104,13 +104,14 @@ export function refusalHint(err: unknown): string {
   if (err.unauthenticated) return ` - ${keyRefusedSteps()}`;
   return "";
 }
-import { localDb, newHostedMemo, platformLabel, platformTableReady, type IndexHandle } from "../core/context.js";
+import { hostedDbFor, localDb, newHostedMemo, platformLabel, platformTableReady, type IndexHandle } from "../core/context.js";
 import { devContext, devContextEnabled } from "../core/dev-context.js";
 import { HostedError } from "../core/hosted.js";
 import { find, search, searchHosted, runSql, jsonify, numberRowLines, partialIndex } from "../core/searcher.js";
 import {
   newSession,
   receiptEnabled,
+  cardEntry,
   findEntry,
   searchEntry,
   sqlEntry,
@@ -146,6 +147,35 @@ import { ensureIndexed, type EnsureResult } from "./ensure.js";
  * every aggregation statement in the bench that aggregated at all was a
  * directory guess measuring file lengths; and the scan clause naming every
  * predicate rather than ILIKE alone. */
+/** The card tier folded into the `sql` description on a platform database.
+ *
+ * Lean, on a measurement (2026-09-11, 16 questions on the engine repo,
+ * `hosted-index` lane, three arms differing by the prompt alone): the lean
+ * card took 37% off the wall clock of the ten aggregation questions and the
+ * enriched card 41%, while enriched cost +32% on the six comprehension
+ * questions against lean's +14% and carried three times the prompt. A blind
+ * grounded Opus judge scored both level against no card (7-7-1 and 7-7-2),
+ * and cost moved ±3% either way: this is a latency change, not a spend or
+ * quality one. So the cheap tier is nearly all of the win and half of the
+ * harm. Move it only with a measurement that says otherwise. */
+const CARD_TIER = "lean";
+
+/** What introduces the card in the `sql` description. Stated as the table's
+ * own measured shape, because that is what it is: the optimizer computed it
+ * from the table after optimizing it, so the distinct counts and ranges are
+ * the table's, not an estimate. */
+const CARD_PREAMBLE =
+  ` The table's own measured shape, computed from it - use it to choose columns and write the ` +
+  `statement without discovering the shape first:\n`;
+
+/** A `card` TOOL was built and measured first and is deliberately not here.
+ * Registered, offered and working, it was simply not called: asked a real
+ * aggregation question the model went straight to `sql` (2026-09-11), which
+ * is the failure the note on `SQL_DESCRIPTION` below already records for a
+ * tool named second. The reason is visible in that description - it already
+ * names every column, so from the model's side a card tool adds nothing it
+ * can see it needs, while what the card actually adds is the statistics. A
+ * fact that cannot be declined has to be in the text, not behind a call. */
 export const SQL_DESCRIPTION =
   "Read-only SQL, one SELECT or WITH, over " +
   `${TABLE}(path, start_line, end_line, lang, symbol, content[, embedding]) - lang is the ` +
@@ -422,6 +452,30 @@ export async function serveMcp(rootPath?: string): Promise<void> {
   // toward nothing.
   const platformTools = hosted !== null;
 
+  // The table's card, folded into the `sql` description once at startup so
+  // every statement is written knowing the table's shape. Measured worth:
+  // 37% off the wall clock of aggregation questions, with quality level and
+  // cost flat (see CARD_TIER). It is fetched here rather than offered as a
+  // tool because a tool was measured and not called.
+  //
+  // Best-effort, and deliberately so: a card is a help, not a precondition.
+  // A platform that cannot serve one (no card computed for this table yet -
+  // the optimizer writes it after it first optimizes the table - a refused
+  // key, a database still coming up) leaves `sql` with the description it
+  // always had. Failing the server here would make a help into a
+  // dependency, and the one thing worse than a slower first statement is no
+  // server at all.
+  let sqlDescription = SQL_DESCRIPTION;
+  if (platformTools) {
+    try {
+      const record = await hostedDbFor(hosted, { coldStartSecs: 0 }).tableCard(TABLE, CARD_TIER);
+      const card = JSON.stringify(record.card ?? record);
+      sqlDescription += CARD_PREAMBLE + card;
+    } catch (err) {
+      console.error(`no table card in the sql description: ${(err as Error).message}`);
+    }
+  }
+
   const server = new McpServer(
     { name: "code-context", version: "0.1.2" },
     {
@@ -641,7 +695,7 @@ export async function serveMcp(rootPath?: string): Promise<void> {
     "sql",
     {
       title: "SQL over the code index",
-      description: SQL_DESCRIPTION,
+      description: sqlDescription,
       inputSchema: {
         query: z
           .string()
