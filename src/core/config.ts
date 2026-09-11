@@ -315,8 +315,20 @@ export function autoSyncEnabled(): boolean {
 
 /** The one table every tool reads. Stable across index stages: the staged
  * (keyword-only) build and the final (hybrid) build use the same name, so
- * SQL written against `chunks` keeps working as vectors arrive. */
-export const TABLE = "chunks";
+ * SQL written against `chunks` keeps working as vectors arrive.
+ *
+ * `CX_TABLE` overrides it, which is how a second corpus is reached on a
+ * database that already holds one. A hydrate job loaded the OpenSearch
+ * checkout into `chunks_opensearch` on the same database as the infino
+ * corpus, because a second DATABASE needs provisioning this key cannot do;
+ * the table name is therefore the only thing that distinguishes them. Every
+ * reader derives from this constant — including the tool text, which
+ * interpolates it rather than writing "chunks" — so the override reaches the
+ * SQL examples the model is shown as well as the queries the client runs.
+ *
+ * Unset it and nothing changes. Set it and remember that `cx index` DROPS and
+ * recreates whatever it names, so it belongs on a search-only process. */
+export const TABLE = process.env.CX_TABLE?.trim() || "chunks";
 
 /** Manifest file inside the index dir - the product's own record of what the
  * local index holds (the engine ignores foreign files in its catalog root). */

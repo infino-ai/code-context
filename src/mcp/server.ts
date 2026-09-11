@@ -789,7 +789,10 @@ export async function serveMcp(rootPath?: string): Promise<void> {
           "naming one of them to reach the file that calls it, because the layer that decides usually " +
           "describes itself in different words than the question used. Slower and " +
           "dearer than ask: use ask for one retrieval, explore when one retrieval will not " +
-          "do. For every occurrence of an exact string use find; for a file you already know, Read " +
+          "do. Independent explorations run at the same time: issue them in ONE turn rather than " +
+          "waiting for each to come back, because the wait is then the slowest of them instead of " +
+          "the sum. Only a follow-up that names a symbol from an earlier answer has to wait for it. " +
+          "For every occurrence of an exact string use find; for a file you already know, Read " +
           "it. The result includes a 'usage' field, a one-line receipt of what the call cost.",
         inputSchema: {
           question: z.string().min(1).describe("The question, in plain language, about the indexed code."),
