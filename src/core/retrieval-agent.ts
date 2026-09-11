@@ -71,6 +71,10 @@ const NO_ANSWER_HINT = "ask again more narrowly, or use find or search";
 
 export interface RetrievalAgentRequest {
   question: string;
+  /** Background the loop's model reads beside the question - the
+   * repository's own instructions (see `devContext`) - and not part of what
+   * a result must contain. Sent as the platform's `context` field. */
+  context?: string;
 }
 
 export interface RetrievalAgentBudget {
@@ -181,6 +185,7 @@ export async function runRetrievalAgent(
   const k = budget.k ?? MAX_HITS;
   const response = await hosted.subAgent({
     question: request.question,
+    ...(request.context !== undefined ? { context: request.context } : {}),
     k,
     projection: FACT_PROJECTION,
     ...(budget.maxTurns !== undefined ? { max_turns: budget.maxTurns } : {}),
@@ -201,6 +206,7 @@ export async function runExploreAgent(
   const k = budget.k ?? MAX_HITS;
   const response = await hosted.subAgent({
     question: request.question,
+    ...(request.context !== undefined ? { context: request.context } : {}),
     mode: "explore",
     k,
     projection: FACT_PROJECTION,

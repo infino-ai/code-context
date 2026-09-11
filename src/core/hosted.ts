@@ -498,6 +498,11 @@ export class HostedDb {
    * (every query that returned rows, in order). */
   async subAgent(req: {
     question: string;
+    /** Text the loop's model reads beside the question and not as part of
+     * it - the repository's own instructions, a convention, a hint. Nothing
+     * in it is required of the result; the platform anchors validation on
+     * the question alone. */
+    context?: string;
     /** `retrieve` (the default when absent): the first validating query's rows.
      * `explore`: the loop reads what it finds and queries again, and answers
      * in writing beside the facts and the chain of queries. */
@@ -513,6 +518,7 @@ export class HostedDb {
     // Only the fields given are sent: the request type rejects unknown keys and
     // defaults the rest itself.
     const body: RowRecord = { question: req.question };
+    if (req.context !== undefined) body.context = req.context;
     if (req.mode !== undefined) body.mode = req.mode;
     if (req.k !== undefined) body.k = req.k;
     if (req.projection !== undefined) body.projection = req.projection;

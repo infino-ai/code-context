@@ -299,6 +299,25 @@ describe("explore mode", () => {
     expect(spend).toEqual({ modelTokens: 1280 });
   });
 
+  it("hands the caller's context to sub_agent beside the question, in both modes, and never without one", async () => {
+    const sent: Array<Record<string, unknown>> = [];
+    const hosted = {
+      subAgent: async (req: unknown) => {
+        sent.push(req as Record<string, unknown>);
+        return explored();
+      },
+    };
+    const context = "# CLAUDE.md\n\nThe manifest layer lives under src/supertable/manifest/.";
+    await runExploreAgent(hosted, { question: "where is the manifest committed?", context }, { maxWallSecs: 300 });
+    await runRetrievalAgent(hosted, { question: "where is the manifest committed?", context }, { maxWallSecs: 90 });
+    await runRetrievalAgent(hosted, { question: "and without any" }, { maxWallSecs: 90 });
+    expect(sent.map((r) => r.context)).toEqual([context, context, undefined]);
+    // The question is the question: the context is a field beside it, not
+    // folded into it, so the platform anchors validation on the question alone.
+    expect(sent.map((r) => r.question)).toEqual(["where is the manifest committed?", "where is the manifest committed?", "and without any"]);
+    expect("context" in sent[2]).toBe(false);
+  });
+
   it("lowers the platform's explore budget only when the budget names a turn cap", async () => {
     const sent: unknown[] = [];
     const hosted = {

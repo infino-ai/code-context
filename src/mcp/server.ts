@@ -105,6 +105,7 @@ export function refusalHint(err: unknown): string {
   return "";
 }
 import { localDb, newHostedMemo, platformLabel, platformTableReady, type IndexHandle } from "../core/context.js";
+import { devContext } from "../core/dev-context.js";
 import { HostedError } from "../core/hosted.js";
 import { find, search, searchHosted, runSql, jsonify, numberRowLines, partialIndex } from "../core/searcher.js";
 import {
@@ -710,8 +711,9 @@ export async function serveMcp(rootPath?: string): Promise<void> {
           "several in parallel for independent questions instead of exploring the code yourself. For " +
           "every occurrence of an exact string, and for how many times it occurs per file, use find " +
           "(its byFile is the grep -c answer); for a file you already know, Read it. Answer " +
-          "from the rows and cite path:line. The result includes a 'usage' field, a one-line receipt of " +
-          "what the call cost.",
+          "from the rows and cite path:line. The subagent is handed this repository's own instructions " +
+          "(CLAUDE.md, AGENTS.md, skills) with the question, so it knows the layout you know; do not " +
+          "restate them. The result includes a 'usage' field, a one-line receipt of what the call cost.",
         inputSchema: {
           question: z.string().min(1).describe("The question or task, in plain language, about the indexed code."),
           path: z
@@ -752,9 +754,13 @@ export async function serveMcp(rootPath?: string): Promise<void> {
           const t0 = performance.now();
           // The spend (turns, tokens) goes to the ledger and the receipt only;
           // the result the model sees is the facts: sql, hits, rows, queries.
+          // The repository's own instructions ride with the question: the
+          // model writing the queries reads the same map of the code the
+          // caller read at startup.
+          const context = devContext(ctx.root);
           const { result, spend } = await runRetrievalAgent(
             ctx.hosted!,
-            { question },
+            { question, ...(context !== undefined ? { context } : {}) },
             { maxTurns: subagentMaxTurns(), maxWallSecs: subagentMaxWallSecs(), k: subagentK() },
           );
           let usage: string | undefined;
@@ -793,7 +799,9 @@ export async function serveMcp(rootPath?: string): Promise<void> {
           "waiting for each to come back, because the wait is then the slowest of them instead of " +
           "the sum. Only a follow-up that names a symbol from an earlier answer has to wait for it. " +
           "For every occurrence of an exact string use find; for a file you already know, Read " +
-          "it. The result includes a 'usage' field, a one-line receipt of what the call cost.",
+          "it. The subagent is handed this repository's own instructions (CLAUDE.md, AGENTS.md, " +
+          "skills) with the question, so it knows the layout you know; do not restate them. The " +
+          "result includes a 'usage' field, a one-line receipt of what the call cost.",
         inputSchema: {
           question: z.string().min(1).describe("The question, in plain language, about the indexed code."),
           path: z
@@ -826,9 +834,10 @@ export async function serveMcp(rootPath?: string): Promise<void> {
         if (notReady) return notReady;
         try {
           const t0 = performance.now();
+          const context = devContext(ctx.root);
           const { result, spend } = await runExploreAgent(
             ctx.hosted!,
-            { question },
+            { question, ...(context !== undefined ? { context } : {}) },
             { maxTurns: exploreMaxTurns(), maxWallSecs: exploreMaxWallSecs(), k: subagentK() },
           );
           let usage: string | undefined;
