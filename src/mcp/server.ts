@@ -420,21 +420,13 @@ export function rowsSqlDescription(shape: TableShape): string {
     (vectorColumn ? `vector_search('${table}','${vectorColumn}', {{q:"..."}}, k) is meaning alone. ` : "") +
     `token_match('${table}','${text}','terms','and') is unranked and complete: every row holding every term, ` +
     "with no k, so a COUNT over it is the table's count and not a share of the top k. " +
-    // Measured 2026-09-11 on the jobs table's description_html (6.7 GB): a
-    // caller writing LIKE spent 53 s of retrieval where the same question
-    // through token_match took 0.12 s. The engine's LIKE pushdown expands the
-    // pattern to every indexed term containing it, so the cost follows the
-    // expansion, not the match count - scala (4,215 rows, 10.0 s) cost three
-    // times tableau (12,960 rows, 3.8 s).
-    `On ${textColumns} match WORDS through the search functions, never with LIKE: token_match for a boolean ` +
-    `match ('and' or 'or'), bm25_search when you want a ranking${vectorColumn ? ", hybrid_search when meaning matters too" : ""}. ` +
-    "LIKE '%word%' on an indexed column is not an index lookup: it expands to every indexed term CONTAINING the " +
-    "substring (scala -> scalable, scaling, escalate), so its cost is set by that expansion, which the question " +
-    "cannot predict - measured on one 6.7 GB column: 0.9 s for '%cobol%', 3.8 s for '%tableau%', 10 s for " +
-    "'%scala%', 11 s for '%clearance%', against 0.12 s for the same question through token_match. Keep LIKE for " +
-    "when you mean a substring inside a word. Select FROM the search relation itself - it already carries " +
-    `${key} and every scalar column - rather than joining it back with WHERE ${key} IN (SELECT ${key} FROM ` +
-    "token_match(...)), which reads the whole table a second time for nothing. " +
+    // One sentence, no more: on 2026-09-11 a caller wrote ILIKE '%...%' over
+    // the jobs table's 6.7 GB description column three times at 38-45 s each,
+    // where token_match on the same words runs in under a second. A longer
+    // version of this warning made the caller write many small statements
+    // instead; the text around it is otherwise the measured wording.
+    `Match words on ${textColumns} with these functions, never with LIKE '%word%', which scans the stored text ` +
+    "(38-45 s per query on this table's description column against under a second through token_match). " +
     (vectorColumn
       ? 'The {{q:"..."}} placeholder is embedded on the platform with the table\'s own model, so it costs you ' +
         "nothing but the text (a bare {{q}} with the embed map is folded into it). "
