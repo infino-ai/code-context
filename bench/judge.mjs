@@ -33,8 +33,8 @@
 // Model: JUDGE_MODEL (default claude-opus-5). Concurrency: CX_BENCH_CONCURRENCY.
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { query } from "@anthropic-ai/claude-agent-sdk";
-import { RESULTS, record, laneDef, cxServer, mcpEnvBase, foldToolMessage, newToolAccounting, recordedQueries } from "./lanes.mjs";
+import { DEFAULT_JUDGE_MODEL, VERIFICATION_RULES, judgeOnce, parseVerdict, queriesBlock } from "./judge-core.mjs";
+import { RESULTS, record, laneDef, recordedQueries } from "./lanes.mjs";
 
 const [repoArg, baselineArg, candidateArg, resultsArg, catsArg, laneArg] = process.argv.slice(2);
 if (!repoArg || !baselineArg || !candidateArg) {
@@ -63,7 +63,7 @@ try {
   console.error(`error: ${err.message}`);
   process.exit(1);
 }
-const JUDGE_MODEL = process.env.JUDGE_MODEL ?? "claude-opus-5";
+const JUDGE_MODEL = DEFAULT_JUDGE_MODEL;
 const CONC = Number(process.env.CX_BENCH_CONCURRENCY ?? 4);
 
 /** Rows of one build: by label, or by a `since..until` timestamp window. */
@@ -115,47 +115,15 @@ for (const [key, b] of base) {
 if (process.env.JUDGE_LIMIT) pairs.length = Math.min(pairs.length, Number(process.env.JUDGE_LIMIT));
 console.log(`judge=${JUDGE_MODEL}  rule=${JUDGE_RULE}  lane=${laneWanted}  baseline=${baselineArg}  candidate=${candidateArg}  pairs=${pairs.length}  index=${indexDir}`);
 
+// The pairwise verdict around the shared verification rules (judge-core.mjs):
+// the same rules grade the demo's arms, so the two judges cannot drift on
+// what counts as supported.
 const system =
   `You are judging two answers to a question about the repository checked out at ${repoDir}. ` +
-  `Verify what each answer claims (file paths, line numbers, identifiers, counts, rankings, behaviour) ` +
-  `with the tool that measures the claim at the grain the answer states. Read, Grep and Glob on the ` +
-  `checkout measure code, lines and occurrences. The code-context tools measure the repository's own ` +
-  `index, which some answers report from: find gives every line containing a literal with its per-file ` +
-  `line counts (byFile); sql gives chunk counts and rankings over a search relation, e.g. SELECT path, ` +
-  `COUNT(*) AS chunks FROM bm25_search('chunks','content','<terms>', k) GROUP BY path ORDER BY chunks DESC, ` +
-  `or the same over hybrid_search('chunks','content','<terms>','embedding', {{q}}, k) with an embed map ` +
-  `{"q":"<topic>"} passed beside the statement. Under each answer are the queries its run made through ` +
-  `these tools, in order, with the statements the platform ran for it marked "ran:". Reproduce a count ` +
-  `built on the index by rerunning the recorded query as written, embed map included, before writing ` +
-  `your own: a ranked search's total is a property of that query, so it reproduces only from that query. ` +
-  `A count is supported when it reproduces at its stated grain (lines, occurrences, hits, chunks, the ` +
-  `top-k of a named query), whichever tool that takes; a count that reproduces at no grain, a ranked ` +
-  `query's total presented as a property of the repository with no measure named, a ranking its own ` +
-  `measure does not give, an attribution the code contradicts, or a name the code does not have is ` +
-  `unsupported. An answer whose queries were not recorded is verified with your own queries, as before. ` +
-  `Judge correctness and how well each claim is supported; do not reward length or formatting. ` +
+  `${VERIFICATION_RULES} ` +
   `Finish with a single JSON object and nothing ` +
   `after it: {"winner":"A"|"B"|"tie","confidence":<0..1>,"unsupported_a":<int>,"unsupported_b":<int>,"reason":"<one sentence>"} ` +
   `where unsupported_* counts the claims in that answer the repository does not support.`;
-
-/** The queries one answer's run made, as the judge is handed them; a row
- * written before inputs were kept says so, and the judge falls back to its
- * own queries for that side. */
-function queriesBlock(run) {
-  const lines = recordedQueries(run.toolDetails);
-  return lines.length ? lines.join("\n") : "(this run's queries were not recorded; verify with your own)";
-}
-
-function parseVerdict(text) {
-  const start = text.lastIndexOf("{");
-  const end = text.lastIndexOf("}");
-  if (start < 0 || end < start) return null;
-  try {
-    return JSON.parse(text.slice(start, end + 1));
-  } catch {
-    return null;
-  }
-}
 
 async function judge(pair) {
   const swap = Math.random() < 0.5;
@@ -165,43 +133,10 @@ async function judge(pair) {
     `Question:\n${pair.question}\n\n=== Answer A ===\n${A.answer}\n\n--- Queries behind Answer A ---\n${queriesBlock(A)}\n\n` +
     `=== Answer B ===\n${B.answer}\n\n--- Queries behind Answer B ---\n${queriesBlock(B)}\n\n` +
     `Verify the claims against the repository, then give the JSON verdict.`;
-  const t0 = performance.now();
-  const acc = newToolAccounting();
-  let text = "";
-  let costUsd = null;
-  let usage = null;
-  let error = null;
-  try {
-    for await (const m of query({
-      prompt,
-      options: {
-        model: JUDGE_MODEL,
-        maxTurns: 30,
-        systemPrompt: system,
-        permissionMode: "bypassPermissions",
-        env: { ...process.env, IS_SANDBOX: "1" },
-        cwd: repoDir,
-        settingSources: [],
-        strictMcpConfig: true,
-        tools: ["Read", "Grep", "Glob"],
-        // The index's own measure, beside the checkout's: the local server
-        // alone (no --db), so a verification never spends a platform call.
-        mcpServers: cxServer(mcpEnvBase(repoDir, indexDir)),
-      },
-    })) {
-      foldToolMessage(acc, m);
-      if (m.type === "result") {
-        usage = m.usage ?? null;
-        costUsd = m.total_cost_usd ?? null;
-        if (m.result) text = m.result;
-      }
-    }
-  } catch (err) {
-    error = String(err?.message ?? err).slice(0, 300);
-  }
+  const run = await judgeOnce({ repoDir, indexDir, system, prompt, model: JUDGE_MODEL });
+  const { text, costUsd, tokens, wallMs, toolCalls, toolDetails, toolErrors, error } = run;
   const v = parseVerdict(text);
   const toSide = (w) => (w === "tie" ? "tie" : (w === "A") === !swap ? "baseline" : "candidate");
-  const u = usage ?? {};
   return {
     cat: pair.cat,
     q: pair.q,
@@ -213,14 +148,14 @@ async function judge(pair) {
     rule: JUDGE_RULE,
     // The tools the judge called to verify, in order (cx:find, cx:sql, Grep,
     // Read, ...): whether a verdict on an index-grain count was measured.
-    tools: acc.toolCalls,
+    tools: toolCalls,
     // The judge's own calls with their inputs - the queries it wrote to
     // reproduce a count are then on the record beside the verdict.
-    toolDetails: acc.toolDetails,
+    toolDetails,
     // Calls whose result was an error - a tool outside the judge's list that
     // the model asked for anyway, or a query the index refused - so a name in
     // `tools` that never ran is told apart from one that did.
-    toolErrors: acc.toolDetails.filter((d) => d.isError).map((d) => d.name),
+    toolErrors,
     // How many recorded queries each side came with; zero on one side means
     // that answer was verified with the judge's own queries alone.
     queriesBaseline: recordedQueries(pair.base.toolDetails).length,
@@ -232,8 +167,8 @@ async function judge(pair) {
     reason: v?.reason ?? null,
     swapped: swap,
     costUsd,
-    tokens: (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.output_tokens ?? 0),
-    wallMs: Math.round(performance.now() - t0),
+    tokens,
+    wallMs,
     error: error ?? (v ? null : `no verdict in: ${text.slice(-200)}`),
     ts: new Date().toISOString(),
   };

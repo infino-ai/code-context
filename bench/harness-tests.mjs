@@ -45,6 +45,8 @@ import { warmHosted, splitDbUrl, DEFAULT_RETRY_AFTER_SECS } from "./warm-hosted.
 import { indexArgs, runIndexBuild, hostOf } from "./load-hosted.mjs";
 import { snowflakeSettings, CHUNK_COLUMNS } from "./snowflake-rest.mjs";
 import { readOnlyError, findSql, searchSql, splitTerms, tableName } from "./snowflake-mcp.mjs";
+import { parseVerdict, queriesBlock, VERIFICATION_RULES } from "./judge-core.mjs";
+import { GRADES, blind, gradingPrompt, gradingSystem, readGrades } from "../demo/judge.mjs";
 
 const FAKE_URL = "https://api.example.test/bench-db";
 const FAKE_KEY = "inf_secret_value_that_must_not_leak";
@@ -150,7 +152,10 @@ test("files has the stock tools and no server; cx has Read only", () => {
   const files = laneOptions("files", "/r", "/r/.infino");
   assert.deepEqual(files.tools, ["Glob", "Grep", "Read", "LS", "Bash"]);
   assert.equal(files.mcpServers, undefined);
-  assert.equal(files.settingSources.length, 0);
+  // The repository's own instructions and skills reach every lane; user and
+  // local settings never do (2026-09-11).
+  assert.deepEqual(files.settingSources, ["project"]);
+  assert.deepEqual(laneOptions("combo", "/r", "/r/.infino").settingSources, ["project"]);
   assert.equal(files.strictMcpConfig, true);
   const cx = laneOptions("cx", "/r", "/r/.infino");
   assert.deepEqual(cx.tools, ["Read"]);
@@ -983,4 +988,86 @@ test("hostOf keeps the host and nothing else", () => {
   assert.equal(hostOf(FAKE_URL), "api.example.test");
   assert.equal(hostOf(undefined), null);
   assert.equal(hostOf("nope"), null);
+});
+
+// --- the demo's judge -------------------------------------------------------
+
+const ARMS_TO_GRADE = [
+  { arm: "grep", label: "Sonnet + grep", answer: "The pointer swap is in src/supertable/handle.rs.", error: null },
+  { arm: "index", label: "Sonnet + index only", answer: "See src/supertable/manifest/commit.rs.", error: null },
+  { arm: "subagents", label: "Sonnet + index + subagents", answer: "", error: "the run failed" },
+];
+
+test("blind is a permutation of the arms under labels 1..n, in the order the random source gives", () => {
+  // A source that always returns 0 swaps each element to the front: [c, a, b].
+  const labelled = blind(ARMS_TO_GRADE, () => 0);
+  assert.deepEqual(labelled.map((l) => l.label), ["1", "2", "3"]);
+  assert.deepEqual(
+    labelled.map((l) => l.result.arm).sort(),
+    ["grep", "index", "subagents"],
+    "every arm exactly once",
+  );
+  // A different source, a different order - the labels never name the arm.
+  const other = blind(ARMS_TO_GRADE, () => 0.99);
+  assert.deepEqual(other.map((l) => l.result.arm), ["grep", "index", "subagents"]);
+  assert.equal(JSON.stringify(labelled), JSON.stringify(labelled), "and no arm name reaches a label");
+  for (const { label } of labelled) assert.match(label, /^[123]$/);
+});
+
+test("the grading prompt carries every answer under its label with its recorded queries, and a failed run as such", () => {
+  const labelled = blind(ARMS_TO_GRADE, () => 0.99);
+  const rows = new Map([["index", { toolDetails: [{ name: "cx:find", input: { text: "swap_pointer" } }] }]]);
+  const prompt = gradingPrompt("Where is the pointer swapped?", labelled, rows);
+  assert.match(prompt, /^Question:\nWhere is the pointer swapped\?/);
+  assert.match(prompt, /=== Answer 1 ===\nThe pointer swap is in src\/supertable\/handle\.rs\./);
+  assert.match(prompt, /=== Answer 2 ===\nSee src\/supertable\/manifest\/commit\.rs\./);
+  assert.match(prompt, /=== Answer 3 ===\n\(this run failed: the run failed\)/);
+  // The arm with recorded queries shows them; the others say so.
+  assert.match(prompt, /--- Queries behind Answer 2 ---\n(?!\(this run's queries were not recorded)/);
+  assert.match(prompt, /--- Queries behind Answer 1 ---\n\(this run's queries were not recorded; verify with your own\)/);
+  assert.equal(prompt.includes("Sonnet"), false, "blind: no arm name in the prompt");
+  assert.equal(queriesBlock(undefined).startsWith("(this run's queries were not recorded"), true);
+});
+
+test("the grading system prompt is the shared verification rules plus the rubric and the verdict shape", () => {
+  const system = gradingSystem("/r");
+  assert.equal(system.includes(VERIFICATION_RULES), true);
+  for (const g of GRADES) assert.match(system, new RegExp(`${g}: `));
+  assert.match(system, /"grades":\{"1":/);
+  assert.match(system, /bare label number/);
+  assert.match(system, /checked out at \/r/);
+});
+
+test("readGrades maps the verdict back onto the arms and refuses a half verdict", () => {
+  const labelled = blind(ARMS_TO_GRADE, () => 0.99); // grep=1, index=2, subagents=3
+  const text =
+    "I checked both files.\n" +
+    JSON.stringify({ grades: { 1: "B", 2: "A", 3: "F" }, unsupported: { 1: 1, 2: 0, 3: 0 }, reasons: { 1: "handle.rs holds the handle, the swap is in commit.rs", 2: "exact", 3: "no answer" } });
+  const grades = readGrades(text, labelled);
+  assert.deepEqual(
+    grades.map((g) => [g.arm, g.grade, g.unsupported]),
+    [["grep", "B", 1], ["index", "A", 0], ["subagents", "F", 0]],
+  );
+  assert.equal(grades[0].label, "Sonnet + grep", "the page gets the arm's label back");
+  assert.match(grades[0].reason, /swap is in commit\.rs/);
+  // Keys spelled "Answer 1" read the same as "1": the first live verdict came
+  // that way and the grading in it was right.
+  const spelled = readGrades(
+    JSON.stringify({ grades: { "Answer 1": "C", "answer 2": "A", " Answer 3 ": "F" }, unsupported: { "Answer 1": 2 }, reasons: { "Answer 2": "exact" } }),
+    labelled,
+  );
+  assert.deepEqual(spelled.map((g) => [g.arm, g.grade, g.unsupported, g.reason]), [["grep", "C", 2, null], ["index", "A", null, "exact"], ["subagents", "F", null, null]]);
+  // A grade outside the rubric, or a missing label, is no verdict at all.
+  assert.equal(readGrades(JSON.stringify({ grades: { 1: "A+", 2: "A", 3: "F" } }), labelled), null);
+  assert.equal(readGrades(JSON.stringify({ grades: { 1: "A", 2: "A" } }), labelled), null);
+  assert.equal(readGrades("no json here", labelled), null);
+  // parseVerdict takes the LAST object, outermost: the judge's working may
+  // hold braces, and the verdict itself is nested.
+  assert.deepEqual(parseVerdict('{"draft":1} then {"grades":{"1":"A"}}'), { grades: { 1: "A" } });
+  assert.deepEqual(
+    parseVerdict('Checked. {"grades":{"1":"B"},"unsupported":{"1":1},"reasons":{"1":"one {brace} inside"}}'),
+    { grades: { 1: "B" }, unsupported: { 1: 1 }, reasons: { 1: "one {brace} inside" } },
+  );
+  assert.equal(parseVerdict("no braces"), null);
+  assert.equal(parseVerdict("{not json}"), null);
 });

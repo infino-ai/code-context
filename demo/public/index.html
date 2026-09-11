@@ -126,6 +126,17 @@
     background: var(--warn); color: #1a0c0c; padding: 8px 12px; margin-bottom: 16px;
     font-size: 12px; font-weight: 500;
   }
+/* The judge's grade above each answer: the letter, what it means, the
+   one-line reason. Colour says the grade; the words say why. */
+.judge { display: flex; flex-wrap: wrap; gap: .4rem .7rem; align-items: baseline; margin: .9rem 0 .4rem; padding: .55rem .7rem; border-left: 4px solid var(--faint); background: rgba(0,0,0,.03); font-size: .9rem; }
+.judge.pending { color: var(--faint); font-style: italic; }
+.judge .grade { font-size: 1.25rem; font-weight: 700; letter-spacing: .02em; min-width: 1.4rem; }
+.judge .meaning { color: var(--faint); }
+.judge .reason { flex-basis: 100%; }
+.judge.grade-A { border-left-color: #1a7f4b; } .judge.grade-A .grade { color: #1a7f4b; }
+.judge.grade-B { border-left-color: #b7791f; } .judge.grade-B .grade { color: #b7791f; }
+.judge.grade-C { border-left-color: #c0392b; } .judge.grade-C .grade { color: #c0392b; }
+.judge.grade-F { border-left-color: #7a1f1f; } .judge.grade-F .grade { color: #7a1f1f; }
 </style>
 </head>
 <body>
@@ -438,6 +449,22 @@ function render(arm, r) {
 
 const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
+/** The judge's rubric, in the judge's own words (demo/judge.mjs), so the
+ * legend under a grade says exactly what the grader was told it means. */
+const GRADE_MEANING = {
+  A: "answers the question and every claim checks out against the repository",
+  B: "answers the question; one minor claim is unsupported or imprecise",
+  C: "partly right; significant claims are unsupported or wrong",
+  F: "wrong, or does not answer the question",
+};
+
+/** "claude-opus-5" -> "Opus": the model family, which is what a reader
+ * recognises. */
+const shortModel = (id) => {
+  const m = /(opus|sonnet|haiku|fable)/i.exec(String(id));
+  return m ? m[1][0].toUpperCase() + m[1].slice(1).toLowerCase() : String(id);
+};
+
 let live = null;
 
 form.onsubmit = (e) => {
@@ -575,6 +602,53 @@ form.onsubmit = (e) => {
     } else {
       statusEl.textContent = "Done, with an error on at least one arm.";
     }
+    // A verdict is still coming: the stream stays open for it.
+    if (d.judge) statusEl.textContent += ` Grading accuracy with ${shortModel(d.judge)}…`;
+    else stop();
+  });
+
+  source.addEventListener("judging", () => {
+    for (const arm of arms.values()) {
+      const answer = arm.bodyEl.querySelector(".answer");
+      if (answer && !arm.bodyEl.querySelector(".judge")) {
+        answer.insertAdjacentHTML("beforebegin", `<div class="judge pending">grading…</div>`);
+      }
+    }
+  });
+
+  /** The judge's verdict: one grade per arm, blind and verified, drawn above
+   * each answer, and the judge's own cost in the status line - kept out of
+   * every arm's numbers, because it is the price of the measurement. */
+  source.addEventListener("judged", (e) => {
+    const v = JSON.parse(e.data);
+    const judge = shortModel(v.model);
+    if (!v.grades) {
+      for (const arm of arms.values()) {
+        const el = arm.bodyEl.querySelector(".judge");
+        if (el) { el.className = "judge err"; el.textContent = `unjudged: ${v.error ?? "no verdict"}`; }
+      }
+      statusEl.textContent = statusEl.textContent.replace(/ Grading accuracy.*$/, ` ${judge} returned no verdict (${escapeHtml(v.error ?? "unknown")}).`);
+      stop();
+      return;
+    }
+    for (const g of v.grades) {
+      const arm = arms.get(g.arm);
+      if (!arm) continue;
+      const el = arm.bodyEl.querySelector(".judge");
+      if (!el) continue;
+      el.className = `judge grade-${g.grade}`;
+      el.innerHTML =
+        `<b class="grade">${g.grade}</b>` +
+        `<span class="meaning">${escapeHtml(GRADE_MEANING[g.grade] ?? "")}` +
+        `${g.unsupported !== null && g.unsupported !== undefined ? ` · ${g.unsupported} unsupported claim${g.unsupported === 1 ? "" : "s"}` : ""}</span>` +
+        `${g.reason ? `<span class="reason">${escapeHtml(g.reason)}</span>` : ""}`;
+    }
+    const line = v.grades.map((g) => `${g.label.replace(/^Sonnet \+ /, "")} ${g.grade}`).join(" · ");
+    const cost = v.costUsd !== null && v.costUsd !== undefined ? ` · $${v.costUsd.toFixed(2)}` : "";
+    statusEl.textContent = statusEl.textContent.replace(
+      / Grading accuracy.*$/,
+      ` Accuracy by ${judge}, blind and verified against the repository: ${line} (${v.toolCalls} checks${cost}, ${(v.wallMs / 1000).toFixed(0)}s).`,
+    );
     stop();
   });
 

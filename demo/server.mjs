@@ -55,9 +55,11 @@ import { readFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { DEFAULT_JUDGE_MODEL } from "../bench/judge-core.mjs";
 import { checkLaneEnv, runLane, systemPrompt } from "../bench/lanes.mjs";
 import { armCost, ledgerMark, ledgerSince, ratesFromEnv } from "./charge.mjs";
 import { fixtureArm, isFixture } from "./fixture.mjs";
+import { judgeArms, judgeEnabled } from "./judge.mjs";
 import { livePhase, phaseOf, phaseSplit } from "./phases.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -253,21 +255,24 @@ async function runArm(arm, corpus, question, emit) {
   if (isFixture()) {
     const row = await fixtureArm(arm, emit);
     return {
-      arm: arm.id,
-      label: arm.label,
-      lane: arm.lane,
-      fixture: true,
-      error: null,
-      answer: row.answer,
-      wallMs: row.wallMs,
-      split: phaseSplit(row),
-      cost: armCost({ costUsd: row.costUsd, entries: row.entries, rates: ratesFromEnv() }),
-      tokens: row.tokens,
-      calls: row.calls,
-      subagents: (row.entries ?? []).filter((e) => Number.isFinite(e?.agentTurns)).length,
-      subagentTurns: (row.entries ?? []).reduce((n, e) => n + (e?.agentTurns ?? 0), 0),
-      toolCalls: row.toolCalls,
-      durationApiMs: null,
+      row,
+      result: {
+        arm: arm.id,
+        label: arm.label,
+        lane: arm.lane,
+        fixture: true,
+        error: null,
+        answer: row.answer,
+        wallMs: row.wallMs,
+        split: phaseSplit(row),
+        cost: armCost({ costUsd: row.costUsd, entries: row.entries, rates: ratesFromEnv() }),
+        tokens: row.tokens,
+        calls: row.calls,
+        subagents: (row.entries ?? []).filter((e) => Number.isFinite(e?.agentTurns)).length,
+        subagentTurns: (row.entries ?? []).reduce((n, e) => n + (e?.agentTurns ?? 0), 0),
+        toolCalls: row.toolCalls,
+        durationApiMs: null,
+      },
     };
   }
 
@@ -325,24 +330,29 @@ async function runArm(arm, corpus, question, emit) {
   const subagentTurns = loops.reduce((n, e) => n + e.agentTurns, 0);
   const split = phaseSplit(row);
   const cost = armCost({ costUsd: row.costUsd, entries, rates: ratesFromEnv() });
+  // The harness row travels back beside the page's result: the judge needs
+  // the queries the run recorded (`toolDetails`), which the page does not.
   return {
-    arm: arm.id,
-    label: arm.label,
-    lane: arm.lane,
-    error: row.error ?? null,
-    answer: row.answer ?? "",
-    wallMs: row.wallMs,
-    split,
-    cost,
-    tokens: callerTokens(row),
-    calls: row.calls,
-    subagents: loops.length,
-    subagentTurns,
-    toolCalls: row.toolCalls,
-    // The SDK's own view of how much of the run was spent waiting on the model
-    // API. An independent check on `split.modelMs`, shown so a reader can see
-    // the two agree rather than taking the bar on trust.
-    durationApiMs: row.durationApiMs ?? null,
+    row,
+    result: {
+      arm: arm.id,
+      label: arm.label,
+      lane: arm.lane,
+      error: row.error ?? null,
+      answer: row.answer ?? "",
+      wallMs: row.wallMs,
+      split,
+      cost,
+      tokens: callerTokens(row),
+      calls: row.calls,
+      subagents: loops.length,
+      subagentTurns,
+      toolCalls: row.toolCalls,
+      // The SDK's own view of how much of the run was spent waiting on the
+      // model API. An independent check on `split.modelMs`, shown so a reader
+      // can see the two agree rather than taking the bar on trust.
+      durationApiMs: row.durationApiMs ?? null,
+    },
   };
 }
 
@@ -374,13 +384,22 @@ async function handleRun(req, res, url) {
     if (alive) emit(data);
   };
 
+  // The judge grades the answers once every arm is done: a stronger model,
+  // blind to the arms, checking each claim against the repository. Off in
+  // fixture mode (there is no model) and with DEMO_JUDGE=0.
+  const judgeOn = judgeEnabled() && !isFixture();
   send(res, "queued", {
     arms: arms.map(({ id, label, lane }) => ({ id, label, lane })),
     question,
     corpus: { id: corpus.id, label: corpus.label, ready: corpus.ready, note: corpus.note ?? null },
     fixture: isFixture(),
+    judge: judgeOn ? DEFAULT_JUDGE_MODEL : null,
   });
 
+  let results = null;
+  // The harness row behind each arm, for the judge: the recorded queries
+  // live there and never reach the page.
+  const rows = new Map();
   try {
     await serialize(async () => {
       runsServed += 1;
@@ -395,9 +414,10 @@ async function handleRun(req, res, url) {
       // faster arm's numbers back until the slower one lands hides the only
       // thing a reader came to see - and the bar keeps growing while it waits,
       // which makes the fast arm look exactly as slow as the slow one.
-      const results = await Promise.all(
+      results = await Promise.all(
         arms.map(async (arm) => {
-          const result = await runArm(arm, corpus, question, guarded);
+          const { result, row } = await runArm(arm, corpus, question, guarded);
+          rows.set(arm.id, row);
           guarded({ ...result, kind: "arm_done" });
           return result;
         }),
@@ -407,9 +427,16 @@ async function handleRun(req, res, url) {
       });
       // `done` no longer carries the rendering. It closes the run and carries
       // the comparison between the arms, which is the one thing that does need
-      // both of them.
-      if (alive) send(res, "done", { results });
+      // both of them - and says whether a verdict is still to come.
+      if (alive) send(res, "done", { results, judge: judgeOn ? DEFAULT_JUDGE_MODEL : null });
     });
+    // Outside the queue: the judge reads the checkout and the LOCAL index and
+    // spends no platform call, so the next question need not wait for it.
+    if (judgeOn && alive && results) {
+      send(res, "judging", { model: DEFAULT_JUDGE_MODEL });
+      const verdict = await judgeArms({ repoDir: corpus.repo, indexDir: corpus.index, question, results, rows });
+      if (alive) send(res, "judged", verdict);
+    }
   } catch (err) {
     if (alive) send(res, "failed", { error: String(err?.message ?? err).slice(0, 400) });
   }
