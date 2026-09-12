@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Sonnet: File Tools vs Infino</title>
+<title>Claude Sonnet with File Tools vs Claude Sonnet with Infino Subagents</title>
 <style>
   /* infino's own scheme (infino.ai): near-black ground with a faint grid,
      warm white text, ONE accent - the orange - and monospace throughout. Dark
@@ -52,8 +52,15 @@
   .top { display: flex; align-items: baseline; gap: 18px; margin: 0 0 6px; flex-wrap: wrap; }
   .brand { color: var(--accent); font-weight: 600; letter-spacing: .06em; font-size: 15px; text-decoration: none; }
   .brand:hover { text-decoration: underline; }
-  h1 { font-size: 15px; font-weight: 500; margin: 0; letter-spacing: -.01em; flex: 1 1 auto; }
+  h1 { font-size: 15px; font-weight: 400; margin: 0; letter-spacing: -.01em; flex: 1 1 auto; }
   h1 .prompt { color: var(--accent); margin-right: .5em; }
+  /* The model is the constant and the tools are the variable, so the title
+     says it that way: what both sides share is set back, and the two things
+     being compared carry the weight. "Sonnet: File Tools vs Infino" left it
+     open whether Infino was a model. */
+  h1 .same { color: var(--faint); }
+  h1 b { color: var(--ink); font-weight: 500; }
+  h1 .vs { color: var(--faint); margin: 0 .45em; }
   .theme {
     background: transparent; color: var(--faint); border: 1px solid var(--rule); padding: 3px 11px;
     font: inherit; font-size: 12px; cursor: pointer; line-height: 1.4; border-radius: 999px;
@@ -296,7 +303,7 @@
 
 <div class="top">
   <a class="brand" href="https://infino.ai" target="_blank" rel="noopener">infino</a>
-  <h1><span class="prompt" aria-hidden="true">❯</span>Sonnet: File Tools &nbsp;vs&nbsp; Infino</h1>
+  <h1><span class="prompt" aria-hidden="true">❯</span><span class="same">Claude Sonnet with</span> <b>File Tools</b><span class="vs">vs</span><span class="same">Claude Sonnet with</span> <b>Infino Subagents</b></h1>
   <!-- Both switches change how the page reads rather than what it runs, so
        they sit together, out of the reading order. -->
   <label class="third" title="the third arm hands searches to a loop of ours; it runs either way, this only shows it">
