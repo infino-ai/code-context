@@ -192,6 +192,15 @@ import { ensureIndexed, type EnsureResult } from "./ensure.js";
  * harm. Move it only with a measurement that says otherwise. */
 const CARD_TIER = "lean";
 
+/** Every tool here reads the index; none writes. Said out loud because a
+ * caller that runs a message's tool calls concurrently only when each one is
+ * read-only - Claude Code does exactly that - otherwise runs them one at a
+ * time. Without this, four `ask`s issued together were announced at once and
+ * executed serially (measured 2026-09-12: 31s where the slowest alone was 15s),
+ * so every "spawn several in parallel" in the descriptions below was a promise
+ * the harness could not keep. */
+const READ_ONLY = { readOnlyHint: true } as const;
+
 /** How long `sql` waits for the platform's verdict on its rows before
  * returning them without one. Short on purpose: the rows are the answer and
  * the verdict is advice about them, so a platform that is slow or down must
@@ -1052,6 +1061,7 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
     "search",
     {
       title: "Code search (exact terms + meaning)",
+      annotations: READ_ONLY,
       description: rows
         ? rowsSearchDescription(rows)
         : mode.kind === "unresolved"
@@ -1171,6 +1181,7 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
     "find",
     {
       title: "Find exact text (every occurrence, like grep -n)",
+      annotations: READ_ONLY,
       description: rows
         ? rowsFindDescription(rows)
         : mode.kind === "unresolved"
@@ -1293,6 +1304,7 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
     "sql",
     {
       title: "SQL over the code index",
+      annotations: READ_ONLY,
       description: sqlDescription,
       inputSchema: {
         query: z
@@ -1422,6 +1434,7 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
       "ask",
       {
         title: "Ask the repository index: one retrieval, the facts back",
+        annotations: READ_ONLY,
         description: rows
           ? rowsAskDescription(rows, DEV_CONTEXT_NOTE)
           : mode.kind === "unresolved"
@@ -1532,6 +1545,7 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
       "explore",
       {
         title: "Exploration subagent over the repository index",
+        annotations: READ_ONLY,
         description: rows
           ? rowsExploreDescription(rows, DEV_CONTEXT_NOTE)
           : mode.kind === "unresolved"
