@@ -136,6 +136,8 @@ export async function judgeArms({
   maxTurns = demoJudgeMaxTurns(),
   random = Math.random,
   onEvent,
+  serverArgs = [],
+  serverEnv = {},
 }) {
   const labelled = blind(results, random);
   const run = await judgeOnce({
@@ -145,6 +147,12 @@ export async function judgeArms({
     maxTurns,
     system: gradingSystem(repoDir, maxTurns),
     prompt: gradingPrompt(question, labelled, rows),
+    // The arms' own server, so a recorded ranking reruns where it ran. A
+    // hosted arm's `hybrid_search` carries a placeholder the platform
+    // embeds; against a local index with no vectors it errors rather than
+    // disagrees, and the judge reads that as a claim it cannot support.
+    serverArgs,
+    serverEnv,
     // Passed straight through: the page draws the checking as it happens,
     // because grading starts after every panel has settled and a page that
     // looks finished while a strong model works reads as a hung one.

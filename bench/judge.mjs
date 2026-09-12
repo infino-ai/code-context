@@ -34,7 +34,7 @@
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { DEFAULT_JUDGE_MODEL, JUDGE_MAX_TURNS, judgeOnce, judgeRules, parseVerdict, queriesBlock } from "./judge-core.mjs";
-import { RESULTS, record, laneDef, recordedQueries } from "./lanes.mjs";
+import { RESULTS, record, hostedFlags, laneDef, recordedQueries } from "./lanes.mjs";
 
 const [repoArg, baselineArg, candidateArg, resultsArg, catsArg, laneArg] = process.argv.slice(2);
 if (!repoArg || !baselineArg || !candidateArg) {
@@ -65,6 +65,21 @@ try {
 }
 const JUDGE_MODEL = DEFAULT_JUDGE_MODEL;
 const CONC = Number(process.env.CX_BENCH_CONCURRENCY ?? 4);
+
+/** The server the judge verifies through: the arms' own when either lane was
+ * a hosted one and the harness env names a database, the local index alone
+ * otherwise. A hosted lane's recorded ranking is a `hybrid_search` carrying a
+ * placeholder the platform embeds, and rerunning it against a local index
+ * with no vectors errors rather than disagrees — which a judge told to
+ * reproduce the recorded query first reads as a claim it cannot support. */
+function judgeServer() {
+  const hosted = [baseLane, candLane].some((lane) => laneDef(lane).kind === "hosted");
+  if (!hosted || !process.env.CX_BENCH_DB_URL) return {};
+  return {
+    serverArgs: hostedFlags(),
+    serverEnv: { CX_REMOTE_SEARCH: "1", ...(process.env.CX_TABLE ? { CX_TABLE: process.env.CX_TABLE } : {}) },
+  };
+}
 
 /** Rows of one build: by label, or by a `since..until` timestamp window. */
 function selector(spec) {
@@ -133,7 +148,12 @@ async function judge(pair) {
     `Question:\n${pair.question}\n\n=== Answer A ===\n${A.answer}\n\n--- Queries behind Answer A ---\n${queriesBlock(A)}\n\n` +
     `=== Answer B ===\n${B.answer}\n\n--- Queries behind Answer B ---\n${queriesBlock(B)}\n\n` +
     `Verify the claims against the repository, then give the JSON verdict.`;
-  const run = await judgeOnce({ repoDir, indexDir, system, prompt, model: JUDGE_MODEL });
+  // The judge verifies through the arms' own server when the run had one.
+  // A hosted arm's recorded ranking is a `hybrid_search` the platform
+  // embeds; rerun against a local index with no vectors it errors, and a
+  // judge told to reproduce the recorded query first reads that error as an
+  // unsupported claim (see JUDGE_TOOLS).
+  const run = await judgeOnce({ repoDir, indexDir, system, prompt, model: JUDGE_MODEL, ...judgeServer() });
   const { text, costUsd, tokens, wallMs, toolCalls, toolDetails, toolErrors, error } = run;
   const v = parseVerdict(text);
   const toSide = (w) => (w === "tie" ? "tie" : (w === "A") === !swap ? "baseline" : "candidate");

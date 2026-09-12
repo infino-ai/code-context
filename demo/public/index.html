@@ -112,32 +112,15 @@
      not a note about it: a corpus whose hosted table is incomplete runs
      fewer arms, and a reader must not read that as the product. */
   .corpus-note { color: var(--warn); font-size: 12px; margin: 0 0 10px; }
-  /* The starters sit on the same line as their label rather than under it:
-     two strips of small grey text between the box and the panels was most of
-     what made the top of the page read as dense. */
-  .examples-row { display: flex; gap: 4px 10px; align-items: baseline; flex-wrap: wrap; margin-bottom: 20px; }
-  .examples-label { font-size: 11.5px; color: var(--faint); margin: 0; flex: none; }
-  .examples { display: flex; gap: 6px; flex-wrap: wrap; margin: 0; }
-  .examples button {
-    background: transparent; color: var(--soft); border: 1px solid var(--rule);
-    padding: 4px 11px; font-size: 12px; font-weight: 400; border-radius: 999px;
-  }
-  .examples button:hover { color: var(--ink); border-color: var(--accent); filter: none; }
-  /* The legend and the third-arm switch share one line: both are controls for
-     how the panels below read, and two stacked strips of small grey text was
-     most of what made the page look busy. */
-  .controls {
-    display: flex; gap: 10px 22px; align-items: center; flex-wrap: wrap;
-    margin: 0 0 10px; padding: 0 2px; font-size: 12px; color: var(--soft);
-  }
+  /* The starters are a control in the form's own row, not a band of chips
+     under it: five eighty-character questions cannot be chips, and as chips
+     they wrapped to two rows and were cut mid-word into five that all began
+     the same way. */
+  #examples { max-width: 22ch; color: var(--faint); }
   .swatch { display: inline-block; width: 10px; height: 10px; margin-right: 6px; vertical-align: -1px; border-radius: 3px; }
-  /* The key names the band; the gloss is the shortest thing that tells two
-     bands apart, with the full sentence on hover. The long em-dashed
-     explanations read as a paragraph laid on its side. */
-  .controls .key { color: var(--ink); }
-  .controls .gloss { color: var(--faint); }
-  .controls .legend-label { color: var(--faint); }
-  .third { margin-left: auto; display: inline-flex; gap: 7px; align-items: center; cursor: pointer; color: var(--faint); }
+  /* Beside the theme toggle: both change how the page reads, neither changes
+     what it runs, so neither belongs in the reading order. */
+  .third { display: inline-flex; gap: 7px; align-items: center; cursor: pointer; color: var(--faint); font-size: 12px; }
   .third:hover { color: var(--ink); }
   .third input { accent-color: var(--accent); margin: 0; cursor: pointer; }
   /* The headline: what the run actually showed, as figures rather than a
@@ -226,6 +209,8 @@
   /* Every tool call as it happens, newest last. Capped in height so a
      sixty-call grep run scrolls instead of pushing the numbers off screen. */
   .feed { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 4px; max-height: 96px; overflow-y: auto; }
+  /* The same element once the arm has finished and its chips became a tally. */
+  .feed.tally { display: block; font-size: 11.5px; color: var(--faint); max-height: none; overflow: visible; }
   .chip {
     font-size: 11px; padding: 2px 8px; white-space: nowrap; border-radius: 999px;
     border: 1px solid var(--rule); color: var(--faint);
@@ -312,6 +297,11 @@
 <div class="top">
   <a class="brand" href="https://infino.ai" target="_blank" rel="noopener">infino</a>
   <h1><span class="prompt" aria-hidden="true">❯</span>Sonnet: File Tools &nbsp;vs&nbsp; Infino</h1>
+  <!-- Both switches change how the page reads rather than what it runs, so
+       they sit together, out of the reading order. -->
+  <label class="third" title="the third arm hands searches to a loop of ours; it runs either way, this only shows it">
+    <input type="checkbox" id="show-third"> subagents
+  </label>
   <button type="button" class="theme" id="theme" title="switch between the dark and light palette">☀ light</button>
 </div>
 <!-- The box first: it is what the page is for, and the standfirst that used
@@ -321,7 +311,15 @@
      panel's body, where the arms are described. -->
 <form id="ask">
   <select id="corpus" title="which corpus the three arms look at"></select>
-  <input type="text" id="q" placeholder="e.g. how does the manifest commit stay atomic under a concurrent writer?" autocomplete="off">
+  <input type="text" id="q" placeholder="ask anything about this corpus" autocomplete="off">
+  <!-- The starters, as a control rather than a row of chips. Five questions
+       of eighty characters cannot be chips: they wrapped to two rows and
+       were cut mid-word, so all five began "Which files have the most…"
+       and none of them could be told apart. Here they are readable, they
+       cost no band, and they sit in the one row a reader is already using. -->
+  <select id="examples" title="a question to start from; it fills the box for you to edit">
+    <option value="">examples…</option>
+  </select>
   <button type="submit" id="go">Run</button>
 </form>
 
@@ -351,43 +349,19 @@
 </details>
 
 <p class="corpus-note" id="corpus-note" hidden></p>
-<div class="examples-row">
-  <span class="examples-label" id="examples-label">or edit one of these:</span>
-  <div class="examples" id="examples"></div>
-</div>
 
 <div class="headline no-third" id="headline" hidden></div>
 <!-- Hidden until a run: before one it said "Ready.", which is a bordered
      strip carrying no fact, and the page's whole complaint was strips. -->
 <div class="status" id="status" hidden><span class="dot"></span><span id="status-text"></span></div>
 
-<!-- The key sits with the bars it is a key for, directly above the panels
-     and below the run's own line: before a run there are no bars, and a
-     legend for nothing was one more strip of grey text between a reader and
-     the box. The split is WHO ran the search, not which tool: `spansOf`
-     counts a call as retrieval only when the caller made it itself
-     (!inSubagent), so the File Tools arm - which hands almost everything to
-     its own Explore - measures ~0% retrieval and ~80% subagent, and the old
-     wording ("file tools / the index") named a band that panel never shows.
-     Both keys are always on screen: every arm can spend time in all three.
-     The full sentence for each is on hover; the line itself stays short,
-     because three em-dashed clauses read as a paragraph laid on its side. -->
-<div class="controls">
-  <span class="legend-label">time in each bar:</span>
-  <span title="the caller's own model turns — reasoning, and writing the answer">
-    <i class="swatch" style="background:var(--model)"></i><span class="key">model</span> <span class="gloss">thinking</span>
-  </span>
-  <span title="the caller searching for itself — its own tool calls, whichever tool they go to">
-    <i class="swatch" style="background:var(--retrieval)"></i><span class="key">retrieval</span> <span class="gloss">searching itself</span>
-  </span>
-  <span title="handed to another loop, which does its own searching inside">
-    <i class="swatch" style="background:var(--subagent)"></i><span class="key">subagent</span> <span class="gloss">another loop</span>
-  </span>
-  <label class="third" title="the third arm hands searches to a loop of ours; it runs either way, this only shows it">
-    <input type="checkbox" id="show-third"> show Infino Subagents
-  </label>
-</div>
-
+<!-- No legend band. Every panel's own split line already names the three
+     bands in the same colours — "model 47.0s 98% · retrieval 1.1s 2% ·
+     subagent 0.0s 0%" — so a strip above them was a third copy of what is
+     on screen three times, and the swatches are the legend where the bars
+     actually are. The wording that survives is in each split's own title:
+     the split is WHO ran the search, not which tool, because `spansOf`
+     counts a call as retrieval only when the caller made it itself. -->
 <div class="arms no-third" id="arms"></div>
 
 
@@ -402,6 +376,11 @@ const BASE = location.pathname.replace(/\/index\.html$/, "").replace(/\/$/, "");
 const api = (path) => `${BASE}/${path}`;
 
 const PHASES = ["model", "retrieval", "subagent"];
+
+/** Calls a finished arm still shows as chips. Past this the feed becomes a
+ * tally (see `collapseFeed`): a handful of pills is a record of what
+ * happened, thirty of them is a wall in front of the numbers. */
+const FEED_CHIPS_KEPT = 8;
 
 const armsEl = document.getElementById("arms");
 const statusEl = document.getElementById("status");
@@ -422,23 +401,29 @@ function setStatus(state, text, html = false) {
 const input = document.getElementById("q");
 const go = document.getElementById("go");
 
-/** Draw the chosen corpus's starters. Called on every corpus change, so the
- * questions on screen always name the repository the arms are about. */
+/** Draw the chosen corpus's starters into the form's own select. Called on
+ * every corpus change, so the questions offered always name the repository
+ * the arms are about. Picking one fills the box rather than firing: an
+ * example is a starting point to edit, not a canned run. */
+const examplesEl = document.getElementById("examples");
 function drawExamples(examples) {
-  const host = document.getElementById("examples");
-  host.innerHTML = "";
-  document.getElementById("examples-label").hidden = !examples.length;
+  examplesEl.length = 1; // keep the "examples…" placeholder
+  examplesEl.hidden = !examples.length;
   for (const text of examples) {
-    const b = document.createElement("button");
-    b.type = "button";
-    b.textContent = text.length > 52 ? text.slice(0, 50) + "…" : text;
-    b.title = text;
-    // Fill the box rather than fire: an example is a starting point to edit,
-    // not a canned run.
-    b.onclick = () => { input.value = text; input.focus(); };
-    host.append(b);
+    const option = document.createElement("option");
+    option.value = text;
+    option.textContent = text;
+    examplesEl.append(option);
   }
 }
+examplesEl.onchange = () => {
+  if (!examplesEl.value) return;
+  input.value = examplesEl.value;
+  // Back to the placeholder, so the control reads as an action rather than
+  // as a claim about what is in the box — which the reader may now edit.
+  examplesEl.selectedIndex = 0;
+  input.focus();
+};
 
 const corpusEl = document.getElementById("corpus");
 const corpusNoteEl = document.getElementById("corpus-note");
@@ -528,8 +513,7 @@ function newArm(meta) {
   el.innerHTML = `
     <span class="clock" data-clock>0.0s</span>
     <span class="count" data-count>0 calls</span>
-    <h2>${meta.label}</h2>
-    <p class="lane">lane ${meta.lane}</p>
+    <h2 title="lane ${meta.lane}">${meta.label}</h2>
     <div class="track" data-track></div>
     <div class="now" data-now></div>
     <div class="feed" data-feed></div>
@@ -585,6 +569,32 @@ function feedStart(arm, d) {
   const queue = arm.open.get(key) ?? [];
   queue.push(chip);
   arm.open.set(key, queue);
+}
+
+/** The calls an arm made, as one line, once it has finished.
+ *
+ * While a run happens the chips are the point: they appear as the calls do,
+ * several filled at once is fan-out made visible, and the page had nothing
+ * else to show for the first six seconds. Finished, they are a wall — a
+ * grep arm leaves thirty pills reading Read, Grep, Read, Grep above the
+ * numbers that actually answer the question. So the wall becomes a tally of
+ * what was called and how often, in call order, with the subagent's own
+ * calls counted apart, and the panel below it is what the eye lands on. */
+function collapseFeed(arm) {
+  const chips = [...arm.feedEl.querySelectorAll(".chip")];
+  if (chips.length <= FEED_CHIPS_KEPT) return;
+  const counts = new Map();
+  let nested = 0;
+  for (const chip of chips) {
+    const name = chip.textContent;
+    counts.set(name, (counts.get(name) ?? 0) + 1);
+    if (chip.classList.contains("nested")) nested += 1;
+  }
+  const tally = [...counts.entries()].map(([name, n]) => `${n}× ${name}`).join(" · ");
+  const inside = nested ? `, ${nested} inside a subagent's own loop` : "";
+  arm.feedEl.classList.add("tally");
+  arm.feedEl.textContent = `${tally}${inside}`;
+  arm.feedEl.title = `${chips.length} calls in order: ${chips.map((c) => c.textContent).join(", ")}`;
 }
 
 /** The result came back: stop filling that chip. */
@@ -924,7 +934,9 @@ form.onsubmit = (e) => {
   source.addEventListener("started", (e) => {
     const d = JSON.parse(e.data);
     for (const arm of arms.values()) arm.startedAt = performance.now();
-    setStatus("running", `Run ${d.run} — tens of seconds; the File Tools arm can take minutes.`);
+    // No run number: this page is reachable by anyone the tailnet lets in,
+    // and how many runs the box has served is our business, not a reader's.
+    setStatus("running", "Running — tens of seconds; the File Tools arm can take minutes.");
   });
 
   /** Move the bar to where this event puts it. Only calls the CALLER made
@@ -965,6 +977,7 @@ form.onsubmit = (e) => {
     const arm = arms.get(r.arm);
     if (!arm || arm.finishedAt !== null) return;
     arm.finishedAt = r.wallMs;
+    collapseFeed(arm);
     // Redraw from the measurement rather than the drawing, so the finished
     // bar matches the numbers printed under it.
     arm.segments = segmentsFromSplit(arm.segments, r.split);

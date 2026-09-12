@@ -19,9 +19,24 @@ export const DEFAULT_JUDGE_MODEL = process.env.JUDGE_MODEL ?? "claude-opus-5";
  * exploring, not verifying. Two recorded questions (Q15, Q16) hit it. */
 export const JUDGE_MAX_TURNS = 30;
 
-/** The checkout's tools. The index's (find, sql) come from the local
- * code-context server the call attaches - local only, never `--db`, so a
- * verification never spends a platform call. */
+/** The checkout's tools. The index's (find, sql) come from the code-context
+ * server the call attaches.
+ *
+ * That server used to be local always, so that a verification never spent a
+ * platform call. On a hosted corpus that made the judge unable to do the one
+ * thing the rules below tell it to do first. An arm's recorded ranking is a
+ * `hybrid_search`, which carries a `{{q}}` the platform embeds; rerun against
+ * a local index built without vectors it does not return different rows, it
+ * ERRORS - "unknown vector column 'embedding'" - and the judge, reading a
+ * query it cannot reproduce, marked the claims unsupported and graded the
+ * answer down for it (measured 2026-09-12 on the OpenSearch corpus: both
+ * Infino arms graded C, the judge's own reason naming the hybrid query's
+ * error). A judge verifying in a different environment from the arm is
+ * measuring the environment. So `judgeOnce` takes the arm's server flags and
+ * env, and the demo hands it the same database, table and remote-search
+ * setting its arms ran under; the bench's judge passes none and is local as
+ * before. The judge's spend is reported beside its verdict and kept out of
+ * every arm's numbers either way. */
 export const JUDGE_TOOLS = ["Read", "Grep", "Glob"];
 
 /** How a claim is verified: with the tool that measures it at the grain the
@@ -116,7 +131,20 @@ export function parseVerdict(text) {
  * throwing listener must not take the grading down with it - the model
  * calls are the expensive thing - so each call is guarded, exactly as
  * `runLane` guards its own. */
-export async function judgeOnce({ repoDir, indexDir, system, prompt, model = DEFAULT_JUDGE_MODEL, maxTurns = JUDGE_MAX_TURNS, onEvent }) {
+export async function judgeOnce({
+  repoDir,
+  indexDir,
+  system,
+  prompt,
+  model = DEFAULT_JUDGE_MODEL,
+  maxTurns = JUDGE_MAX_TURNS,
+  onEvent,
+  // The server the judge verifies through: flags on its command line and
+  // env over its own, so a caller can give it the arms' own database and
+  // table (see JUDGE_TOOLS). Empty is the local index, as it always was.
+  serverArgs = [],
+  serverEnv = {},
+}) {
   const t0 = performance.now();
   const acc = newToolAccounting();
   const emit = onEvent
@@ -148,7 +176,7 @@ export async function judgeOnce({ repoDir, indexDir, system, prompt, model = DEF
         settingSources: [],
         strictMcpConfig: true,
         tools: JUDGE_TOOLS,
-        mcpServers: cxServer(mcpEnvBase(repoDir, indexDir)),
+        mcpServers: cxServer({ ...mcpEnvBase(repoDir, indexDir), ...serverEnv }, serverArgs),
       },
     })) {
       const at = Math.round(performance.now() - t0);

@@ -67,7 +67,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { DEFAULT_JUDGE_MODEL } from "../bench/judge-core.mjs";
-import { checkLaneEnv, dataSystemPrompt, runLane, systemPrompt } from "../bench/lanes.mjs";
+import { checkLaneEnv, dataSystemPrompt, hostedFlags, runLane, systemPrompt } from "../bench/lanes.mjs";
 // The resolver under a name no local shares: `const rates = resolveRates()` at the
 // rates endpoint shadowed the import and threw at boot (2026-09-12).
 import { armCost, ledgerMark, ledgerSince, rates as resolveRates } from "./charge.mjs";
@@ -557,6 +557,12 @@ async function handleRun(req, res, url) {
         question,
         results,
         rows,
+        // The judge verifies through the same server its arms used: same
+        // database, same table, same remote search. Without it a recorded
+        // `hybrid_search` reruns against a local index with no vectors,
+        // errors, and is read as an unsupported claim rather than as a
+        // query the judge could not run.
+        ...(corpus.ready ? { serverArgs: hostedFlags(), serverEnv: { CX_TABLE: corpus.table, CX_REMOTE_SEARCH: "1" } } : {}),
         // Every verification as it happens, so the page can show the
         // grading moving rather than one sentence that never changes.
         onEvent: (event) => guarded({ ...event, kind: "judging_progress" }),
