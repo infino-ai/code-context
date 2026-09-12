@@ -31,16 +31,16 @@
 // Results carry took_ms - server-side time for the call (query embedding
 // included where one happens; no transport).
 //
-// With CX_REMOTE_SEARCH the hosted table is the index `search` and `sql`
-// read, and when CX_TABLE names a table that is not the chunks table (a
-// hydrated data set) all three doors run over its ROWS, driven by the table's
-// own schema (TableShape): find then never touches the local index either,
-// since a local build would drop and recreate the platform table it was
-// pointed at. Without CX_REMOTE_SEARCH, a `sql` statement that embeds a query
-// (a `{{q}}` placeholder - a vector function's) still runs on the platform
-// whenever a database is configured: the platform embeds it with the table's
-// own model, and the local side is lexical - `find`, keyword `search`, plain
-// SQL. Which of the two it is - chunks or rows - is decided ONCE, at startup,
+// With CX_REMOTE_SEARCH the hosted table is the index `search` reads, and
+// when CX_TABLE names a table that is not the chunks table (a hydrated data
+// set) all three doors run over its ROWS, driven by the table's own schema
+// (TableShape): find and sql then never touch the local index either, since
+// a local build would drop and recreate the platform table it was pointed
+// at. On the chunks table a `sql` statement that embeds a query (a `{{q}}`
+// placeholder - a vector function's) runs on the platform whenever a
+// database is configured, switch or no switch: the platform embeds it with
+// the table's own model, and the local side is lexical - `find`, plain SQL.
+// Which of the two it is - chunks or rows - is decided ONCE, at startup,
 // from the table's schema (TableMode below) when CX_TABLE names another
 // table, and every call reads that decision: no call asks the platform what
 // it is about to run against, so a local tool never waits on the platform
@@ -539,10 +539,10 @@ export function rowsExploreDescription(shape: TableShape, devContextNote: string
  * never re-asked on a call.
  *
  * - `chunks`: the chunks table this client builds. Every path and constant
- *   as before: find on the local index; search and sql on the hosted index
- *   under CX_REMOTE_SEARCH, and a sql statement that embeds a query on the
- *   platform whenever there is one (see the sql tool). The mode of the
- *   default table always, without a probe - it is the table this client
+ *   as before: find and plain sql on the local index, search on the hosted
+ *   index under CX_REMOTE_SEARCH, and a sql statement that embeds a query
+ *   on the platform whenever there is one (see the sql tool). The mode of
+ *   the default table always, without a probe - it is the table this client
  *   builds, so there is nothing to ask - and the mode without
  *   CX_REMOTE_SEARCH.
  * - `rows`: a hosted table of another shape, whose rows the doors run over
@@ -606,13 +606,13 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
   let embedder: Embedder | null = null;
   const getEmbedder = (): Embedder | null => (process.env.CX_NO_EMBED ? null : (embedder ??= createEmbedder()));
 
-  // CX_REMOTE_SEARCH=1 makes `search` and `sql` read the HOSTED index instead
-  // of the local one, when a platform database is configured. Off by default,
-  // and deliberately a switch rather than the new behaviour: every measurement
-  // taken so far read the local index under these tools' names, and silently
-  // changing what they read would reinterpret all of them. (A `sql` statement
-  // that embeds a query is the exception and goes to the platform with or
-  // without the switch - see the sql tool.)
+  // CX_REMOTE_SEARCH=1 makes `search` read the HOSTED index instead of the
+  // local one, when a platform database is configured. Off by default, and
+  // deliberately a switch rather than the new behaviour: every measurement
+  // taken so far read the local index under this tool's name, and silently
+  // changing what it reads would reinterpret all of them. (A `sql` statement
+  // that embeds a query goes to the platform with or without the switch -
+  // see the sql tool; a plain one is local either way.)
   //
   // It exists because the hosted index could not be read without the
   // platform's answering loop. `ask` and `explore` were the only remote
@@ -1437,19 +1437,18 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
       const over = rowsOver("sql", ctx);
       if (over && "failed" in over) return over.failed;
       if (over) return sqlOnPlatform(ctx, query, embeds, question, { column: over.shape.primaryText, numbered: false });
-      // The chunks table's statement runs on the platform too when the hosted
-      // table is the index (CX_REMOTE_SEARCH - under a CX_TABLE override the
-      // local table is not even the one the statement names), and, with or
-      // without the switch, whenever the statement embeds a query: a `{{q}}`
-      // is a vector function's, the platform embeds it with the table's own
-      // model, and the local side is lexical. Until 2026-09-12 every such
-      // statement ran on the local index whatever was configured. On the
+      // The chunks table's statement runs on the platform when it embeds a
+      // query, whatever else is configured: a `{{q}}` is a vector function's,
+      // the platform embeds it with the table's own model, and the local side
+      // is lexical - a plain statement stays local (owner, 2026-09-09: "all
+      // vector search happens on the cloud ... only pure sql runs locally").
+      // Until 2026-09-12 every such statement ran on the local index. On the
       // engine corpus that ranked against the old local vectors while the
       // tool read as hosted; on a corpus whose local index was built
       // keyword-only (OpenSearch, in the side-by-side demo) it failed every
       // hybrid_search the model wrote, and the arm was graded on the keyword
       // fallback. Same readiness probe as search: the table has to be there.
-      if (ctx.hosted && (remoteSearch || embedsAQuery(query))) {
+      if (ctx.hosted && embedsAQuery(query)) {
         const notReady = await platformNotReady("sql", ctx);
         if (notReady) return notReady;
         return sqlOnPlatform(ctx, query, embeds, question, { numbered: true });

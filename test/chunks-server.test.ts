@@ -8,13 +8,14 @@
 // startup reads the one card the sql description folds in, with no
 // cold-start retries, so the MCP handshake is never held behind a platform
 // that is cold or answering 503 at spawn (the third server below). After
-// that find is a local tool that makes NO platform request - not before its
-// answer, not for it - while search and sql read the hosted index through
-// the readiness memo: search by hybrid_search with the chunks table's own
-// columns, sql by query_sql with its placeholders folded into the platform's
-// own, and the rows numbered as the local path numbers chunks. Since
-// 2026-09-12 - before that sql ran on the local index under this switch,
-// which on a corpus whose local index was built keyword-only failed every
+// that find and plain sql are local tools that make NO platform request -
+// not before their answer, not for it - while search reads the hosted index
+// through the readiness memo by hybrid_search with the chunks table's own
+// columns, and a sql statement that embeds a query goes to query_sql with
+// its placeholder folded into the platform's own, its rows numbered as the
+// local path numbers chunks - switch or no switch (the fourth server). Since
+// 2026-09-12 - before that such a statement ran on the local index, which on
+// a corpus whose local index was built keyword-only failed every
 // hybrid_search the model wrote (OpenSearch, the side-by-side demo). The
 // tool text is the chunks text. Auto-index is off here so a local door with
 // no index answers "no index yet" rather than building one against the
@@ -144,12 +145,11 @@ describe("the chunks table with the platform up", () => {
     expect(result.usage).toMatch(/1 row/);
   });
 
-  it("sql runs a plain statement on the platform too - under this switch the hosted table is the index - with no local index touched", async () => {
+  it("sql runs a plain statement locally, switch or no switch: only what embeds leaves the machine", async () => {
     const { ok, value, ops } = await call(s, "sql", { query: `SELECT COUNT(*) AS n FROM ${TABLE}` });
-    expect(ok, String(value)).toBe(true);
-    // The memo already holds from the statement above: no second listing.
-    expect(ops).toEqual(["query_sql", "validate"]);
-    expect((value as { rows: unknown[] }).rows).toEqual([{ n: 7 }]);
+    expect(ok).toBe(false);
+    expect(value).toMatch(/^no index for .* yet - run `cx index`/);
+    expect(ops).toEqual([]);
     expectNothingBuilt(s);
   });
 
@@ -235,15 +235,20 @@ describe("the chunks table with the platform answering 503 at spawn", () => {
     expect(tools.find((t) => t.name === "sql")?.description).not.toContain("The table's own measured shape");
   });
 
-  it("find is still the local tool, with no platform request", async () => {
-    // Not sql: under this switch it reads the hosted index, and against a
+  it("find and plain sql are still the local tools, with no platform request", async () => {
+    // Not a sql that embeds: that reads the hosted index, and against a
     // platform answering 503 it would wait the client's cold-start budget
     // out, as search would - which is the tool's behaviour, not this test's
     // subject.
-    const { ok, value, ops } = await call(s, "find", { query: "body" });
-    expect(ok).toBe(false);
-    expect(value).toMatch(/^no index for .* yet - run `cx index`/);
-    expect(ops).toEqual([]);
+    for (const [name, args] of [
+      ["find", { query: "body" }],
+      ["sql", { query: `SELECT COUNT(*) FROM ${TABLE}` }],
+    ] as Array<[string, Record<string, unknown>]>) {
+      const { ok, value, ops } = await call(s, name, args);
+      expect(ok, name).toBe(false);
+      expect(value, name).toMatch(/^no index for .* yet - run `cx index`/);
+      expect(ops, name).toEqual([]);
+    }
     expectNothingBuilt(s);
   });
 });
