@@ -68,7 +68,7 @@ import { fileURLToPath } from "node:url";
 
 import { DEFAULT_JUDGE_MODEL } from "../bench/judge-core.mjs";
 import { checkLaneEnv, dataSystemPrompt, runLane, systemPrompt } from "../bench/lanes.mjs";
-import { armCost, ledgerMark, ledgerSince, ratesFromEnv } from "./charge.mjs";
+import { armCost, ledgerMark, ledgerSince, rates } from "./charge.mjs";
 import { fixtureArm, isFixture } from "./fixture.mjs";
 import { judgeArms, judgeEnabled } from "./judge.mjs";
 import { livePhase, phaseOf, phaseSplit } from "./phases.mjs";
@@ -378,7 +378,7 @@ async function runArm(arm, corpus, question, emit, runId) {
         answer: row.answer,
         wallMs: row.wallMs,
         split: phaseSplit(row),
-        cost: armCost({ costUsd: row.costUsd, entries: row.entries, rates: ratesFromEnv() }),
+        cost: armCost({ costUsd: row.costUsd, entries: row.entries, rates: rates() }),
         tokens: row.tokens,
         calls: row.calls,
         subagents: (row.entries ?? []).filter((e) => Number.isFinite(e?.agentTurns)).length,
@@ -451,7 +451,7 @@ async function runArm(arm, corpus, question, emit, runId) {
   const loops = entries.filter((e) => Number.isFinite(e?.agentTurns));
   const subagentTurns = loops.reduce((n, e) => n + e.agentTurns, 0);
   const split = phaseSplit(row);
-  const cost = armCost({ costUsd: row.costUsd, entries, rates: ratesFromEnv() });
+  const cost = armCost({ costUsd: row.costUsd, entries, rates: rates() });
   // The harness row travels back beside the page's result: the judge needs
   // the queries the run recorded (`toolDetails`), which the page does not.
   return {
@@ -781,7 +781,7 @@ if (!isFixture()) {
 }
 
 server.listen(PORT, HOST, () => {
-  const rates = ratesFromEnv();
+  const rates = rates();
   console.log(`demo on http://${HOST}:${PORT}`);
   console.log(`  repo   ${REPO_DIR}`);
   console.log(`  index  ${INDEX_DIR}`);

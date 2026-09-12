@@ -63,9 +63,10 @@ it wipes the existing `/` proxy to the shared gateway.
 | `CX_INDEX_DIR` | `<repo>/.infino-hosted` | the index dir, and the ledger read for our charge |
 | `CX_BENCH_DB_URL`, `CX_BENCH_KEY_FILE` | — | the platform database and its key file |
 | `DEMO_FIXTURE` | off | scripted run, no spend |
-| `DEMO_READ_TOKEN_USD_PER_M` | unset | price of a read token |
-| `DEMO_MODEL_TOKEN_USD_PER_M` | unset | blended inference cost |
-| `DEMO_INFERENCE_MARKUP` | `0` | fraction added to inference, e.g. `0.3` |
+| `DEMO_PRICING_FILE` | `~/.infino/demo-pricing.json` | the durable source of the three rates below, as JSON keys `readTokenUsdPerMillion`, `modelTokenUsdPerMillion`, `markup`; outside the repo so no sell price is committed, and a variable set in the environment overrides its key |
+| `DEMO_READ_TOKEN_USD_PER_M` | from the file | price of a read token |
+| `DEMO_MODEL_TOKEN_USD_PER_M` | from the file | blended inference cost |
+| `DEMO_INFERENCE_MARKUP` | from the file, else `0` | fraction added to inference, e.g. `0.3` |
 
 **No price is baked in.** With the rate variables unset the demo shows metered
 tokens and no dollar sign. A rate is a commercial decision; one guessed here

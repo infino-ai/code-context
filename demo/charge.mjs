@@ -30,6 +30,7 @@
 // touches that index dir at a time, which is why the server serializes.
 
 import { readFileSync, statSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 
 /** The client's ledger, inside the index dir it was told to use. */
@@ -114,6 +115,42 @@ export function ratesFromEnv(env = process.env) {
     readTokenUsdPerMillion: num("DEMO_READ_TOKEN_USD_PER_M"),
     modelTokenUsdPerMillion: num("DEMO_MODEL_TOKEN_USD_PER_M"),
     markup: num("DEMO_INFERENCE_MARKUP") ?? 0,
+  };
+}
+
+/** Where the rates live when the environment does not name them: a JSON file
+ * outside the repository, holding the same three keys the returned object
+ * has. Configuration, as the header requires, and durable - a server started
+ * from a shell that exports nothing prices the same as one that exports
+ * everything, which the environment alone never gave (a restart on
+ * 2026-09-12 came up with every rate unset and every charge in tokens). Out
+ * of the repo so that no sell price is committed: the platform never carries
+ * one (owner, 2026-09-04). `DEMO_PRICING_FILE` points elsewhere. */
+export const DEFAULT_PRICING_FILE = join(homedir(), ".infino", "demo-pricing.json");
+
+/** The rates the demo prices with, each resolved the same way: the
+ * environment when it names the rate, else the file, else absent - and an
+ * absent rate leaves that half of the charge in tokens, as before. The
+ * environment wins per key, so one number can still be overridden for a run
+ * without editing the file. A file that is missing or unreadable is the same
+ * as an empty one; a key that is not a non-negative number is absent. */
+export function rates(env = process.env, file = env.DEMO_PRICING_FILE ?? DEFAULT_PRICING_FILE) {
+  const fromEnv = ratesFromEnv(env);
+  let fromFile = {};
+  try {
+    const parsed = JSON.parse(readFileSync(file, "utf8"));
+    if (parsed && typeof parsed === "object") fromFile = parsed;
+  } catch {
+    // no file, or not JSON: the environment alone, exactly as before
+  }
+  const fileNum = (key) => (Number.isFinite(fromFile[key]) && fromFile[key] >= 0 ? fromFile[key] : null);
+  // ratesFromEnv folds an unset markup to 0, which would always beat the
+  // file's; the variable's own presence is what decides here.
+  const envNamesMarkup = env.DEMO_INFERENCE_MARKUP !== undefined && env.DEMO_INFERENCE_MARKUP !== "";
+  return {
+    readTokenUsdPerMillion: fromEnv.readTokenUsdPerMillion ?? fileNum("readTokenUsdPerMillion"),
+    modelTokenUsdPerMillion: fromEnv.modelTokenUsdPerMillion ?? fileNum("modelTokenUsdPerMillion"),
+    markup: envNamesMarkup ? fromEnv.markup : fileNum("markup") ?? 0,
   };
 }
 

@@ -17,7 +17,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { dataSystemPrompt, foldToolMessage, newToolAccounting, systemPrompt } from "../bench/lanes.mjs";
-import { ledgerMark, ledgerSince, meteredFrom, ourCharge } from "./charge.mjs";
+import { ledgerMark, ledgerSince, meteredFrom, ourCharge, rates } from "./charge.mjs";
 import { livePhase, phaseOf, phaseShares, phaseSplit, spansOf, unionMs } from "./phases.mjs";
 
 /** One assistant message carrying one tool_use block. */
@@ -37,6 +37,53 @@ const batchCall = (pairs) => ({
 const result = (id, text = "ok") => ({
   type: "user",
   message: { content: [{ type: "tool_result", tool_use_id: id, content: text }] },
+});
+
+// --- rates ------------------------------------------------------------------
+
+/** A pricing file in a fresh temp dir, or the path of one that does not exist. */
+const pricingFile = (contents) => {
+  const dir = mkdtempSync(join(tmpdir(), "demo-pricing-"));
+  const file = join(dir, "demo-pricing.json");
+  if (contents !== undefined) writeFileSync(file, contents);
+  return file;
+};
+
+test("rates come from the file when the environment names none", () => {
+  const file = pricingFile(JSON.stringify({ readTokenUsdPerMillion: 50, modelTokenUsdPerMillion: 0.3, markup: 0.25 }));
+  assert.deepEqual(rates({}, file), { readTokenUsdPerMillion: 50, modelTokenUsdPerMillion: 0.3, markup: 0.25 });
+});
+
+test("a rate named in the environment overrides the file's, key by key", () => {
+  const file = pricingFile(JSON.stringify({ readTokenUsdPerMillion: 50, modelTokenUsdPerMillion: 0.3, markup: 0.25 }));
+  const env = { DEMO_READ_TOKEN_USD_PER_M: "60" };
+  assert.deepEqual(rates(env, file), { readTokenUsdPerMillion: 60, modelTokenUsdPerMillion: 0.3, markup: 0.25 });
+});
+
+test("an unset markup in the environment does not shadow the file's", () => {
+  // ratesFromEnv folds an absent markup to 0; the resolver must read the
+  // variable's presence, or the file's markup could never apply.
+  const file = pricingFile(JSON.stringify({ markup: 0.3 }));
+  assert.equal(rates({}, file).markup, 0.3);
+  assert.equal(rates({ DEMO_INFERENCE_MARKUP: "0" }, file).markup, 0, "an explicit 0 in the environment wins");
+  assert.equal(rates({ DEMO_INFERENCE_MARKUP: "" }, file).markup, 0.3, "an empty variable is unset");
+});
+
+test("no file is the environment alone, absent rates null and markup 0", () => {
+  const missing = pricingFile();
+  assert.deepEqual(rates({}, missing), { readTokenUsdPerMillion: null, modelTokenUsdPerMillion: null, markup: 0 });
+  assert.deepEqual(rates({ DEMO_MODEL_TOKEN_USD_PER_M: "0.3" }, missing), {
+    readTokenUsdPerMillion: null,
+    modelTokenUsdPerMillion: 0.3,
+    markup: 0,
+  });
+});
+
+test("a file value that is not a non-negative number is absent, and a file that is not JSON is empty", () => {
+  const bad = pricingFile(JSON.stringify({ readTokenUsdPerMillion: "fifty", modelTokenUsdPerMillion: -1, markup: 0.1 }));
+  assert.deepEqual(rates({}, bad), { readTokenUsdPerMillion: null, modelTokenUsdPerMillion: null, markup: 0.1 });
+  const notJson = pricingFile("not json at all");
+  assert.deepEqual(rates({}, notJson), { readTokenUsdPerMillion: null, modelTokenUsdPerMillion: null, markup: 0 });
 });
 
 // --- classification ---------------------------------------------------------
