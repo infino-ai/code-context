@@ -324,6 +324,20 @@ export function agentToolsEnabled(): boolean {
   return !OFF_VALUES.includes((process.env.CX_AGENT_TOOLS ?? "").toLowerCase());
 }
 
+/** Whether `explore` is one of them (CX_EXPLORE_TOOL, default on). Off with
+ * `CX_AGENT_TOOLS` still on leaves `ask` alone, which is a surface worth
+ * having: an exploration is one long loop on one question, where several asks
+ * in a reply run at once, and the caller keeps the following-up for itself.
+ *
+ * It is a switch here rather than the SDK's disallowedTools for the reason
+ * above: hiding the tool that way leaves its routing line standing in the
+ * instructions, and the line is what sends a mechanism question to a tool the
+ * caller cannot see. The instructions read this, so `ask` takes over that
+ * routing when explore is gone. */
+export function exploreToolEnabled(): boolean {
+  return !OFF_VALUES.includes((process.env.CX_EXPLORE_TOOL ?? "").toLowerCase());
+}
+
 /** The table this client builds when nothing overrides the name: the one
  * table a process owns. A process whose `CX_TABLE` names anything else is a
  * search-only process over a table something else loaded (see TABLE), and

@@ -67,6 +67,7 @@ import {
   autoIndexEnabled as autoIndexSetting,
   autoSyncEnabled as autoSyncSetting,
   agentToolsEnabled,
+  exploreToolEnabled,
   exploreMaxTurns,
   exploreMaxWallSecs,
   subagentK,
@@ -932,6 +933,10 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
   // to the loop: the sql text's card and validation note.
   const platformTools = hosted !== null;
   const agentTools = platformTools && agentToolsEnabled();
+  // `explore` on its own switch, so a caller can keep `ask` and drop the long
+  // loop. Same rule as above applies to it alone: withheld, its routing line
+  // goes too, and `ask` takes over the mechanism questions it used to claim.
+  const exploreTool = agentTools && exploreToolEnabled();
 
   // What the default root's doors run against (TableMode), decided here and
   // once. With CX_REMOTE_SEARCH, a platform database and a CX_TABLE that is
@@ -1045,7 +1050,12 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
         "and whole-repo counts come from the chunks table with no search function).\n" +
         (agentTools
           ? "- ask - a question or task in plain language; returns the rows it retrieved (facts with path:line and the code), not an answer: compose from them. Spawn several in parallel for independent questions. How often a string occurs, per file, is find's byFile.\n" +
-            "- explore - a question about a mechanism that spans files (how X works end to end, what calls what); it reads and follows what it finds and returns a written answer grounded in the facts it lists, with the chain of queries. Take the answer and cite its facts. Slower than ask: use it when one retrieval will not do.\n"
+            (exploreTool
+              ? "- explore - a question about a mechanism that spans files (how X works end to end, what calls what); it reads and follows what it finds and returns a written answer grounded in the facts it lists, with the chain of queries. Take the answer and cite its facts. Slower than ask: use it when one retrieval will not do.\n"
+              : // Without explore, ask inherits the questions explore used to
+                // claim - otherwise a mechanism question routes to a tool that
+                // is not here and falls back to raw search.
+                "  A mechanism that spans files - how X works end to end, what calls what - is several asks in ONE reply, one per part, not one question that needs following: they run at the same time, and you do the following-up yourself from the rows they return.\n")
           : "") +
         "Hits carry the code: when a hit answers the question, answer from it. A hit's content shows " +
         "each line with its own number in the file, so cite a place as path:line or path:start-end " +
@@ -1541,6 +1551,7 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
       },
     );
 
+    if (exploreTool) {
     server.registerTool(
       "explore",
       {
@@ -1638,6 +1649,7 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
         }
       },
     );
+    }
   }
 
   const transport = serveOptions.transport ?? new StdioServerTransport();

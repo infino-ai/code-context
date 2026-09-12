@@ -500,8 +500,6 @@ export const LANES = {
     // so every one of those rows did a third of its index work on the old
     // 384-dim vectors, and switching what the name means would reinterpret
     // them all. This lane is the honest "the whole surface, all of it hosted".
-    env: (repoDir, indexDir) => ({ ...mcpEnvBase(repoDir, indexDir), CX_REMOTE_SEARCH: "1" }),
-    args: (env) => [...hostedFlags(env), ...agentFlags(env)],
     // No `explore` since 2026-09-12 (owner: "so that claude can only ask in
     // parallel and use local search tools without getting stuck on explorer
     // loop"). The paragraph above argues against changing what a recorded
@@ -509,7 +507,15 @@ export const LANES = {
     // lane, so rows of this lane before this date had explore and rows after
     // do not. Measured that day: one explore was 30.2s, longer than four asks
     // running together, and explorations reach their 25-turn budget often.
-    disallowedTools: ["explore"].map((tool) => `${CX_TOOL_PREFIX}${tool}`),
+    //
+    // CX_EXPLORE_TOOL rather than disallowedTools, which was tried first and
+    // was wrong: it takes the tool off the model's list and leaves explore's
+    // routing line standing in the server's instructions, so a mechanism
+    // question is still sent to a tool that is not there. Measured that way
+    // once - six searches and no ask at all. The switch drops the tool and its
+    // line together, and `ask` inherits the routing.
+    env: (repoDir, indexDir) => ({ ...mcpEnvBase(repoDir, indexDir), CX_REMOTE_SEARCH: "1", CX_EXPLORE_TOOL: "0" }),
+    args: (env) => [...hostedFlags(env), ...agentFlags(env)],
     requires: HOSTED_REQUIRES,
   },
   "hosted-index": {
