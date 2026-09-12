@@ -355,7 +355,9 @@ export function agentFlags(env = process.env) {
  *   index-explore    - stock-explore plus the MCP server, with Explore
  *                      overridden to run on code-context's tools (Haiku inside)
  *   hosted-full-remote - hosted-full with `search` reading the hosted index as
- *                      well, so nothing in the lane reads the old local
+ *                      well, and without `explore` since 2026-09-12, so the
+ *                      caller fans out over parallel asks instead of handing
+ *                      one question to a long loop; nothing in the lane reads the old local
  *                      vectors. hosted-full's own `search` is local, which
  *                      means every hosted-full row ever recorded did part of
  *                      its index work on the 384-dim local index; this lane is
@@ -500,6 +502,14 @@ export const LANES = {
     // them all. This lane is the honest "the whole surface, all of it hosted".
     env: (repoDir, indexDir) => ({ ...mcpEnvBase(repoDir, indexDir), CX_REMOTE_SEARCH: "1" }),
     args: (env) => [...hostedFlags(env), ...agentFlags(env)],
+    // No `explore` since 2026-09-12 (owner: "so that claude can only ask in
+    // parallel and use local search tools without getting stuck on explorer
+    // loop"). The paragraph above argues against changing what a recorded
+    // lane name means; the owner chose to change this one rather than add a
+    // lane, so rows of this lane before this date had explore and rows after
+    // do not. Measured that day: one explore was 30.2s, longer than four asks
+    // running together, and explorations reach their 25-turn budget often.
+    disallowedTools: ["explore"].map((tool) => `${CX_TOOL_PREFIX}${tool}`),
     requires: HOSTED_REQUIRES,
   },
   "hosted-index": {

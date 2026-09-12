@@ -5,7 +5,7 @@ One question, two arms, both bars filling while they run.
 | arm | lane | what it is |
 | --- | --- | --- |
 | Sonnet + grep | `stock-explore` | the stock file tools plus the caller's own Explore subagent — what a developer has today |
-| Sonnet + infino | `hosted-full-remote` | the same stock tools plus all five code-context tools, `search` on the hosted index, `ask`/`explore` on our loop |
+| Sonnet + infino | `hosted-full-remote` | the same stock tools plus four code-context tools, `search` on the hosted index, `ask` on our loop — `explore` withheld since 2026-09-12, so the caller fans out over parallel asks instead of handing one question to a long loop |
 
 Each bar is coloured by where the arm's time went:
 
