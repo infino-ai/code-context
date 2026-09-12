@@ -1013,19 +1013,21 @@ form.onsubmit = (e) => {
     }
   });
 
-  /** The grading, said where a reader is looking. It starts after every
-   * panel has settled, takes tens of seconds and costs a strong model's
-   * call, so it gets the strip to itself - naming the model, what it is
-   * doing and that it cannot see which arm wrote what. The per-answer
-   * markers below say the same thing where each grade will land. */
+  /** The grading, said where a reader is looking and visibly moving. It
+   * starts after every panel has settled, takes tens of seconds and costs a
+   * strong model's call, so it gets the strip to itself - naming the model,
+   * what it is doing, that it cannot see which arm wrote what, and then a
+   * clock and a count of the checks it has made. One unchanging sentence
+   * was not enough: a page that looks finished while a strong model works
+   * reads as a hung one, and it read that way twice. */
+  let judging = null;
   source.addEventListener("judging", (e) => {
     const d = JSON.parse(e.data);
-    setStatus(
-      "judging",
-      `<b>Grading accuracy — ${escapeHtml(shortModel(d.model))} is reading every claim back against the corpus</b>, ` +
-        `blind to which arm wrote which answer. <span class="meta">Tens of seconds; its cost is the measurement's, not any arm's.</span>`,
-      true,
-    );
+    judging = { at: performance.now(), model: shortModel(d.model), maxChecks: d.maxChecks ?? null, checks: 0, tool: null };
+    drawJudging();
+    // The clock ticks whether or not a check has landed, so the strip is
+    // never still while the judge thinks between calls.
+    judging.timer = setInterval(drawJudging, 500);
     for (const arm of arms.values()) {
       const answer = arm.bodyEl.querySelector(".answer");
       if (answer && !arm.bodyEl.querySelector(".judge")) {
@@ -1033,6 +1035,39 @@ form.onsubmit = (e) => {
       }
     }
   });
+
+  source.addEventListener("judging_progress", (e) => {
+    if (!judging) return;
+    const d = JSON.parse(e.data);
+    judging.checks = d.checks ?? judging.checks;
+    judging.tool = d.tool ?? judging.tool;
+    drawJudging();
+  });
+
+  /** The grading strip as it stands right now: the model and what it is
+   * doing, then the elapsed seconds and how many checks it has made - the
+   * two numbers that say it is moving. */
+  function drawJudging() {
+    if (!judging) return;
+    const secs = ((performance.now() - judging.at) / 1000).toFixed(0);
+    const of = judging.maxChecks ? ` of up to ${judging.maxChecks}` : "";
+    const doing = judging.checks
+      ? `<b>${judging.checks}</b> check${judging.checks === 1 ? "" : "s"}${of}`
+      : "reading the answers";
+    setStatus(
+      "judging",
+      `<b>Grading accuracy — ${escapeHtml(judging.model)} is checking every claim against the corpus</b>, ` +
+        `blind to which arm wrote which answer. ` +
+        `<span class="meta">${doing} · <b>${secs}s</b> · its cost is the measurement's, not any arm's.</span>`,
+      true,
+    );
+  }
+
+  /** Stop the clock; called when the verdict lands or the run ends. */
+  function stopJudging() {
+    if (judging?.timer) clearInterval(judging.timer);
+    judging = null;
+  }
 
   /** The judge's verdict: one grade per arm, blind and verified, drawn above
    * each answer, and the judge's own cost in the status line - kept out of
@@ -1045,10 +1080,12 @@ form.onsubmit = (e) => {
         const el = arm.bodyEl.querySelector(".judge");
         if (el) { el.className = "judge err"; el.textContent = `unjudged: ${v.error ?? "no verdict"}`; }
       }
+      stopJudging();
       setStatus("failed", `${judge} returned no verdict (${v.error ?? "unknown"}).`);
       stop();
       return;
     }
+    stopJudging();
     for (const g of v.grades) {
       const arm = arms.get(g.arm);
       if (!arm) continue;
@@ -1099,6 +1136,7 @@ form.onsubmit = (e) => {
   };
 
   function stop() {
+    stopJudging();
     source.close();
     live = null;
     go.disabled = false;

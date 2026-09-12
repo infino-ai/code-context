@@ -72,7 +72,7 @@ import { checkLaneEnv, dataSystemPrompt, runLane, systemPrompt } from "../bench/
 // rates endpoint shadowed the import and threw at boot (2026-09-12).
 import { armCost, ledgerMark, ledgerSince, rates as resolveRates } from "./charge.mjs";
 import { fixtureArm, isFixture } from "./fixture.mjs";
-import { judgeArms, judgeEnabled } from "./judge.mjs";
+import { demoJudgeMaxTurns, judgeArms, judgeEnabled } from "./judge.mjs";
 import { livePhase, phaseOf, phaseSplit } from "./phases.mjs";
 import { sourceWindow } from "./source.mjs";
 
@@ -550,8 +550,17 @@ async function handleRun(req, res, url) {
     // The judge reads the checkout and the LOCAL index and spends no platform
     // call, so it is outside everything the arms' numbers are drawn from.
     if (judgeOn && alive && results) {
-      send(res, "judging", { model: DEFAULT_JUDGE_MODEL });
-      const verdict = await judgeArms({ repoDir: corpus.repo, indexDir: corpus.index, question, results, rows });
+      send(res, "judging", { model: DEFAULT_JUDGE_MODEL, maxChecks: demoJudgeMaxTurns() - 2 });
+      const verdict = await judgeArms({
+        repoDir: corpus.repo,
+        indexDir: corpus.index,
+        question,
+        results,
+        rows,
+        // Every verification as it happens, so the page can show the
+        // grading moving rather than one sentence that never changes.
+        onEvent: (event) => guarded({ ...event, kind: "judging_progress" }),
+      });
       if (alive) send(res, "judged", verdict);
     }
   } catch (err) {

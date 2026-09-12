@@ -106,10 +106,28 @@ export function parseVerdict(text) {
  * `text` is the run's final result, or - when the run ended in an error such
  * as the turn cap - the last thing the model wrote, so a verdict given on
  * the final turn is not replaced by the error's wording. `hitTurnCap` says
- * the cap ended the run. */
-export async function judgeOnce({ repoDir, indexDir, system, prompt, model = DEFAULT_JUDGE_MODEL, maxTurns = JUDGE_MAX_TURNS }) {
+ * the cap ended the run.
+ *
+ * `onEvent`, when given, is called as the judging happens rather than after
+ * it: `{at, checks, tool}` for every verification the judge starts, `at` in
+ * milliseconds since this call began. Grading runs after every arm has
+ * settled and takes tens of seconds, so a page with nothing to show for it
+ * reads as a hung one; this is how a reader sees the checking happen. A
+ * throwing listener must not take the grading down with it - the model
+ * calls are the expensive thing - so each call is guarded, exactly as
+ * `runLane` guards its own. */
+export async function judgeOnce({ repoDir, indexDir, system, prompt, model = DEFAULT_JUDGE_MODEL, maxTurns = JUDGE_MAX_TURNS, onEvent }) {
   const t0 = performance.now();
   const acc = newToolAccounting();
+  const emit = onEvent
+    ? (event) => {
+        try {
+          onEvent(event);
+        } catch {
+          /* a listener's fault is not the grading's */
+        }
+      }
+    : null;
   let text = "";
   let lastWritten = "";
   let costUsd = null;
@@ -133,7 +151,12 @@ export async function judgeOnce({ repoDir, indexDir, system, prompt, model = DEF
         mcpServers: cxServer(mcpEnvBase(repoDir, indexDir)),
       },
     })) {
-      foldToolMessage(acc, m);
+      const at = Math.round(performance.now() - t0);
+      const { started } = foldToolMessage(acc, m, at) ?? { started: [] };
+      // One event per verification the judge starts, carrying how many it
+      // has made: the count is what says the grading is moving, and the
+      // tool's name says what kind of check it is.
+      if (emit) for (const d of started) emit({ at, checks: acc.toolCalls.length, tool: d.name });
       if (m.type === "assistant") {
         for (const b of m.message?.content ?? []) if (b.type === "text" && b.text) lastWritten = b.text;
       }

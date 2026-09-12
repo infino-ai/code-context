@@ -135,6 +135,7 @@ export async function judgeArms({
   model = DEFAULT_JUDGE_MODEL,
   maxTurns = demoJudgeMaxTurns(),
   random = Math.random,
+  onEvent,
 }) {
   const labelled = blind(results, random);
   const run = await judgeOnce({
@@ -144,6 +145,10 @@ export async function judgeArms({
     maxTurns,
     system: gradingSystem(repoDir, maxTurns),
     prompt: gradingPrompt(question, labelled, rows),
+    // Passed straight through: the page draws the checking as it happens,
+    // because grading starts after every panel has settled and a page that
+    // looks finished while a strong model works reads as a hung one.
+    onEvent,
   });
   const byArm = run.error ? null : readGrades(run.text, labelled);
   const grades = byArm ? results.map((r) => byArm.find((g) => g.arm === r.arm)) : null;
