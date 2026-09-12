@@ -1043,7 +1043,14 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
         ? unresolvedInstructions(TABLE, mode.cause, agentTools)
         : "code-context is a local index of this repository. Which tool for which question:\n" +
         "- find - every line containing an exact string, where you would grep.\n" +
-        "- search - how does X work, where is Y handled, code by meaning.\n" +
+        // With `ask` on the surface, `search` must not claim the same question.
+        // It did - "how does X work, where is Y handled" on both lines - and
+        // once a reply's searches ran together the model took six of those
+        // over one ask every time (measured 2026-09-12). So search's line names
+        // what search is: one ranked pass in the caller's own terms.
+        (agentTools
+          ? "- search - one ranked pass in your own words, when you already know roughly what the code calls the thing; a question you cannot write as one query is ask's.\n"
+          : "- search - how does X work, where is Y handled, code by meaning.\n") +
         "- sql - counts, rankings, and aggregates across the repo, including ranking files by how " +
         "much of them is about a topic (rank by hybrid_search, not bm25, when the topic is a concept; " +
         "a total over a search relation is the top k's matched lines, never a file's length - sizes " +
@@ -1077,8 +1084,17 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
         : mode.kind === "unresolved"
         ? unresolvedDescription("Ranked search", TABLE)
         : "Ranked code search fusing exact keyword matching with semantic similarity, so it works " +
-        "whether or not you know the words. Use it for 'how does X work', 'where is Y handled', code " +
-        "by meaning, context before a change, similar implementations. Each hit carries path, line " +
+        "whether or not you know the words. " +
+        // The same split as the instructions: with `ask` on the surface, search
+        // does not also claim the question - it claims the query.
+        (agentTools
+          ? "One ranked pass in your own words: use it when you can say roughly what the code calls " +
+            "the thing - context before a change, similar implementations, a name to locate. A " +
+            "question you cannot write as one query - how a mechanism works, where something is " +
+            "handled across files - is ask's, several at once. "
+          : "Use it for 'how does X work', 'where is Y handled', code by meaning, context before a " +
+            "change, similar implementations. ") +
+        "Each hit carries path, line " +
         "range, and the chunk content: answer from the hits. The content shows each line with its " +
         "own number in the file, so cite from those numbers - the hit's line range spans the whole " +
         "chunk and is not the line a quoted or named thing sits on. Quote only text a hit shows, " +
@@ -1201,9 +1217,14 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
         "Literal text within one line, case-sensitive unless ignoreCase. Use it where you would " +
         "grep: every use or definition of an identifier, an error message, a config key. Set defines " +
         "to get only where a name is defined rather than everywhere it appears. Not for a " +
-        "file you already know - Read that file. For meaning or 'how does X work' use search; for " +
-        "rankings use sql. The result includes a 'usage' field, a one-line receipt of tokens " +
-        "returned, matches and files.",
+        "file you already know - Read that file. " +
+        // find's hand-off must name the tool that owns the question on this
+        // surface, or it sends a mechanism question to search.
+        (agentTools
+          ? "For code by meaning, when you know roughly the words, use search; for a question - how " +
+            "X works, where Y is handled - use ask, several at once; for rankings use sql. "
+          : "For meaning or 'how does X work' use search; for rankings use sql. ") +
+        "The result includes a 'usage' field, a one-line receipt of tokens returned, matches and files.",
       inputSchema: {
         query: z
           .string()
@@ -1457,7 +1478,15 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
           "for how does X work, where is Y handled, which files or symbols; spawn " +
           "several in parallel for independent questions instead of exploring the code yourself. " +
           "A single question over a large codebase splits the same way: one call per section with " +
-          "`under` naming its subtree, all issued together. For " +
+          "`under` naming its subtree, all issued together. " +
+          // Without explore this tool owns the mechanism question, and its own
+          // text has to say so - the instructions alone did not move the model.
+          (exploreTool
+            ? ""
+            : "A mechanism that spans files - how X works end to end, what calls what - is the same " +
+              "shape: several asks in ONE reply, one per part, and you follow up yourself from the " +
+              "rows they return. ") +
+          "For " +
           "every occurrence of an exact string, and for how many times it occurs per file, use find " +
           "(its byFile is the grep -c answer); for a file you already know, Read it. Answer " +
           "from the rows and cite path:line. " +
