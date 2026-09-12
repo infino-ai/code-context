@@ -4,7 +4,7 @@
 // The platform REST client: code-context talks to an Infino platform database
 // over its `/v1/<op>/<database>` data plane to keep the repository's chunks
 // table there beside the local index (every build and sync writes both) and
-// to run the `ask` and `explore` tools against it. This file owns the
+// to run the `ask` tool against it. This file owns the
 // wire: request shapes (field names as the platform's request structs spell
 // them), auth, the cold-start retry loop, error decoding, and the Arrow IPC
 // encoding an append carries. Nothing here knows about chunks or tools - the
@@ -160,11 +160,6 @@ export interface HostedOptions {
 }
 
 export type RowRecord = Record<string, unknown>;
-
-/** How the platform's loop answers a `sub_agent` request: `retrieve` returns
- * the first validating query's rows; `explore` reads and follows what it
- * finds and adds a written answer and the chain of queries. */
-export type SubAgentMode = "retrieve" | "explore";
 
 /** One column of a `create_table` schema, in code-context's shape. A scalar is
  * the platform's type spelling (`"large_utf8"`, `"i32"`, ...); a vector column
@@ -504,10 +499,9 @@ export class HostedDb {
    * space it does not belong to.
    *
    * This exists so that the hosted index can be read WITHOUT the platform's
-   * answering loop. Before it, the only remote retrieval surfaces were `ask`
-   * and `explore`, both of which run that loop - so "hosted index, local
-   * brain" was not expressible, and the choice was the whole platform or
-   * none of it. A reviewer asked for exactly that middle configuration and it
+   * answering loop. Before it, the only remote retrieval surface was `ask`,
+   * which runs that loop - so "hosted index, local brain" was not
+   * expressible, and the choice was the whole platform or none of it. A reviewer asked for exactly that middle configuration and it
    * could not be measured. */
   async hybridSearch(
     table: string,
@@ -567,9 +561,7 @@ export class HostedDb {
    * the request's own `max_wall_secs` plus a margin for the answer to
    * travel; with no `max_wall_secs` the server's cap applies and the
    * client's general timeout is all it can go on. A retryable 503 is retried
-   * like any other op; 501 (no agent configured) is terminal. In `explore`
-   * mode the response adds `answer` (the model's written answer) and `chain`
-   * (every query that returned rows, in order). */
+   * like any other op; 501 (no agent configured) is terminal. */
   async subAgent(req: {
     question: string;
     /** Text the loop's model reads beside the question and not as part of
@@ -577,10 +569,6 @@ export class HostedDb {
      * in it is required of the result; the platform anchors validation on
      * the question alone. */
     context?: string;
-    /** `retrieve` (the default when absent): the first validating query's rows.
-     * `explore`: the loop reads what it finds and queries again, and answers
-     * in writing beside the facts and the chain of queries. */
-    mode?: SubAgentMode;
     k?: number;
     /** Columns a search or find fact carries beside its text and score, in
      * place of the table's keys - for a code table, the ones that place it. */
@@ -598,7 +586,6 @@ export class HostedDb {
     // defaults the rest itself.
     const body: RowRecord = { question: req.question };
     if (req.context !== undefined) body.context = req.context;
-    if (req.mode !== undefined) body.mode = req.mode;
     if (req.k !== undefined) body.k = req.k;
     if (req.projection !== undefined) body.projection = req.projection;
     if (req.max_turns !== undefined) body.max_turns = req.max_turns;

@@ -10,8 +10,8 @@
 //   Sonnet + index only lane `hosted-index` - the three retrieval tools the
 //                       caller drives itself: `search` against the hosted
 //                       index, `find` and `sql` local. No loop of ours.
-//   ... + subagents     lane `hosted-full-remote` - the same three plus `ask`
-//                       and `explore`, which hand a question to our loop.
+//   ... + subagents     lane `hosted-full-remote` - the same three plus `ask`,
+//                       which hands a question to our loop.
 //
 // The three are the decision the tokenomics work is about, so the page shows
 // all three rather than making a reader hold one in their head.
@@ -447,7 +447,7 @@ async function runArm(arm, corpus, question, emit, runId) {
 
   const entries = arm.hosted ? ledgerSince(indexDir, mark) : [];
   // A ledger line carrying `agentTurns` is a loop of ours that ran: one
-  // `ask` or `explore`. Counted from the ledger rather than from the tool
+  // `ask`. Counted from the ledger rather than from the tool
   // names, because the ledger is what the platform actually served — and its
   // turn count is what makes a slow subagent legible rather than mysterious.
   const loops = entries.filter((e) => Number.isFinite(e?.agentTurns));

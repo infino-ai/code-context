@@ -161,17 +161,6 @@ export interface RetrievalAgentBudget {
   k?: number;
 }
 
-/** What the `explore` tool returns: the retrieval result of the LAST query
- * that returned rows, plus the model's written answer and the chain of
- * queries that got there - explore is the one mode whose words reach the
- * caller. */
-export interface ExploreResult extends RetrievalAgentResult {
-  /** The written answer, when the exploration finished with one. */
-  answer?: string;
-  /** Every query that returned rows, in order, as the platform records it. */
-  chain: string[];
-}
-
 /** One row of the table that names a place in the code: a search hit's
  * shape, so the outer agent cites it as path:line and answers from the
  * content when the statement selected it. */
@@ -273,47 +262,6 @@ export async function runRetrievalAgent(
   });
   const run = retrievalAgentRunFrom(request.question, response, k, request.shape);
   return { ...run, result: scoped(run.result, under) };
-}
-
-/** Hand the platform's loop one question in `explore` mode: it reads what it
- * finds and queries again, and returns a written answer beside the facts of
- * its last query and the chain of queries. A `maxTurns` in the budget lowers
- * the platform's explore budget; absent leaves it in force. */
-export async function runExploreAgent(
-  hosted: Pick<HostedDb, "subAgent">,
-  request: RetrievalAgentRequest,
-  budget: RetrievalAgentBudget,
-): Promise<{ result: ExploreResult; spend: RetrievalAgentSpend }> {
-  const k = budget.k ?? MAX_HITS;
-  const under = normalizeUnder(request.under);
-  const response = await hosted.subAgent({
-    question: request.question,
-    ...agentContext(request, under),
-    mode: "explore",
-    k,
-    ...factProjection(request),
-    ...(budget.maxTurns !== undefined ? { max_turns: budget.maxTurns } : {}),
-    max_wall_secs: budget.maxWallSecs,
-    ...(request.table !== undefined ? { table: request.table } : {}),
-  });
-  const run = exploreRunFrom(request.question, response, k, request.shape);
-  return { ...run, result: scoped(run.result, under) };
-}
-
-/** The explore run for one platform response: the retrieval run of the last
- * query's facts, plus `answer` and `chain`. `shape` as `retrievalAgentRunFrom`
- * takes it. */
-export function exploreRunFrom(
-  question: string,
-  response: unknown,
-  maxHits: number = MAX_HITS,
-  shape?: TableShape,
-): { result: ExploreResult; spend: RetrievalAgentSpend } {
-  const base = retrievalAgentRunFrom(question, response, maxHits, shape);
-  const body = asRecord(response);
-  const answer = typeof body.answer === "string" && body.answer.length > 0 ? body.answer : undefined;
-  const chain = Array.isArray(body.chain) ? body.chain.filter((s): s is string => typeof s === "string") : [];
-  return { result: { ...base.result, ...(answer ? { answer } : {}), chain }, spend: base.spend };
 }
 
 /** The fact rows of a response: each entry of `facts` carries its row as a

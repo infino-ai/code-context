@@ -12,9 +12,9 @@
 
 Much of what Claude spends time on during agent sessions is reading files rather than reasoning about them. SuperGrep routes file operations to fast subagents running small language models (SLMs): the lookup, the fan-out, the fifty "go look at this" jobs a hard task spawns. No config needed. Sonnet keeps the reasoning and decides when to use them.
 
-![SuperGrep: find, search and sql locally, ask and explore in the cloud, one index in both places](docs/subagent/architecture.svg)
+![SuperGrep: find, search and sql locally, ask in the cloud, one index in both places](docs/subagent/architecture.svg)
 
-**Five tools. Three run on your machine, two run in the cloud, over one
+**Four tools. Three run on your machine, one runs in the cloud, over one
 index kept in both places.**
 
 | | tool | what it does |
@@ -22,8 +22,7 @@ index kept in both places.**
 | local | **`find`** | Every line containing an exact string, like `grep -n`, complete and unranked, with the repo-wide total and per-file counts. Tens of milliseconds from the index instead of a grep-and-read loop that pulls source into Sonnet's context one file at a time. |
 | local | **`search`** | One ranked pass fusing exact keyword matching with semantic similarity, so it works whether or not you know the words. Hits carry the code, cited `path:line`. |
 | local | **`sql`** | Read-only SQL over the index. The ranked searches are table-valued relations, so "which files have the most code about X" is one query that ranks and tallies in a single pass. |
-| cloud | **`explore`** | A question that spans the repository. Small language models run the investigation in parallel against the same index, with deep context from it, and one grounded answer comes back with the facts it rests on, cited `path:line`. |
-| cloud | **`ask`** | One retrieval, returned as the rows it found rather than as prose, for when you want the facts and not a write-up. |
+| cloud | **`ask`** | A question that spans the repository, handed to a small language model that runs the investigation against the same index with deep context from it. It comes back as the rows it found, cited `path:line`, rather than as prose. Several asks run at once. |
 
 The models are small on purpose. Deciding where to look next in a 256,000-line repository is retrieval work, and a small model with deep
 context from the index can do it at a fraction of the cost and fifty at a time. What it is not is a reasoning model: it is meant to execute search tasks, and it is where Sonnet's exploration, retrieval and fan-out go.
@@ -45,15 +44,16 @@ It uses the whole surface rather than settling on one tool. Every call it made a
 | **`search`** | 11 | | `Bash` | 1 |
 | **`explore`** | 9 | | | |
 
-All five are load-bearing, and the twenty calls that are not SuperGrep are mostly `Read`: it reads a file *after* the index has told it which one, rather than
+That run was taken while a fifth tool, `explore`, was still offered; it has since been removed, because several asks issued together answered the same
+questions faster and for less. Every SuperGrep tool is load-bearing, and the twenty calls that are not SuperGrep are mostly `Read`: it reads a file *after* the index has told it which one, rather than
 instead of asking. That is the shape you want - the index does the finding, and the model still opens what it needs to quote.
 
 ## Go beyond code - index your entire laptop or any corpus
 
 SuperGrep looks across all the files a question needs, not just the source. Logs, test output, stack traces, CI output, configuration and docs go in beside the code -
 `.log`, `.out`, `.err`, `.jsonl` and `.ndjson` are chunked at record boundaries, so a stack trace stays with the message that explains it -
-and the same five tools run over all of it: `find` for an exact stack frame, `search` for a failure you can only describe, `sql` to count and rank across a
-run, `explore` for the question that spans several of them at once.
+and the same four tools run over all of it: `find` for an exact stack frame, `search` for a failure you can only describe, `sql` to count and rank across a
+run, `ask` for the question that spans several of them at once.
 
 That matters most where a frontier model is weakest. A log is the pathological case for a context window - large, repetitive, mostly irrelevant, and paid for
 again on every turn it stays in the transcript. An index collapses it to the spans that matter before Sonnet sees any of it. It is the same trade the cost
@@ -172,7 +172,7 @@ That is the whole setup. It indexes the repository, gets you a free account, reg
 cd ../another-repo && node /path/to/code-context/dist/cli.js install
 ```
 
-The stored key is found automatically. When the free credit runs out, `ask` and `explore` say so and tell you how to add billing details and a card to the same account; `find`, `search` and `sql` keep working throughout.
+The stored key is found automatically. When the free credit runs out, `ask` says so and tells you how to add billing details and a card to the same account; `find`, `search` and `sql` keep working throughout.
 
 ### Local tools only
 
@@ -219,7 +219,7 @@ cx index --max-files 1000000  # raise the cap past the 500,000 default; over it,
 
 The index is plain files under `.infino/` in the directory you indexed. Keyword search is live within seconds of the first `cx index`; semantic and hybrid search light up as the vectors finish backfilling behind it. `cx status` says what the index holds and how fresh it is.
 
-To load the platform copy in the same pass - so `ask` and `explore` see the same content as `find` - name the database. The stored key from `install` or `login` is used automatically:
+To load the platform copy in the same pass - so `ask` sees the same content as `find` - name the database. The stored key from `install` or `login` is used automatically:
 
 ```bash
 cx index --db https://host/<database>
@@ -280,7 +280,7 @@ curl -sS -X DELETE "https://host/v1/hydrate/<database>?table=logs" \
 
 By default a job that fails for good drops its half-built table, so a partial table is never served; `"on_failure": "keep"` keeps what was committed.
 
-The table is then searchable like any other. `ask` and `explore` run over it, and one question can span it and your code at once.
+The table is then searchable like any other. `ask` runs over it, and one question can span it and your code at once.
 
 ## Learn more
 

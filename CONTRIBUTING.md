@@ -30,7 +30,7 @@ npm test          # vitest - unit + engine-integration tests, no network needed
 
 - `src/core/` - indexing, chunking, file-state sync, search; shared by both
   surfaces. Pure logic lives here and is unit-tested directly. `hosted.ts`
-  (the platform client) and `retrieval-agent.ts` (the `ask`/`explore` loop)
+  (the platform client) and `retrieval-agent.ts` (the `ask` loop)
   are the platform half, live only in the `--db` path.
 - `src/commands/` + `src/cli.ts` - the CLI surface.
 - `src/mcp/` - the MCP server surface.

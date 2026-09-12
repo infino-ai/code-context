@@ -10,7 +10,7 @@
 import { appendFileSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { jsonify, hostedTelemetry, type FindResult, type RowFindResult, type RowHit, type RowSearchResult, type SearchResult } from "./searcher.js";
-import type { ExploreResult, RetrievalAgentResult, RetrievalAgentSpend } from "./retrieval-agent.js";
+import type { RetrievalAgentResult, RetrievalAgentSpend } from "./retrieval-agent.js";
 import type { HostedDb } from "./hosted.js";
 
 /** Rough tokens-per-char - the standard heuristic for English + code. Kept
@@ -40,8 +40,10 @@ export const receiptEnabled = (): boolean =>
  * it doesn't duplicate the repo. */
 export interface UsageEntry {
   ts: string;
-  /** The tool as the model saw it. `subagent` is the name `ask` had before
-   * and appears in older ledgers only; nothing writes it now. */
+  /** The tool as the model saw it. `subagent` is the name `ask` had before,
+   * and `explore` a second platform tool that was removed once measurement
+   * showed several asks issued together beat its loop; both appear in older
+   * ledgers only, and nothing writes either now. */
   tool: "find" | "search" | "sql" | "card" | "ask" | "explore" | "subagent";
   query: string;
   returnedTokens: number;
@@ -63,23 +65,21 @@ export interface UsageEntry {
   rows?: number;
   /** sql only: a truncated preview of the returned rows (the answer itself). */
   rowsPreview?: string;
-  /** ask and explore: what the platform's agent spent on the question -
-   * its turns, and the model tokens the platform metered for the call (prompt
-   * and completion together, every model call of the loop; the platform bills
-   * this number and reports no more of its costs). The receipt shows them, the
-   * tool result does not. */
+  /** ask: what the platform's agent spent on the question - its turns, and
+   * the model tokens the platform metered for the call (prompt and
+   * completion together, every model call of the loop; the platform bills
+   * this number and reports no more of its costs). The receipt shows them,
+   * the tool result does not. */
   agentTurns?: number;
   agentModelTokens?: number;
-  /** ask only: whether the platform ranked the facts against the question. */
+  /** ask: whether the platform ranked the facts against the question. */
   agentRanked?: boolean;
-  /** ask and explore: the platform's account of an audit that could not run,
-   * when the answer stands unaudited; absent when the audit ran. */
+  /** ask: the platform's account of an audit that could not run, when the
+   * answer stands unaudited; absent when the audit ran. */
   agentUnaudited?: string;
-  /** explore only: whether the exploration came back with a written answer
-   * (false when it ended on a cap or escalated and returned only what it had
-   * read), so a run's empty explorations can be counted from the ledger. */
+  /** Written by the removed `explore` tool; read only from older ledgers. */
   agentAnswered?: boolean;
-  /** ask and explore: what the platform call behind this entry cost on
+  /** ask: what the platform call behind this entry cost on
    * the wire - the round trip of the answering request and the read/write
    * tokens the platform metered (from its response headers, when present).
    * Lives in the ledger, never in the tool result. */
@@ -227,17 +227,6 @@ export function subagentEntry(result: RetrievalAgentResult, spend: RetrievalAgen
     ...(result.coverage?.ranked ? { agentRanked: true } : {}),
     ...(result.unaudited ? { agentUnaudited: result.unaudited } : {}),
   };
-}
-
-/** An explore call returns the written answer, the chain and the last
- * query's facts: what it cost the outer agent is all of those serialized;
- * the places and the loop's spend are recorded as for an ask call. */
-export function exploreEntry(result: ExploreResult, spend: RetrievalAgentSpend): UsageEntry {
-  const entry = subagentEntry(result, spend);
-  entry.tool = "explore";
-  entry.returnedTokens = estTokens(jsonify({ answer: result.answer, chain: result.chain, sql: result.sql, hits: result.hits, rows: result.rows }));
-  entry.agentAnswered = result.answer !== undefined;
-  return entry;
 }
 
 /** Attach the platform telemetry of the call that answered this entry's

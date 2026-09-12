@@ -11,14 +11,13 @@ server are still named `code-context`.
 | `find` | local | every line containing an exact string, `path:line` like `grep -n`, with per-file counts like `grep -c`; complete and unranked, and every hit is a real occurrence | where it would grep: every use or definition of an identifier, an error message, a config key |
 | `search` | local | one ranked pass fusing exact keyword matching (BM25) with semantic similarity; hits carry the code | how a subsystem works, code by meaning or exact term, similar implementations |
 | `sql` | local | read-only SQL over the index, with `bm25_search` and `hybrid_search` as table functions | counts, rankings and aggregates over the whole repository in one query |
-| `explore` | platform | a question about a mechanism that spans files; returns a written answer grounded in the facts it lists, with the chain of queries it ran | how does X work, where is X handled, trace this path |
-| `ask` | platform | a question or task in plain language; returns the rows it retrieved - `path`, `start_line`, `end_line` and the code - never a summary | when Claude wants facts to compose from rather than an answer |
+| `ask` | platform | a question or task in plain language; returns the rows it retrieved - `path`, `start_line`, `end_line` and the code - never a summary | how does X work, where is X handled, when Claude wants facts to compose from rather than an answer |
 
-`explore` and `ask` are registered only when the server has `--db`.
+`ask` is registered only when the server has `--db`.
 `find`, `search` and `sql` take an optional `path` (an absolute repository
 root) so one server can serve several repositories in a session, each with
-its own local index; `explore` and `ask` read one platform database and
-refuse a `path` naming a different repository.
+its own local index; `ask` reads one platform database and
+refuses a `path` naming a different repository.
 
 ### The SQL move
 
@@ -45,8 +44,8 @@ server-side, so agents never handle raw vectors.
 `cx index --db` builds the local index and loads the same chunks into a
 platform database; every sync after it (the explicit `cx index`, or the
 server's auto-sync as queries arrive) applies the same diff to both, so they
-never drift. `find`, `search` and `sql` read the local copy; `ask` and
-`explore` run on the platform copy. Without `--db` the server is the local
+never drift. `find`, `search` and `sql` read the local copy; `ask` runs on
+the platform copy. Without `--db` the server is the local
 index alone, and nothing leaves the machine: no account, no key, no
 telemetry; embedding is a small local model downloaded once.
 
@@ -70,7 +69,6 @@ that touch it, `cx index` and `cx mcp`:
 | `--db-timeout-ms <n>` | 60000 | per-request timeout |
 | `--cold-start-secs <n>` | 120 | how long to keep retrying while the database is not yet ready, before giving up |
 | `--subagent-max-turns`, `--subagent-max-wall-secs`, `--subagent-k` | 4, 120, 10 | `cx mcp` only: turn and wall-clock caps for one `ask` call, and how many facts a call returns |
-| `--explore-max-turns`, `--explore-max-wall-secs` | the platform's budget, 300 | `cx mcp` only: the same caps for one `explore` call |
 
 Plain `http://` is accepted for a loopback host only
 (`http://127.0.0.1:<port>/<database>` or `http://localhost:<port>/<database>`);
@@ -109,7 +107,7 @@ cx status                 what the index holds, how fresh, vector readiness
 cx usage                  ledger of queries run and what each returned  (-n, --all, --clear, --json)
 cx mcp                    serve the MCP tools over stdio
 cx index --db <url>       also keep the index on an infino-platform database  (--api-key-file, --embed-provider, --analyzer)
-cx mcp --db <url>         also serve ask and explore over that copy             (--api-key-file, the ask/explore caps)
+cx mcp --db <url>         also serve ask over that copy                    (--api-key-file, the ask caps)
 ```
 
 `cx usage` reads the local ledger at `.infino/usage.jsonl`: every call, from
@@ -143,7 +141,7 @@ stack.
 
 ## Architecture
 
-![SuperGrep: find, search and sql locally, ask and explore in the cloud, one index in both places](subagent/architecture.svg)
+![SuperGrep: find, search and sql locally, ask in the cloud, one index in both places](subagent/architecture.svg)
 
 - **Chunking:** tree-sitter (WASM, no native compiles) cuts at definition
   boundaries for TypeScript/JS, Python, Rust, Go, Java, C/C++, Ruby, C#, PHP;
@@ -152,7 +150,7 @@ stack.
 - **Index:** [infino](https://github.com/infino-ai/infino) tables - BM25 and
   IVF vector indexes over a single copy of the data - queried in-process
   through the Node binding locally, and the same table on an infino-platform
-  database for `explore` and `ask`, written by the same builds and syncs.
+  database for `ask`, written by the same builds and syncs.
 - **Embeddings:** a small local model for the local copy (chosen by a
   [measured eval](embedder-eval.md)); the platform embeds its copy with its
   own model unless `--embed-provider local`.

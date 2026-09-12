@@ -17,7 +17,6 @@ import {
   API_KEY_ENV,
   DEFAULT_DB_TIMEOUT_MS,
   DEFAULT_DB_COLD_START_SECS,
-  DEFAULT_EXPLORE_MAX_WALL_SECS,
   DEFAULT_HOSTED_EMBED_PROVIDER,
   DEFAULT_SEARCH_K,
   DEFAULT_SUBAGENT_K,
@@ -29,8 +28,6 @@ import {
   configureHosted,
   hostedSettingsFromFlags,
   hostedAnalyzer,
-  exploreMaxTurns,
-  exploreMaxWallSecs,
   subagentK,
   subagentMaxTurns,
   subagentMaxWallSecs,
@@ -144,7 +141,7 @@ describe("platform settings", () => {
     expect(() => hostedSettingsFromFlags({ embedProvider: "platform" }, {})).toThrow(/--embed-provider needs --db <url>/);
     expect(() => hostedSettingsFromFlags({ analyzer: "standard" }, {})).toThrow(/--analyzer needs --db <url>/);
     expect(() => hostedSettingsFromFlags({ subagentK: "5" }, {})).toThrow(/--subagent-k needs --db/);
-    expect(() => hostedSettingsFromFlags({ exploreMaxWallSecs: "5" }, {})).toThrow(/--explore-max-wall-secs needs --db/);
+    expect(() => hostedSettingsFromFlags({ subagentMaxWallSecs: "5" }, {})).toThrow(/--subagent-max-wall-secs needs --db/);
   });
 
   it("builds the target from --db with the key from INFINO_API_KEY", () => {
@@ -240,17 +237,6 @@ describe("platform settings", () => {
     expect(subagentK()).toBe(100);
     expect(() => settingsFor({ subagentMaxTurns: "-1" })).toThrow(/--subagent-max-turns must be a positive integer/);
     expect(() => settingsFor({ subagentK: "0" })).toThrow(/--subagent-k must be a positive integer/);
-  });
-
-  it("leaves explore's turn cap to the platform unless a flag names one, and gives it its own wall", () => {
-    withPlatform();
-    expect(exploreMaxTurns()).toBeUndefined();
-    expect(exploreMaxWallSecs()).toBe(DEFAULT_EXPLORE_MAX_WALL_SECS);
-    expect(DEFAULT_EXPLORE_MAX_WALL_SECS).toBe(300);
-    withPlatform({ exploreMaxTurns: "12", exploreMaxWallSecs: "600" });
-    expect(exploreMaxTurns()).toBe(12);
-    expect(exploreMaxWallSecs()).toBe(600);
-    expect(() => settingsFor({ exploreMaxTurns: "x" })).toThrow(/--explore-max-turns must be a positive integer/);
   });
 
   it("leaves auto-index and auto-sync to the env with or without a database - both write both places", () => {

@@ -12,7 +12,7 @@
 //   OURS     what we would charge for the same question. Two meters: platform
 //            READ TOKENS, which the gateway returns on every response and the
 //            client files in its ledger, and the SUBAGENT MODEL TOKENS an ask
-//            or explore burned inside the platform. Only the infino arm has
+//            burned inside the platform. Only the infino arm has
 //            either; the grep arm's is zero by construction, since nothing of
 //            it touches us.
 //

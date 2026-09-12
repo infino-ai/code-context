@@ -15,7 +15,7 @@
 //              its cost is the whole reason the comparison exists. For the
 //              infino arm it is find, search and sql against the index.
 //   SUBAGENT   work handed to another loop: the caller's own Explore subagent
-//              (the `Agent` tool) on the grep arm, our ask/explore on the
+//              (the `Agent` tool) on the grep arm, our ask on the
 //              infino arm. Whatever that loop does inside - its own thinking
 //              and its own retrieval - is inside this span by construction.
 //   MODEL      the caller model itself: wall clock minus every span above.
@@ -30,7 +30,7 @@
 //   the fan-out questions this demo exists to show.
 //
 //   Top-level spans only. A subagent's own calls carry `inSubagent` and sit
-//   INSIDE the parent Agent/explore span. Counting both double-counts.
+//   INSIDE the parent Agent/ask span. Counting both double-counts.
 
 /** Tools that are the arm hunting for code. `Read` counts: on the grep arm
  * pulling a file into context is the retrieval, and it is the single largest
@@ -38,7 +38,9 @@
 const RETRIEVAL_TOOLS = new Set(["Grep", "Glob", "LS", "Bash", "Read", "cx:find", "cx:search", "cx:sql"]);
 
 /** Tools that hand the question to another loop. `Agent` is the caller's own
- * Explore subagent; `cx:ask` and `cx:explore` are ours. */
+ * Explore subagent; `cx:ask` is ours. `cx:explore` was a second tool of ours
+ * until 2026-09-12; it stays in the set so a recorded run from before then
+ * still splits into the same three phases. */
 const SUBAGENT_TOOLS = new Set(["Agent", "cx:ask", "cx:explore"]);
 
 /** The three phases in the order they are stacked and coloured. */

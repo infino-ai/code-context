@@ -176,13 +176,11 @@ describe("a table of another shape, described at startup", () => {
     expect(byName.get("search")).toContain("cite a row by its id");
     expect(byName.get("find")).toContain(`Every row of ${JOBS_TABLE}`);
     expect(byName.get("ask")).toContain(`the ${JOBS_TABLE} table's index`);
-    // The facts of ask and explore are rows, cut to snippets, never hits.
-    for (const name of ["ask", "explore"]) {
-      expect(byName.get(name), name).toContain("as rows, never as hits");
-      expect(byName.get(name), name).toContain(`snippet`);
-      expect(byName.get(name), name).toContain(`${SNIPPET_CHARS} characters`);
-      expect(byName.get(name), name).not.toContain("from its hits");
-    }
+    // The facts of ask are rows, cut to snippets, never hits.
+    expect(byName.get("ask")).toContain("as rows, never as hits");
+    expect(byName.get("ask")).toContain(`snippet`);
+    expect(byName.get("ask")).toContain(`${SNIPPET_CHARS} characters`);
+    expect(byName.get("ask")).not.toContain("from its hits");
     expect(s.client.getInstructions()).toContain(`an index of the ${JOBS_TABLE} table`);
   });
 
@@ -305,7 +303,7 @@ describe("a table of another shape the platform could not describe at startup", 
     expect(s.startup).toEqual(["schema"]);
     const { tools } = await s.client.listTools();
     const byName = new Map(tools.map((t) => [t.name, t.description ?? ""]));
-    for (const name of ["find", "search", "sql", "ask", "explore"]) {
+    for (const name of ["find", "search", "sql", "ask"]) {
       expect(byName.get(name), name).toContain(`rows of the ${JOBS_TABLE} table`);
       expect(byName.get(name), name).toContain("could not be described");
       expect(byName.get(name), name).not.toContain("start_line");
@@ -322,7 +320,6 @@ describe("a table of another shape the platform could not describe at startup", 
       ["search", { query: "rust" }],
       ["sql", { query: `SELECT COUNT(*) FROM ${JOBS_TABLE}` }],
       ["ask", { question: "how many rust roles?" }],
-      ["explore", { question: "how do the rust roles compare?" }],
     ] as Array<[string, Record<string, unknown>]>) {
       const { ok, value, ops } = await call(s, name, args);
       expect(ok, name).toBe(false);

@@ -9,8 +9,6 @@
 import { describe, expect, it } from "vitest";
 import {
   runRetrievalAgent,
-  runExploreAgent,
-  exploreRunFrom,
   retrievalAgentRunFrom,
   factRowsOf,
   factsFrom,
@@ -328,86 +326,38 @@ describe("facts over a table of another shape", () => {
     expect(facts.rows).toEqual([{ id: "j1", department: "Eng", description_html: LONG_HTML, score: 0.5 }]);
   });
 
-  it("hands the shape through runRetrievalAgent and runExploreAgent to the result", async () => {
-    const hosted = { subAgent: async () => answered({ facts: [{ table: "jobs", row: FACT }], answer: "Eng owns it", chain: ["SELECT ..."] }) };
-    const asked = await runRetrievalAgent(hosted, { question: "q", projection: ["id"], shape: JOBS }, { maxWallSecs: 90 });
-    const explored = await runExploreAgent(hosted, { question: "q", projection: ["id"], shape: JOBS }, { maxWallSecs: 300 });
-    for (const { result } of [asked, explored]) {
-      expect(result.hits).toEqual([]);
-      expect(result.rows).toHaveLength(1);
-      expect(String(result.rows[0].description_html).length).toBe(SNIPPET_CHARS + "...".length);
-      expect(result.rows[0].locations).toEqual(["Paris, France", "Remote"]);
-    }
-    expect(explored.result.answer).toBe("Eng owns it");
+  it("hands the shape through runRetrievalAgent to the result", async () => {
+    const hosted = { subAgent: async () => answered({ facts: [{ table: "jobs", row: FACT }] }) };
+    const { result } = await runRetrievalAgent(hosted, { question: "q", projection: ["id"], shape: JOBS }, { maxWallSecs: 90 });
+    expect(result.hits).toEqual([]);
+    expect(result.rows).toHaveLength(1);
+    expect(String(result.rows[0].description_html).length).toBe(SNIPPET_CHARS + "...".length);
+    expect(result.rows[0].locations).toEqual(["Paris, France", "Remote"]);
   });
 });
 
-// --- explore mode -----------------------------------------------------------------------------
+// --- what the platform's loop may and may not return ---------------------------------------------
 
-describe("explore mode", () => {
-  const CHAIN = ["SELECT ... FROM bm25_search('chunks','content','tombstone', 100)", "find(\"struct Tombstone\")"];
-  const explored = (overrides: Record<string, unknown> = {}) =>
-    answered({ facts: PLACE_FACTS, statement: CHAIN[1], answer: "Tombstones are written in ... and read in ...", chain: CHAIN, turns: 6, ...overrides });
-
-  it("asks sub_agent in explore mode with the budget and returns the answer, the chain and the last query's facts", async () => {
-    const sent: unknown[] = [];
-    const hosted = {
-      subAgent: async (req: unknown) => {
-        sent.push(req);
-        return explored();
-      },
-    };
-    const { result, spend } = await runExploreAgent(hosted, { question: "how do tombstones work?" }, { maxWallSecs: 300 });
-    expect(sent).toEqual([{ question: "how do tombstones work?", mode: "explore", k: MAX_HITS, projection: ["path", "start_line", "end_line", "symbol"], max_wall_secs: 300 }]);
-    expect(result.answer).toBe("Tombstones are written in ... and read in ...");
-    expect(result.chain).toEqual(CHAIN);
-    expect(result.sql).toBe(CHAIN[1]);
-    expect(result.hits).toHaveLength(2);
-    expect(result.turns).toBe(6);
-    expect(result.error).toBeUndefined();
-    expect(spend).toEqual({ modelTokens: 1280 });
-  });
-
-  it("hands the caller's context to sub_agent beside the question, in both modes, and never without one", async () => {
+describe("the caller's context and the facts-only contract", () => {
+  it("hands the caller's context to sub_agent beside the question, and never without one", async () => {
     const sent: Array<Record<string, unknown>> = [];
     const hosted = {
       subAgent: async (req: unknown) => {
         sent.push(req as Record<string, unknown>);
-        return explored();
+        return answered({ facts: PLACE_FACTS });
       },
     };
     const context = "# CLAUDE.md\n\nThe manifest layer lives under src/supertable/manifest/.";
-    await runExploreAgent(hosted, { question: "where is the manifest committed?", context }, { maxWallSecs: 300 });
     await runRetrievalAgent(hosted, { question: "where is the manifest committed?", context }, { maxWallSecs: 90 });
     await runRetrievalAgent(hosted, { question: "and without any" }, { maxWallSecs: 90 });
-    expect(sent.map((r) => r.context)).toEqual([context, context, undefined]);
+    expect(sent.map((r) => r.context)).toEqual([context, undefined]);
     // The question is the question: the context is a field beside it, not
     // folded into it, so the platform anchors validation on the question alone.
-    expect(sent.map((r) => r.question)).toEqual(["where is the manifest committed?", "where is the manifest committed?", "and without any"]);
-    expect("context" in sent[2]).toBe(false);
+    expect(sent.map((r) => r.question)).toEqual(["where is the manifest committed?", "and without any"]);
+    expect("context" in sent[1]).toBe(false);
   });
 
-  it("lowers the platform's explore budget only when the budget names a turn cap", async () => {
-    const sent: unknown[] = [];
-    const hosted = {
-      subAgent: async (req: unknown) => {
-        sent.push(req);
-        return explored();
-      },
-    };
-    await runExploreAgent(hosted, { question: "q" }, { maxTurns: 12, maxWallSecs: 300, k: 25 });
-    expect(sent[0]).toMatchObject({ mode: "explore", max_turns: 12, k: 25 });
-  });
-
-  it("reports a turn-capped exploration with the chain and facts it read, and no answer", () => {
-    const { result } = exploreRunFrom("q", explored({ answer: undefined, terminate: "turn_cap" }));
-    expect(result.answer).toBeUndefined();
-    expect(result.chain).toEqual(CHAIN);
-    expect(result.hits).toHaveLength(2);
-    expect(result.error).toMatch(/ran out of turns without an answer - the facts and chain are what it read/);
-  });
-
-  it("keeps retrieve mode facts-only: a stray answer or chain in a retrieve response never reaches the result", () => {
+  it("keeps the result facts-only: a stray answer or chain in a response never reaches the result", () => {
     const { result } = retrievalAgentRunFrom(QUESTION, answered({ answer: "prose that should not pass", chain: ["x"] }));
     expect(result).not.toHaveProperty("answer");
     expect(result).not.toHaveProperty("chain");
@@ -473,11 +423,9 @@ describe("runRetrievalAgent", () => {
       },
     };
     await runRetrievalAgent(hosted, { question: "q", projection: ["id"] }, { maxWallSecs: 90 });
-    await runExploreAgent(hosted, { question: "q", projection: ["id"] }, { maxWallSecs: 300 });
     await runRetrievalAgent(hosted, { question: "q", projection: [] }, { maxWallSecs: 90 });
     expect(sent[0].projection).toEqual(["id"]);
-    expect(sent[1].projection).toEqual(["id"]);
-    expect("projection" in sent[2]).toBe(false);
+    expect("projection" in sent[1]).toBe(false);
   });
 
   it("sends no max_turns when the budget leaves it to the platform", async () => {
@@ -538,17 +486,15 @@ describe("a question scoped to a subtree", () => {
     ]);
   });
 
-  it("names the table the question is about as the platform's `table` field, on both modes, and sends none when the request names none", async () => {
+  it("names the table the question is about as the platform's `table` field, and sends none when the request names none", async () => {
     // Unlike `under`, this is a filter the platform applies: the loop is shown
     // that table's card alone. On a database holding two code indexes the
     // unscoped loop answered every question about one from the other.
     const hosted = recorder();
     await runRetrievalAgent(hosted, { question: "q", table: "chunks_opensearch" }, { maxWallSecs: 90 });
-    await runExploreAgent(hosted, { question: "q", table: "chunks_opensearch" }, { maxWallSecs: 300 });
     await runRetrievalAgent(hosted, { question: "q" }, { maxWallSecs: 90 });
     expect(hosted.sent[0]).toMatchObject({ table: "chunks_opensearch" });
-    expect(hosted.sent[1]).toMatchObject({ table: "chunks_opensearch", mode: "explore" });
-    expect(hosted.sent[2]).not.toHaveProperty("table");
+    expect(hosted.sent[1]).not.toHaveProperty("table");
   });
 
   it("sends no context at all when the call names no scope", async () => {
@@ -558,14 +504,10 @@ describe("a question scoped to a subtree", () => {
     expect(result).not.toHaveProperty("under");
   });
 
-  it("scopes an exploration the same way, and leaves an unscoped one without a context field", async () => {
-    const whole = recorder();
-    await runExploreAgent(whole, { question: "q" }, { maxWallSecs: 300 });
-    expect(whole.sent[0]).not.toHaveProperty("context");
-
+  it("sends the scope as the whole context when the call carries no instructions", async () => {
     const scoped = recorder();
-    await runExploreAgent(scoped, { question: "q", under: "src/superfile" }, { maxWallSecs: 300 });
-    expect(scoped.sent[0]).toMatchObject({ context: SCOPE, mode: "explore" });
+    await runRetrievalAgent(scoped, { question: "q", under: "src/superfile" }, { maxWallSecs: 90 });
+    expect(scoped.sent[0]).toMatchObject({ context: SCOPE });
   });
 
   it("adds the scope to the repository's own instructions rather than replacing them", async () => {
@@ -586,8 +528,6 @@ describe("a question scoped to a subtree", () => {
       { path: "src/f1.ts", n: 7 },
       { path: "src/f0.ts", n: 2 },
     ]);
-    const explored = await runExploreAgent(recorder(), { question: "q", under: "src" }, { maxWallSecs: 300 });
-    expect(explored.result.under).toBe("src");
   });
 
   it("reads a prefix the way find reads its own: a trailing slash is the same scope", async () => {

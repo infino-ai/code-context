@@ -52,10 +52,10 @@ describe("the out-of-credit message", () => {
     expect(text).toContain("https://console.example");
   });
 
-  it("says which tools still work, so the model does not abandon all five", () => {
+  it("says which tools still work, so the model does not abandon all four", () => {
     const text = outOfCreditSteps();
     expect(text).toContain("find, search and sql keep working");
-    expect(text).toContain("ask and explore need a balance");
+    expect(text).toContain("ask needs a balance");
   });
 
   it("does not tell the user to reinstall or sign up again", () => {

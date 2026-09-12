@@ -457,7 +457,7 @@ async function resolvePlatform(
   if (consent === "no-terminal") {
     return {
       notes: [
-        `Local tools only (find / search / sql): enabling ask and explore uploads this repository's contents, and there is no terminal here to ask.`,
+        `Local tools only (find / search / sql): enabling ask uploads this repository's contents, and there is no terminal here to ask.`,
         `Re-run \`cx install\` from a terminal, or pass --yes to agree without being asked.`,
       ],
     };
@@ -480,7 +480,7 @@ async function resolvePlatform(
           db,
           notes: [
             `could not register the database ${database} on ${baseUrl}: ${(err as Error).message}`,
-            `The entry is written anyway - the first \`cx index\` retries. If it keeps failing, the database has to exist before ask and explore work.`,
+            `The entry is written anyway - the first \`cx index\` retries. If it keeps failing, the database has to exist before ask works.`,
           ],
         };
   }
@@ -512,7 +512,7 @@ async function firstRun(
   if (named === undefined || named === "") {
     return {
       notes: [
-        `Local tools only (find / search / sql). ask and explore need an Infino account, and this build names no platform to get one from.`,
+        `Local tools only (find / search / sql). ask needs an Infino account, and this build names no platform to get one from.`,
         `Point it at one: \`cx install --platform https://host\` (or set ${PLATFORM_URL_ENV}). Or, with a key already, ${signInHint()}`,
       ],
     };
@@ -533,7 +533,7 @@ async function firstRun(
   if (consent === "no-terminal") {
     return {
       notes: [
-        `Local tools only (find / search / sql): ask and explore need an Infino account, and creating one uploads this repository's contents - there is no terminal here to ask.`,
+        `Local tools only (find / search / sql): ask needs an Infino account, and creating one uploads this repository's contents - there is no terminal here to ask.`,
         `Re-run \`cx install\` from a terminal, or pass --yes to agree without being asked.`,
       ],
     };
@@ -575,12 +575,12 @@ function formatCredit(cents: number): string {
 function trialRefusalNotes(err: unknown, baseUrl: string): string[] {
   const local = "Local tools only (find / search / sql)";
   if (err instanceof HostedError && err.status === HTTP_NOT_IMPLEMENTED) {
-    return [`${local}: ${baseUrl} does not offer free accounts.`, `For ask and explore, ${signInHint()}`];
+    return [`${local}: ${baseUrl} does not offer free accounts.`, `For ask, ${signInHint()}`];
   }
   if (err instanceof HostedError && err.status === HTTP_CONFLICT) {
     return [
       `${local}: this machine's network has already used its free trial on ${baseUrl}.`,
-      `For ask and explore, ${signInHint()}`,
+      `For ask, ${signInHint()}`,
     ];
   }
   return [

@@ -17,7 +17,7 @@
 //
 // `find` runs against the LOCAL index (the in-process engine on the handle),
 // and so do `search` and `sql` unless the MCP server is told otherwise. The
-// platform table the `ask` and `explore` tools read is the same index in
+// platform table the `ask` tool reads is the same index in
 // another place, and the doors reach for it in two cases: under
 // CX_REMOTE_SEARCH the hosted table is the index, so `search` goes through
 // `searchHosted` and every `sql` statement through `runSqlRows`; and a `sql`
@@ -87,8 +87,8 @@ export function partialIndex(manifest: Manifest): PartialIndex | undefined {
 // is re-exported here for the callers that always found it on the searcher.
 export { jsonify } from "./json.js";
 
-/** The ledger's record of what the platform call behind an `ask` or
- * `explore` result cost: the round trip of the answering request and the
+/** The ledger's record of what the platform call behind an `ask` result
+ * cost: the round trip of the answering request and the
  * tokens the platform metered. Read right after the call, while the client's
  * last call is that one. Undefined when there is no platform client, so
  * callers spread it into the usage entry unconditionally. Ledger-only: never

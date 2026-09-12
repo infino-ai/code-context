@@ -187,7 +187,7 @@ export async function statusCmd(opts: StatusCmdOptions): Promise<void> {
       `code-context index: ${fmtCount(m.chunks)} chunks from ${fmtCount(m.files)} files, ` +
         `vectors ${m.vectors}, indexed ${fmtAge(m.indexedAt)}. ` +
         `MCP tools: find (exact text, every occurrence), search (terms + meaning), sql (aggregation)` +
-        (platform ? `, ask (one retrieval as rows), explore (a written answer over the platform copy)` : "") +
+        (platform ? `, ask (one retrieval as rows over the platform copy)` : "") +
         `; the index re-syncs on every query.`,
     );
     return;

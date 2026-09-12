@@ -24,7 +24,7 @@ that there is no network at query or index time. Your code is never sent to
 any API, and there is no key to provision. (Running the server via `npx`
 also contacts the npm registry; install the package for fully offline use.)
 
-**With `--db <url>` (`find`/`search`/`sql` still local; `explore`/`ask` run
+**With `--db <url>` (`find`/`search`/`sql` still local; `ask` runs
 in the cloud):** the chunks your index holds - `path`, `start_line`,
 `end_line`, `lang`, and the code `content` itself - are loaded into a
 platform database you name, over HTTPS (plain `http://` is accepted for a
@@ -33,8 +33,8 @@ passed as a command-line argument (arguments are visible to every process on
 the machine) - it comes from a file (`--api-key-file`) or the
 `INFINO_API_KEY` environment variable. By default the platform's own model
 embeds that copy server-side (`--embed-provider local` keeps embedding on
-this machine and ships the vectors instead). `explore` and `ask` send your
-question to that platform and answer from what it retrieves; `find`,
+this machine and ships the vectors instead). `ask` sends your
+question to that platform and answers from what it retrieves; `find`,
 `search` and `sql` never leave the local index. If you need the first mode's
 guarantees, do not pass `--db`.
 

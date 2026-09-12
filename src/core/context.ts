@@ -7,7 +7,7 @@
 // in the index dir, opened synchronously in-process. When a platform database
 // is configured (--db <url>) the same repository's chunks table also lives
 // there, written by every build and sync beside the local one, and read by
-// the `ask` and `explore` tools through a REST client; its readiness is
+// the `ask` tool through a REST client; its readiness is
 // the server's - the table exists or it does not.
 
 import { existsSync } from "node:fs";
@@ -116,8 +116,8 @@ export function openForIndexing(path?: string, hostedOpts?: HostedOptions): Inde
 }
 
 /** Whether the platform's chunks table exists, memoized once seen. The
- * `ask` and `explore` tools ask this before a call; `label` is the
- * loggable name of the database for their message when it does not. */
+ * `ask` tool asks this before a call; `label` is the loggable name of the
+ * database for its message when it does not. */
 export async function platformTableReady(hosted: HostedDb, memo: HostedMemo): Promise<boolean> {
   if (!memo.ready) {
     const tables = await hosted.listTables();

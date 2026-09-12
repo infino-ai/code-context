@@ -2,7 +2,7 @@
   "name": "@infino-ai/code-context",
   "version": "0.5.0",
   "mcpName": "io.github.infino-ai/code-context",
-  "description": "SuperGrep: retrieval subagents for Claude Sonnet. find/search/sql run locally over an index in plain files, no account needed; explore/ask run in the cloud over the same index's platform copy.",
+  "description": "SuperGrep: retrieval subagents for Claude Sonnet. find/search/sql run locally over an index in plain files, no account needed; ask runs in the cloud over the same index's platform copy.",
   "license": "Apache-2.0",
   "homepage": "https://github.com/infino-ai/code-context#readme",
   "repository": {

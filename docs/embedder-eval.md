@@ -4,7 +4,7 @@ How the default local embedding model was chosen (2026-07-10, on the
 [infino](https://github.com/infino-ai/infino) engine repo as it stood that
 day - smaller than the 256,000-line corpus the README's numbers use). This
 eval covers only the local embedder, used by `find`, `search` and `sql`; the
-platform's own embedder, used by `explore` and `ask` by default, is a
+platform's own embedder, used by `ask` by default, is a
 separate model on the platform side and out of scope here.
 
 ## Setup

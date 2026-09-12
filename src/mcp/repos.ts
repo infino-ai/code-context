@@ -10,7 +10,7 @@
 // When a platform database is configured (--db <url>) the DEFAULT root's
 // context also carries the platform client: that repository's chunks table
 // lives there beside its local index, written by the same builds and syncs
-// and read by the `ask` and `explore` tools. A `path` naming another repo
+// and read by the `ask` tool. A `path` naming another repo
 // has the local index only - a platform database holds one chunks table, and
 // a second repo's chunks in it would be indistinguishable from the first's.
 //

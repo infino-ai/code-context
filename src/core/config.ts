@@ -18,7 +18,7 @@ export const INDEX_DIR_NAME = ".infino";
 //
 // A platform database (--db <url>) holds the same repository's chunks table
 // beside the local index, reached over HTTPS: every build and sync writes
-// both, and the `ask` and `explore` tools read it. Its settings are
+// both, and the `ask` tool reads it. Its settings are
 // command-line flags: the CLI parses them once into a HostedSettings
 // (hostedSettingsFromFlags) and installs it with configureHosted(); every
 // layer below reads that object through the accessor functions. Nothing here
@@ -69,22 +69,7 @@ export interface SubagentSettings {
   maxWallSecs: number;
   /** Facts asked for and kept per call (the platform caps a value above its own). */
   k: number;
-  /** The `explore` tool's budget, registered beside `ask`. */
-  explore: ExploreSettings;
 }
-
-export interface ExploreSettings {
-  /** Turn cap for one exploration; absent leaves the platform's own explore
-   * budget in force (a request value can only lower it). */
-  maxTurns?: number;
-  /** Wall clock for one exploration, in seconds. */
-  maxWallSecs: number;
-}
-
-/** Default wall clock for `explore`, in seconds: an exploration is many
- * retrieval turns plus the reading between them, so it gets several times a
- * retrieval's wall; the flag raises or lowers it. */
-export const DEFAULT_EXPLORE_MAX_WALL_SECS = 300;
 
 /** Everything the platform database is configured with, resolved and
  * validated once. */
@@ -107,9 +92,8 @@ export interface HostedSettings {
 /** The platform flags as commander parses them: camelCase of `--db`,
  * `--api-key-file`, `--embed-provider`, `--db-timeout-ms`, `--cold-start-secs`,
  * `--analyzer`, `--subagent-max-turns`, `--subagent-max-wall-secs`,
- * `--subagent-k`, `--explore-max-turns`, `--explore-max-wall-secs`. Every value
- * is the raw string; validation is here, in one place, so a bad value is an
- * error at startup and not on the first call. */
+ * `--subagent-k`. Every value is the raw string; validation is here, in one
+ * place, so a bad value is an error at startup and not on the first call. */
 export interface HostedFlags {
   db?: string;
   apiKeyFile?: string;
@@ -120,8 +104,6 @@ export interface HostedFlags {
   subagentMaxTurns?: string;
   subagentMaxWallSecs?: string;
   subagentK?: string;
-  exploreMaxTurns?: string;
-  exploreMaxWallSecs?: string;
 }
 
 /** The flags that mean nothing without --db, by their command-line spelling. */
@@ -134,8 +116,6 @@ const HOSTED_ONLY_FLAGS: Array<[keyof HostedFlags, string]> = [
   ["subagentMaxTurns", "--subagent-max-turns"],
   ["subagentMaxWallSecs", "--subagent-max-wall-secs"],
   ["subagentK", "--subagent-k"],
-  ["exploreMaxTurns", "--explore-max-turns"],
-  ["exploreMaxWallSecs", "--explore-max-wall-secs"],
 ];
 
 /** A positive-integer flag value, or its default when the flag was not given.
@@ -206,12 +186,6 @@ export function hostedSettingsFromFlags(
       maxTurns: positiveIntFlag("--subagent-max-turns", flags.subagentMaxTurns, DEFAULT_SUBAGENT_MAX_TURNS),
       maxWallSecs: positiveIntFlag("--subagent-max-wall-secs", flags.subagentMaxWallSecs, DEFAULT_SUBAGENT_MAX_WALL_SECS),
       k: positiveIntFlag("--subagent-k", flags.subagentK, DEFAULT_SUBAGENT_K),
-      explore: {
-        ...(optionalPositiveIntFlag("--explore-max-turns", flags.exploreMaxTurns) !== undefined
-          ? { maxTurns: optionalPositiveIntFlag("--explore-max-turns", flags.exploreMaxTurns) }
-          : {}),
-        maxWallSecs: positiveIntFlag("--explore-max-wall-secs", flags.exploreMaxWallSecs, DEFAULT_EXPLORE_MAX_WALL_SECS),
-      },
     },
   };
 }
@@ -220,9 +194,9 @@ export function hostedSettingsFromFlags(
  * (null when no --db was given), read by every layer through the accessors
  * below. There is no "hosted mode": the local index is always the one `find`,
  * `search` and `sql` read, and these settings name the platform database
- * that holds the same repository's chunks table for the `ask` and
- * `explore` tools. Every build and every sync writes both, so the two are one
- * index in two places. */
+ * that holds the same repository's chunks table for the `ask` tool. Every
+ * build and every sync writes both, so the two are one index in two
+ * places. */
 let hosted: HostedSettings | null = null;
 
 export function configureHosted(settings: HostedSettings | null): void {
@@ -287,16 +261,6 @@ export function subagentK(): number {
   return hosted?.subagent.k ?? DEFAULT_SUBAGENT_K;
 }
 
-/** Turn cap for one exploration (--explore-max-turns), or undefined to
- * leave the platform's own explore budget in force. */
-export function exploreMaxTurns(): number | undefined {
-  return hosted?.subagent.explore.maxTurns;
-}
-
-export function exploreMaxWallSecs(): number {
-  return hosted?.subagent.explore.maxWallSecs ?? DEFAULT_EXPLORE_MAX_WALL_SECS;
-}
-
 /** Whether a first query on an unindexed repo builds the index (CX_AUTO_INDEX,
  * default on). A build writes both the local index and, when a platform
  * database is configured, its chunks table: the two are one index in two
@@ -313,29 +277,15 @@ export function autoSyncEnabled(): boolean {
   return !OFF_VALUES.includes((process.env.CX_AUTO_SYNC ?? "").toLowerCase());
 }
 
-/** Whether the MCP server registers the platform's `ask` and `explore` when
- * a platform database is configured (CX_AGENT_TOOLS, default on). Off, the
- * two are neither registered nor named in the server's instructions. A lane
- * that hides them through the SDK's disallowedTools removes them from the
- * model's tool list but not from those instructions, and a line for a tool
- * that is not there made the caller try it and lose the turn to the refusal;
- * this switch takes the line out at the source. */
+/** Whether the MCP server registers the platform's `ask` when a platform
+ * database is configured (CX_AGENT_TOOLS, default on). Off, it is neither
+ * registered nor named in the server's instructions. A lane that hides it
+ * through the SDK's disallowedTools removes it from the model's tool list but
+ * not from those instructions, and a line for a tool that is not there made
+ * the caller try it and lose the turn to the refusal; this switch takes the
+ * line out at the source. */
 export function agentToolsEnabled(): boolean {
   return !OFF_VALUES.includes((process.env.CX_AGENT_TOOLS ?? "").toLowerCase());
-}
-
-/** Whether `explore` is one of them (CX_EXPLORE_TOOL, default on). Off with
- * `CX_AGENT_TOOLS` still on leaves `ask` alone, which is a surface worth
- * having: an exploration is one long loop on one question, where several asks
- * in a reply run at once, and the caller keeps the following-up for itself.
- *
- * It is a switch here rather than the SDK's disallowedTools for the reason
- * above: hiding the tool that way leaves its routing line standing in the
- * instructions, and the line is what sends a mechanism question to a tool the
- * caller cannot see. The instructions read this, so `ask` takes over that
- * routing when explore is gone. */
-export function exploreToolEnabled(): boolean {
-  return !OFF_VALUES.includes((process.env.CX_EXPLORE_TOOL ?? "").toLowerCase());
 }
 
 /** The table this client builds when nothing overrides the name: the one

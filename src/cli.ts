@@ -26,7 +26,6 @@ import {
   API_KEY_ENV,
   DEFAULT_DB_TIMEOUT_MS,
   DEFAULT_DB_COLD_START_SECS,
-  DEFAULT_EXPLORE_MAX_WALL_SECS,
   DEFAULT_SUBAGENT_K,
   DEFAULT_SUBAGENT_MAX_TURNS,
   DEFAULT_SUBAGENT_MAX_WALL_SECS,
@@ -70,7 +69,7 @@ program
       "Keyword search seconds after `cx index`; semantic and hybrid search when vectors\n" +
       "finish backfilling; SQL with relevance-ranked aggregation over the whole repo.\n" +
       "With --db the same index is also kept on an Infino database in the cloud, where the\n" +
-      "ask and explore tools run.",
+      "ask tool runs.",
   )
   .version(CLI_VERSION)
   .addHelpText(
@@ -87,15 +86,15 @@ Examples:
   cx mcp                              serve the three local MCP tools (find/search/sql) over stdio
   cx login --db https://host < key    store this machine's account once (key at mode 600)
   cx install                          write the MCP entry into .mcp.json - with an account stored,
-                                      this also registers the repo's database and enables all five
+                                      this also registers the repo's database and enables all four
                                       tools, with no flags and no key in the config
   cx install --db https://host/<database> --api-key-file ~/.infino/key
                                       the same, naming the database and key explicitly instead
   cx index --db https://host/<database> --api-key-file ~/.infino/key
                                       index the repo locally AND load it into the platform database
   cx mcp --db https://host/<database> --api-key-file ~/.infino/key
-                                      serve find/search/sql over the local index, plus ask and
-                                      explore over the platform copy; every sync updates both`,
+                                      serve find/search/sql over the local index, plus ask over
+                                      the platform copy; every sync updates both`,
   );
 
 program
@@ -234,14 +233,12 @@ hostedOptions(
 hostedOptions(
   program
     .command("mcp")
-    .description("serve the MCP tools (find / search / sql) over stdio; with --db, also ask and explore over the platform table")
+    .description("serve the MCP tools (find / search / sql) over stdio; with --db, also ask over the platform table")
     .option("-C, --path <dir>", "repo root (default: current directory)"),
 )
   .option("--subagent-max-turns <n>", `turn cap for one ask call (default ${DEFAULT_SUBAGENT_MAX_TURNS})`)
   .option("--subagent-max-wall-secs <n>", `wall-clock cap for one ask call, in seconds (default ${DEFAULT_SUBAGENT_MAX_WALL_SECS})`)
   .option("--subagent-k <n>", `facts one ask call asks for and returns (default ${DEFAULT_SUBAGENT_K}, search's k)`)
-  .option("--explore-max-turns <n>", "turn cap for one explore call (default: the platform's explore budget)")
-  .option("--explore-max-wall-secs <n>", `wall-clock cap for one explore call, in seconds (default ${DEFAULT_EXPLORE_MAX_WALL_SECS})`)
   .action(async (opts: { path?: string } & HostedFlags) => {
     applyHosted(opts);
     const { serveMcp } = await import("./mcp/server.js");

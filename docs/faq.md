@@ -2,11 +2,11 @@
 
 ### What is SuperGrep?
 
-Retrieval subagents for Claude Sonnet: five tools over an index kept in two
+Retrieval subagents for Claude Sonnet: four tools over an index kept in two
 places. `find`, `search` and `sql` run locally, over a ranked index that
 lives in plain files inside your repo, fusing keyword (BM25) and semantic
-search in one pass and exposing read-only SQL over the result. `explore` and
-`ask` run in the cloud, over the same index's platform copy, when a database
+search in one pass and exposing read-only SQL over the result. `ask`
+runs in the cloud, over the same index's platform copy, when a database
 is configured with `--db`. Either way the point is the same: an agent
 answers questions about the codebase, or delegates its exploration, without
 reading it file by file. The package, the CLI (`cx`) and the MCP server are
@@ -27,7 +27,7 @@ Not unless you ask it to. By default there are no accounts, no API keys, and
 no server: the embedding model is a small local model downloaded once from
 the public model hub, and after that everything runs offline. The one opt-in
 is `--db` (next question), which also keeps the index in a database you own
-on infino-platform, so the platform's `ask` and `explore` tools can run
+on infino-platform, so the platform's `ask` tool can run
 over it.
 
 ### Can the index also live on infino-platform?
@@ -37,13 +37,12 @@ Yes, and it is the same index. `cx index --db https://host/<database>
 then loads the same chunks into that database; every sync after it (the
 explicit `cx index`, or the MCP server's auto-sync as queries arrive) applies
 the same diff to both, so the two never drift. `find`, `search` and `sql`
-keep reading the local index. `cx mcp --db ...` adds two tools that run on the
+keep reading the local index. `cx mcp --db ...` adds one tool that runs on the
 platform copy: `ask`, which hands a question or task to the platform's
 retrieval agent and returns the rows it retrieved - exact `path:line` places
 with the code, plus counts and rankings - for the coding agent to compose
-from, never a written summary; and `explore`, which takes a question about a
-mechanism that spans files and returns a written answer grounded in the facts
-it lists. By default the platform embeds its copy with its own model. Every
+from, never a written summary. By default the platform embeds its copy with
+its own model. Every
 platform setting is a command-line flag on `cx index` and `cx mcp` (`--db`,
 `--api-key-file`, `--embed-provider`, `--analyzer`, the timeouts, the tool
 caps); the key comes from a file or from `INFINO_API_KEY`, never from the
@@ -73,9 +72,9 @@ are done.
 For `find`, `search` and `sql`, yes: each takes an optional `path` (an
 absolute repo root); omit it to use the server's startup root, or pass it to
 target a specific repo when a session spans several, each with its own index
-in its own `.infino/`. `explore` and `ask` are scoped to the one platform
+in its own `.infino/`. `ask` is scoped to the one platform
 database the server was started with, since that database holds one
-repository's index; they refuse a `path` naming a different one.
+repository's index; it refuses a `path` naming a different one.
 
 ### Where does the index live, and can I share it?
 
@@ -117,17 +116,19 @@ Five, one per question: `find` (every line containing an exact string, cited
 chunk content with `path:line` ranges), and `sql` (read-only `SELECT`/`WITH`
 over the index, with the ranked search functions usable as table-valued
 relations so search composes with `GROUP BY`) all run locally, with no
-account needed. With `--db` and a platform database, `explore` (a question
-that spans the repository, answered in writing with the facts and the chain
-of queries behind it) and `ask` (one retrieval, returned as the rows found
-rather than as prose) run in the cloud over the same index's platform copy.
+account needed. With `--db` and a platform database, `ask` (a question that
+spans the repository, answered as the rows the platform's loop retrieved
+rather than as prose) runs in the cloud over the same index's platform copy.
 
 Every near-duplicate retrieval tool worsens an agent's tool selection, so
-each of the five earns its place by answering a question none of the others
+each of the four earns its place by answering a question none of the others
 does: `find` and `search` are not duplicates, one is complete and unranked,
-the other ranked and top-k; `ask` and `explore` are not duplicates either,
-one returns rows to compose from, the other a written, cited answer. Among
-the local three there used to be a fourth, `reindex`; measured, no Sonnet run
+the other ranked and top-k; `ask` is not a fourth flavour of either, it
+hands the whole question to a loop that queries the index itself. There used
+to be a fifth, `explore`, which ran a long multi-turn loop on one question
+and returned a written answer; measured, several asks issued together were
+faster and cheaper, so it is gone. Among
+the local three there used to be another, `reindex`; measured, no Sonnet run
 ever called it, Haiku called it where it hurt, and every tool in the list is
 prompt text on every turn. The first query builds the index, every query re-syncs it, and
 `cx index --full` rebuilds from a shell.

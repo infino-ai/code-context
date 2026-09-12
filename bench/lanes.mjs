@@ -80,21 +80,6 @@ const exploreOnIndex = {
   model: EXPLORE_MODEL,
 };
 
-/** Explore over the platform's explore mode alone, Haiku relaying: the
- * platform's loop reads what it finds and follows it, and answers in writing
- * beside the facts and the chain of queries; the relay hands that answer up
- * with its citations. The exploration's turn budget is the platform's
- * (--explore-max-turns lowers it), so the platform decides how far to go. */
-const exploreOnPlatform = {
-  description: EXPLORE_DESCRIPTION,
-  tools: [`${CX_TOOL_PREFIX}explore`, "Read"],
-  prompt:
-    "You explore this repository by calling explore with the question, once (rephrase and call " +
-    "once more only if it returns no answer). Return its answer, checked against and cited from " +
-    "the facts it returned as path:line; if there is still no answer, return the facts it found and " +
-    "say so. The caller will not see your tool results.",
-  model: EXPLORE_MODEL,
-};
 /** The model inside the delegating lane's Explore: the mid-tier one, because
  * that lane asks whether a strong writer over the index beats a strong model
  * doing its own reading. The outer model is the lane's (`BENCH_MODEL`), so the
@@ -107,7 +92,7 @@ const DELEGATE_MODEL = "sonnet";
  * that going one level down reaches the same index, with a model that spends
  * all of its turns on retrieval. */
 const DELEGATED_DESCRIPTION =
-  `${EXPLORE_DESCRIPTION} It runs find and explore over the index itself and returns cited places, ` +
+  `${EXPLORE_DESCRIPTION} It runs find and ask over the index itself and returns cited places, ` +
   "so a question that spans the repository costs the caller one call.";
 
 /** Explore over the whole code-context surface, Sonnet inside: the shape where
@@ -118,13 +103,13 @@ const DELEGATED_DESCRIPTION =
  * what let confident wrong details through to an outer model before. */
 const exploreDelegated = {
   description: DELEGATED_DESCRIPTION,
-  tools: [...[...CX_RETRIEVAL_TOOLS, "explore", "ask"].map((tool) => `${CX_TOOL_PREFIX}${tool}`), "Read"],
+  tools: [...[...CX_RETRIEVAL_TOOLS, "ask"].map((tool) => `${CX_TOOL_PREFIX}${tool}`), "Read"],
   prompt:
     "You explore this repository through code-context's index, and the caller sees only what you " +
     "write. find: every occurrence of an exact identifier or string, where you would grep. search: " +
     "how something works or where it is handled, by meaning. sql: counts and rankings across the " +
-    "repo. explore: a mechanism that spans files, when one retrieval will not do. ask: one " +
-    "retrieval returned as rows. Answer from the rows you retrieved and give every claim a " +
+    "repo. ask: one retrieval returned as rows, and several independent asks run at once. " +
+    "Answer from the rows you retrieved and give every claim a " +
     "path:line citation from them; Read a file only for a hit marked truncated. If you could not " +
     "ground a claim in a row, leave it out and say what you could not find - an unplaced claim is " +
     "worse to the caller than a gap, because the caller cannot check it.",
@@ -159,9 +144,9 @@ const exploreRelay = {
   prompt:
     "You answer one question about this repository and the caller sees only what you write. Spend one " +
     "retrieval on it, then write. If the question names an exact string, that is find. Anything that " +
-    "spans files - how something works, where it is handled, what calls what - is explore, in one call, " +
-    "with the question as it was asked: explore runs its own grounded loop over the index and comes back " +
-    "with facts, a written answer and the queries behind it, so taking the question apart into searches " +
+    "spans files - how something works, where it is handled, what calls what - is ask, in one call, " +
+    "with the question as it was asked: ask runs its own grounded loop over the index and comes back with the rows it " +
+    "retrieved and the query behind them, so taking the question apart into searches " +
     "here does that work again more expensively. Then write the answer from the rows you have, with a " +
     "path:line citation from them on every claim, and leave out whatever you could not place - a claim " +
     "the caller cannot check is worse to it than a gap you name.",
@@ -229,13 +214,13 @@ const SNOWFLAKE_MCP = join(BENCH, "snowflake-mcp.mjs");
  * mid-question would put a stat walk on the clock. */
 export const mcpEnvBase = (repoDir, indexDir) => ({ CX_ROOT: repoDir, CX_INDEX_DIR: indexDir, CX_AUTO_SYNC: "0" });
 
-/** Server env for a lane that hides `ask` and `explore`: the server then
- * registers neither and names neither in its instructions. The SDK's
- * `disallowedTools` removes a tool from the model's list but not from the
- * server's instructions, which are prompt text on every turn - and a line
- * for a tool that is not there made the caller try it and lose the turn to
- * the refusal (the index arm on the jobs corpus, 2026-09-11). Both are kept:
- * the env takes the line out, the list is the guarantee. */
+/** Server env for a lane that hides `ask`: the server then registers it and
+ * names it nowhere in its instructions. The SDK's `disallowedTools` removes a
+ * tool from the model's list but not from the server's instructions, which are
+ * prompt text on every turn - and a line for a tool that is not there made the
+ * caller try it and lose the turn to the refusal (the index arm on the jobs
+ * corpus, 2026-09-11). Both are kept: the env takes the line out, the list is
+ * the guarantee. */
 export const NO_AGENT_TOOLS = { CX_AGENT_TOOLS: "0" };
 
 /** The code-context server as the SDK starts it, for the lanes and for the
@@ -289,7 +274,7 @@ export function snowflakeServer(env = process.env) {
 /** The server flags that name the platform database: the same for the MCP
  * server of a platform lane and for the `cx index` of load-hosted.mjs, so the
  * table is loaded the way the lane's tools expect it. With --db the server
- * registers the ask and explore tools, and a `sql` statement that embeds a
+ * registers the ask tool, and a `sql` statement that embeds a
  * query (a `{{q}}`, a vector function's) runs on the platform; find reads
  * the local index either way, and so do search and plain sql unless the lane
  * sets CX_REMOTE_SEARCH. The key travels as the path of its file; nothing
@@ -325,8 +310,8 @@ export function agentFlags(env = process.env) {
 
 /** The lane table. Each lane is the identical hermetic base plus:
  *   kind      "local" (the server has the local index alone), "hosted" (the
- *             server also has the platform database, where the ask and
- *             explore tools run) or "snowflake" (the Snowflake server in the
+ *             server also has the platform database, where the ask tool
+ *             runs) or "snowflake" (the Snowflake server in the
  *             code-context server's place) - recorded on every row as laneKind
  *   tools     the built-in tools the agent gets
  *   mcp       whether an MCP server is attached
@@ -344,10 +329,13 @@ export function agentFlags(env = process.env) {
  *   combo      - both, which is what installing the MCP server actually
  *                produces in a real client
  *   hosted     - combo with the platform database configured, and the
- *                ask and explore tools it brings hidden: the three
+ *                ask tool it brings hidden: the three
  *                local tools alone, as a control for the lanes below
- *   hosted-agent - combo plus the ask tool (the platform's own agent
- *                  loop); explore hidden
+ *   hosted-agent - combo plus the ask tool (the platform's own agent loop).
+ *                  It hid `explore` as well until that tool was removed on
+ *                  2026-09-12, which leaves it identical to `hosted-full`:
+ *                  rows recorded under the two names before that date are
+ *                  not the same experiment as rows recorded after
  *   agent-only - Read plus ask alone: find, search and sql are
  *                hidden, so every retrieval goes through the platform's agent.
  *                Measures that agent's answers and cost in isolation - not how
@@ -357,9 +345,8 @@ export function agentFlags(env = process.env) {
  *   index-explore    - stock-explore plus the MCP server, with Explore
  *                      overridden to run on code-context's tools (Haiku inside)
  *   hosted-full-remote - hosted-full with `search` reading the hosted index as
- *                      well, and without `explore` since 2026-09-12, so the
- *                      caller fans out over parallel asks instead of handing
- *                      one question to a long loop; nothing in the lane reads the old local
+ *                      well, so the caller fans out over parallel asks;
+ *                      nothing in the lane reads the old local
  *                      vectors. hosted-full's own `search` is local, which
  *                      means every hosted-full row ever recorded did part of
  *                      its index work on the 384-dim local index; this lane is
@@ -367,7 +354,7 @@ export function agentFlags(env = process.env) {
  *                      for the full surface
  *   hosted-index     - the stock tools plus find/search/sql over the HOSTED
  *                      index, read by the session model itself: no subagent,
- *                      no platform loop, `ask` and `explore` hidden. The
+ *                      no platform loop, `ask` hidden. The
  *                      `hosted` lane with CX_REMOTE_SEARCH, so the pair
  *                      prices the hosted index against the local one with
  *                      nothing else moving - and if neither decider earns its
@@ -375,31 +362,25 @@ export function agentFlags(env = process.env) {
  *   hosted-index-explore - index-explore reading the PLATFORM's index: the same
  *                      Haiku subagent with the same find/search/sql, but
  *                      `search` goes to the hosted table (CX_REMOTE_SEARCH),
- *                      and the platform's `ask` and `explore` are hidden from
+ *                      and the platform's `ask` is hidden from
  *                      both levels. It separates the two things every other
  *                      hosted lane moves together - the index and the decider
  *                      - by keeping the index and removing the decider.
  *                      Against `index-explore` it prices the index alone (same
  *                      brain, better vectors); against `hosted-full` it prices
  *                      the decider alone (same index, cheap brain)
- *   platform-explore - the same with the platform database, with Explore
- *                      overridden to run on the explore tool alone (the
- *                      platform's explore mode: reads, follows, answers)
  *   find-subagent    - stock tools, find, and ask (the tool was named
  *                      subagent when the lane was; the lane keeps its name
- *                      so its rows stay comparable), with search, sql and
- *                      explore hidden. Exact-text questions have find;
+ *                      so its rows stay comparable), with search and sql
+ *                      hidden. Exact-text questions have find;
  *                      everything that spans the repo has the platform's
  *                      agent, which returns the rows it retrieved
- *   find-explore     - find-subagent with explore in ask's place: the
- *                      main agent asks the platform's explore mode directly
- *                      and gets a written answer beside the facts
- *   hosted-full      - everything at once: the stock tools plus all five
+ *   hosted-full      - everything at once: the stock tools plus all four
  *                      code-context tools, nothing hidden. The other hosted
  *                      lanes each remove something to isolate it; this one
  *                      asks the opposite question - given the whole surface,
  *                      what does the model reach for, and does more choice
- *                      help or confuse? (The `find`/`explore` lanes hide
+ *                      help or confuse? (`find-subagent` hides
  *                      `search` and `sql`, which are the local instruments
  *                      for questions by meaning and for counts.)
  *   hosted-full-agent - hosted-full plus the Agent tool, with Explore left
@@ -446,7 +427,7 @@ export const LANES = {
     mcp: true,
     env: (repoDir, indexDir) => ({ ...mcpEnvBase(repoDir, indexDir), ...NO_AGENT_TOOLS }),
     args: hostedFlags,
-    disallowedTools: ["ask", "explore"].map((tool) => `${CX_TOOL_PREFIX}${tool}`),
+    disallowedTools: [`${CX_TOOL_PREFIX}ask`],
     requires: HOSTED_REQUIRES,
   },
   "hosted-agent": {
@@ -455,7 +436,6 @@ export const LANES = {
     mcp: true,
     env: mcpEnvBase,
     args: (env) => [...hostedFlags(env), ...agentFlags(env)],
-    disallowedTools: [`${CX_TOOL_PREFIX}explore`],
     requires: HOSTED_REQUIRES,
   },
   "hosted-full": {
@@ -480,7 +460,7 @@ export const LANES = {
     mcp: true,
     env: mcpEnvBase,
     args: (env) => [...hostedFlags(env), ...agentFlags(env)],
-    disallowedTools: [...CX_RETRIEVAL_TOOLS, "explore"].map((tool) => `${CX_TOOL_PREFIX}${tool}`),
+    disallowedTools: CX_RETRIEVAL_TOOLS.map((tool) => `${CX_TOOL_PREFIX}${tool}`),
     requires: HOSTED_REQUIRES,
   },
   "stock-explore": { kind: "local", tools: [...STOCK_TOOLS, AGENT_TOOL], mcp: false, requires: [] },
@@ -502,21 +482,14 @@ export const LANES = {
     // so every one of those rows did a third of its index work on the old
     // 384-dim vectors, and switching what the name means would reinterpret
     // them all. This lane is the honest "the whole surface, all of it hosted".
-    // No `explore` since 2026-09-12 (owner: "so that claude can only ask in
-    // parallel and use local search tools without getting stuck on explorer
-    // loop"). The paragraph above argues against changing what a recorded
-    // lane name means; the owner chose to change this one rather than add a
-    // lane, so rows of this lane before this date had explore and rows after
-    // do not. Measured that day: one explore was 30.2s, longer than four asks
-    // running together, and explorations reach their 25-turn budget often.
-    //
-    // CX_EXPLORE_TOOL rather than disallowedTools, which was tried first and
-    // was wrong: it takes the tool off the model's list and leaves explore's
-    // routing line standing in the server's instructions, so a mechanism
-    // question is still sent to a tool that is not there. Measured that way
-    // once - six searches and no ask at all. The switch drops the tool and its
-    // line together, and `ask` inherits the routing.
-    env: (repoDir, indexDir) => ({ ...mcpEnvBase(repoDir, indexDir), CX_REMOTE_SEARCH: "1", CX_EXPLORE_TOOL: "0" }),
+    // It dropped `explore` on 2026-09-12 through CX_EXPLORE_TOOL (owner: "so
+    // that claude can only ask in parallel and use local search tools without
+    // getting stuck on explorer loop"), before the tool was removed from the
+    // client altogether; rows of this lane before that date had explore and
+    // rows after do not. Measured that day: one explore was 30.2s, longer
+    // than four asks running together, and explorations reached their 25-turn
+    // budget often.
+    env: (repoDir, indexDir) => ({ ...mcpEnvBase(repoDir, indexDir), CX_REMOTE_SEARCH: "1" }),
     args: (env) => [...hostedFlags(env), ...agentFlags(env)],
     requires: HOSTED_REQUIRES,
   },
@@ -531,7 +504,7 @@ export const LANES = {
     // pair prices the index against the local one with nothing else moving.
     env: (repoDir, indexDir) => ({ ...mcpEnvBase(repoDir, indexDir), CX_REMOTE_SEARCH: "1", ...NO_AGENT_TOOLS }),
     args: hostedFlags,
-    disallowedTools: ["ask", "explore"].map((tool) => `${CX_TOOL_PREFIX}${tool}`),
+    disallowedTools: [`${CX_TOOL_PREFIX}ask`],
     requires: HOSTED_REQUIRES,
   },
   "hosted-index-explore": {
@@ -549,17 +522,8 @@ export const LANES = {
     // reason it was caught.
     env: (repoDir, indexDir) => ({ ...mcpEnvBase(repoDir, indexDir), CX_REMOTE_SEARCH: "1", ...NO_AGENT_TOOLS }),
     args: hostedFlags,
-    disallowedTools: ["ask", "explore"].map((tool) => `${CX_TOOL_PREFIX}${tool}`),
+    disallowedTools: [`${CX_TOOL_PREFIX}ask`],
     agents: { [EXPLORE]: exploreOnIndex },
-    requires: HOSTED_REQUIRES,
-  },
-  "platform-explore": {
-    kind: "hosted",
-    tools: [...STOCK_TOOLS, AGENT_TOOL],
-    mcp: true,
-    env: mcpEnvBase,
-    args: (env) => [...hostedFlags(env), ...agentFlags(env)],
-    agents: { [EXPLORE]: exploreOnPlatform },
     requires: HOSTED_REQUIRES,
   },
   delegated: {
@@ -635,16 +599,7 @@ export const LANES = {
     mcp: true,
     env: mcpEnvBase,
     args: (env) => [...hostedFlags(env), ...agentFlags(env)],
-    disallowedTools: ["search", "sql", "explore"].map((tool) => `${CX_TOOL_PREFIX}${tool}`),
-    requires: HOSTED_REQUIRES,
-  },
-  "find-explore": {
-    kind: "hosted",
-    tools: STOCK_TOOLS,
-    mcp: true,
-    env: mcpEnvBase,
-    args: (env) => [...hostedFlags(env), ...agentFlags(env)],
-    disallowedTools: ["search", "sql", "ask"].map((tool) => `${CX_TOOL_PREFIX}${tool}`),
+    disallowedTools: ["search", "sql"].map((tool) => `${CX_TOOL_PREFIX}${tool}`),
     requires: HOSTED_REQUIRES,
   },
   snowflake: {
@@ -816,7 +771,7 @@ export function keepInput(input) {
 
 /** The queries a run made through an MCP server, one line each, in the order
  * it made them: the call's input (the sql statement with its embed map, the
- * find literal, the search query, the question put to ask or explore)
+ * find literal, the search query, the question put to ask)
  * and, indented under a platform call, each statement the platform ran for
  * it. A code-context call is listed by its bare tool name; a Snowflake call
  * keeps its `sf:` prefix, so a reader (the judge, which reruns the

@@ -2,8 +2,8 @@
 // SPDX-FileCopyrightText: Copyright The Infino Authors
 //
 // The repository's own instructions for an agent - what a developer's Claude
-// Code session loads before it touches the code - gathered so `ask` and
-// `explore` can hand the same context to the platform's loop. The caller
+// Code session loads before it touches the code - gathered so `ask` can hand
+// the same context to the platform's loop. The caller
 // already has it: it read CLAUDE.md at startup. The model inside the loop did
 // not, and it is the one writing the queries, so a question that says "the
 // manifest layer" reached a model that had never seen the file telling it
@@ -27,7 +27,7 @@ const INSTRUCTION_FILES = ["CLAUDE.md", ".claude/CLAUDE.md", "CLAUDE.local.md", 
 const SKILLS_DIR = join(".claude", "skills");
 const SKILL_FILE = "SKILL.md";
 
-/** Whether `ask` and `explore` hand the dev context to the loop at all.
+/** Whether `ask` hands the dev context to the loop at all.
  * OFF unless CX_DEV_CONTEXT=1 (owner, 2026-09-11: "passing the context to
  * the subagents in infino is probably not the right idea"). The loop's model
  * is a retriever - it writes queries against the index and validates rows -
@@ -44,7 +44,7 @@ const MAX_BYTES_ENV = "CX_DEV_CONTEXT_MAX_BYTES";
  *
  * The context rides in the loop's user message and is therefore re-sent on
  * every turn - no provider the loop runs on prices cached input, so its cost
- * is bytes times turns. 32 KiB is about 8k tokens; at the explore budget of
+ * is bytes times turns. 32 KiB is about 8k tokens; at a budget of
  * 25 turns that is a ceiling of ~200k prompt tokens per call, a few cents at
  * the loop's blended rate and inside every window the loop's models offer.
  * Infino's own CLAUDE.md (28 KB) fits whole. Raise it with

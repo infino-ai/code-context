@@ -109,7 +109,7 @@ function withSnowflakeEnv(fn, extra = {}) {
 
 // --- lane table ---------------------------------------------------------------
 
-test("the lane table names exactly the twenty lanes and an unknown lane throws", () => {
+test("the lane table names exactly the eighteen lanes and an unknown lane throws", () => {
   assert.deepEqual(Object.keys(LANES).sort(), [
     "agent-only",
     "combo",
@@ -118,7 +118,6 @@ test("the lane table names exactly the twenty lanes and an unknown lane throws",
     "delegated-forced",
     "delegated-relay",
     "files",
-    "find-explore",
     "find-subagent",
     "hosted",
     "hosted-agent",
@@ -128,7 +127,6 @@ test("the lane table names exactly the twenty lanes and an unknown lane throws",
     "hosted-index",
     "hosted-index-explore",
     "index-explore",
-    "platform-explore",
     "snowflake",
     "stock-explore",
   ]);
@@ -180,9 +178,9 @@ test("combo and hosted share the built-in tools; hosted configures the server by
     assert.equal(server.env.CX_DB_URL, undefined);
     assert.equal(server.env.INFINO_API_KEY, undefined);
     assert.equal(server.env.CX_EMBED_PROVIDER, undefined);
-    // --db brings ask and explore; the control lane hides both - from the
+    // --db brings ask; the control lane hides it - from the
     // model's list AND from the server's instructions
-    assert.deepEqual(hosted.disallowedTools, ["mcp__code-context__ask", "mcp__code-context__explore"]);
+    assert.deepEqual(hosted.disallowedTools, ["mcp__code-context__ask"]);
     assert.equal(server.env.CX_AGENT_TOOLS, "0");
     assert.equal(laneOptions("hosted-index", "/r", "/r/.infino").mcpServers["code-context"].env.CX_AGENT_TOOLS, "0");
     assert.equal(laneOptions("hosted-full-remote", "/r", "/r/.infino").mcpServers["code-context"].env.CX_AGENT_TOOLS, undefined);
@@ -191,28 +189,28 @@ test("combo and hosted share the built-in tools; hosted configures the server by
   }, { CX_BENCH_EMBED_PROVIDER: undefined });
 });
 
-test("CX_BENCH_EMBED_PROVIDER passes through as --embed-provider; hosted-agent keeps ask and hides explore", () => {
+test("CX_BENCH_EMBED_PROVIDER passes through as --embed-provider; hosted-agent hides nothing now that explore is gone", () => {
   withHostedEnv(() => {
     const opts = laneOptions("hosted-agent", "/r", "/r/.infino");
     assert.deepEqual(opts.mcpServers["code-context"].args.slice(1), ["mcp", "--db", FAKE_URL, "--api-key-file", FAKE_KEY_FILE, "--embed-provider", "local"]);
-    assert.deepEqual(opts.disallowedTools, ["mcp__code-context__explore"]);
+    assert.equal(opts.disallowedTools, undefined);
   }, { CX_BENCH_EMBED_PROVIDER: "local" });
 });
 
-test("agent-only keeps Read and ask and hides the three retrieval tools and explore", () => {
+test("agent-only keeps Read and ask and hides the three retrieval tools", () => {
   withHostedEnv(() => {
     const opts = laneOptions("agent-only", "/r", "/r/.infino");
     assert.deepEqual(opts.tools, ["Read"]);
-    assert.deepEqual(opts.disallowedTools, ["mcp__code-context__find", "mcp__code-context__search", "mcp__code-context__sql", "mcp__code-context__explore"]);
+    assert.deepEqual(opts.disallowedTools, ["mcp__code-context__find", "mcp__code-context__search", "mcp__code-context__sql"]);
     assert.equal(opts.mcpServers["code-context"].args.includes("--db"), true);
   });
 });
 
-test("find-subagent keeps the stock tools, find and ask, and hides search, sql and explore", () => {
+test("find-subagent keeps the stock tools, find and ask, and hides search and sql", () => {
   withHostedEnv(() => {
     const opts = laneOptions("find-subagent", "/r", "/r/.infino");
     assert.deepEqual(opts.tools, ["Glob", "Grep", "Read", "LS", "Bash"]);
-    assert.deepEqual(opts.disallowedTools, ["mcp__code-context__search", "mcp__code-context__sql", "mcp__code-context__explore"]);
+    assert.deepEqual(opts.disallowedTools, ["mcp__code-context__search", "mcp__code-context__sql"]);
     assert.equal(opts.agents, undefined);
     const args = opts.mcpServers["code-context"].args;
     assert.equal(args.includes("--db"), true);
@@ -220,7 +218,7 @@ test("find-subagent keeps the stock tools, find and ask, and hides search, sql a
   });
 });
 
-test("hosted-full hides nothing: all five code-context tools stay in the model's context", () => {
+test("hosted-full hides nothing: all four code-context tools stay in the model's context", () => {
   withHostedEnv(() => {
     const opts = laneOptions("hosted-full", "/r", "/r/.infino");
     assert.equal(opts.disallowedTools, undefined);
@@ -261,14 +259,13 @@ test("delegated offers rather than blocks: the outer model keeps every tool and 
       "mcp__code-context__find",
       "mcp__code-context__search",
       "mcp__code-context__sql",
-      "mcp__code-context__explore",
       "mcp__code-context__ask",
       "Read",
     ]);
     assert.equal(explore.model, "sonnet");
     assert.match(explore.prompt, /path:line citation/);
     // the offer has to name the instruments, since nothing forces the choice
-    assert.match(explore.description, /runs find and explore/);
+    assert.match(explore.description, /runs find and ask/);
     assert.equal(opts.mcpServers["code-context"].args.includes("--db"), true);
     assert.equal(laneDef("delegated").kind, "hosted");
   });
@@ -325,16 +322,6 @@ test("delegated-relay differs from delegated-forced in the prompt and the budget
   });
 });
 
-test("find-explore is find-subagent with explore in ask's place", () => {
-  withHostedEnv(() => {
-    const opts = laneOptions("find-explore", "/r", "/r/.infino");
-    assert.deepEqual(opts.tools, ["Glob", "Grep", "Read", "LS", "Bash"]);
-    assert.deepEqual(opts.disallowedTools, ["mcp__code-context__search", "mcp__code-context__sql", "mcp__code-context__ask"]);
-    assert.equal(opts.agents, undefined);
-    assert.equal(opts.mcpServers["code-context"].args.includes("--db"), true);
-  });
-});
-
 test("CX_BENCH_AGENT_K passes through as --subagent-k after the turn cap", () => {
   withHostedEnv(() => {
     const args = laneOptions("find-subagent", "/r", "/r/.infino").mcpServers["code-context"].args;
@@ -356,12 +343,13 @@ test("the explore lanes add the Agent tool and override Explore; stock keeps the
   assert.deepEqual(index.mcpServers["code-context"].args.slice(1), ["mcp"]);
 
   withHostedEnv(() => {
-    const platform = laneOptions("platform-explore", "/r", "/r/.infino");
-    assert.deepEqual(platform.agents.Explore.tools, ["mcp__code-context__explore", "Read"]);
-    assert.equal(platform.agents.Explore.description, index.agents.Explore.description);
-    const args = platform.mcpServers["code-context"].args;
-    assert.deepEqual(args.slice(-2), ["--subagent-max-turns", "4"]);
-  }, { CX_BENCH_AGENT_MAX_TURNS: "4" });
+    // the same overridden Explore on the platform's index, and the lane's
+    // server still takes the agent flags
+    const hostedIndex = laneOptions("hosted-index-explore", "/r", "/r/.infino");
+    assert.deepEqual(hostedIndex.agents.Explore.tools, index.agents.Explore.tools);
+    assert.equal(hostedIndex.agents.Explore.description, index.agents.Explore.description);
+    assert.equal(hostedIndex.mcpServers["code-context"].env.CX_REMOTE_SEARCH, "1");
+  });
   assert.equal(laneOptions("combo", "/r", "/r/.infino").agents, undefined);
 });
 

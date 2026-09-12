@@ -5,13 +5,13 @@ One question, two arms, both bars filling while they run.
 | arm | lane | what it is |
 | --- | --- | --- |
 | Sonnet + grep | `stock-explore` | the stock file tools plus the caller's own Explore subagent — what a developer has today |
-| Sonnet + infino | `hosted-full-remote` | the same stock tools plus four code-context tools, `search` on the hosted index, `ask` on our loop — `explore` withheld since 2026-09-12, so the caller fans out over parallel asks instead of handing one question to a long loop |
+| Sonnet + infino | `hosted-full-remote` | the same stock tools plus four code-context tools, `search` on the hosted index, `ask` on our loop — the caller fans out over parallel asks rather than handing one question to a long loop |
 
 Each bar is coloured by where the arm's time went:
 
 - **model** — the caller thinking. Not measured directly: wall clock minus everything below.
 - **retrieval** — how the arm finds code. Grep, Glob, LS, Bash and Read on one side; `find`, `search` and `sql` on the other. Hunting the working tree *is* the grep arm's retrieval, which is the whole reason the two are comparable.
-- **subagent** — work handed to another loop: the caller's own Explore (`Agent`) on one side, `ask`/`explore` on ours.
+- **subagent** — work handed to another loop: the caller's own Explore (`Agent`) on one side, `ask` on ours.
 
 ## Running it
 

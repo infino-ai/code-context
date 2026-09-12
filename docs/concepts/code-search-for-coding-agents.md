@@ -5,7 +5,7 @@ crawl (glob, grep, then read whole files into the context window until it has
 enough to answer), or it can retrieve (ask a ranked index for the most
 relevant code and read only that). SuperGrep is the retrieval path, and it
 offers it two ways: `find`, `search` and `sql` for the agent to retrieve
-itself against a local index, and `explore`/`ask` to hand the retrieval to a
+itself against a local index, and `ask` to hand the retrieval to a
 subagent entirely, over the same index's platform copy, so the exploration
 never enters the caller's own context at all.
 
@@ -67,7 +67,7 @@ server. Keyword search is live seconds after indexing starts; vectors
 backfill in the background; and edits re-sync incrementally, so the index
 tracks the working tree without anyone asking. With `--db` the same chunks
 also load into a platform database, kept in sync the same way, where
-`explore` and `ask` run; that half needs a bearer key and is billed by the
+`ask` runs; that half needs a bearer key and is billed by the
 platform.
 
 See the [README](../../README.md#the-numbers) for measured cost and quality

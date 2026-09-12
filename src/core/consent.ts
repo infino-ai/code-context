@@ -38,7 +38,7 @@ export function consentNotice(baseUrl: string, database: string, root: string, n
   const lines = [
     `${bold("The cloud tools upload this repository's contents.")}`,
     ``,
-    `  ask and explore run on ${baseUrl}, over a copy of the index kept there.`,
+    `  ask runs on ${baseUrl}, over a copy of the index kept there.`,
     `  Building that copy sends the ${bold("text of the files")} under ${root} - the code`,
     `  itself, not just names or metrics - into the database ${bold(database)}.`,
     `  Every later sync sends what changed.`,
@@ -49,7 +49,7 @@ export function consentNotice(baseUrl: string, database: string, root: string, n
       `  This machine has no Infino account, so one will be ${bold("created for you")} -`,
       `  no email, no password and no card - with free credit to start on. Its`,
       `  key is stored at ${keyFilePath()}, readable only by you.`,
-      `  When the credit runs out, ask and explore stop and say so; adding`,
+      `  When the credit runs out, ask stops and says so; adding`,
       `  billing details then is a choice, not a renewal you have agreed to.`,
       ``,
     );

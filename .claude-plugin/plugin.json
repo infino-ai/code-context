@@ -1,6 +1,6 @@
 {
   "name": "code-context",
-  "description": "SuperGrep: retrieval subagents for Claude Sonnet - find/search/sql locally, ask/explore over the platform copy in the cloud.",
+  "description": "SuperGrep: retrieval subagents for Claude Sonnet - find/search/sql locally, ask over the platform copy in the cloud.",
   "version": "0.5.0",
   "author": { "name": "Infino AI" },
   "homepage": "https://github.com/infino-ai/code-context"

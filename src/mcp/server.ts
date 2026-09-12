@@ -9,14 +9,12 @@
 //   search   - find code: exact terms AND meaning in one ranked pass
 //   sql      - the power door: relevance-ranked aggregation over the search
 //              table functions (bm25_search / hybrid_search + GROUP BY)
-//   ask - with --db: a question handed to the platform's retrieval
+//   ask      - with --db: a question handed to the platform's retrieval
 //              loop, answered with the rows it retrieved
-//   explore  - with --db: a question about a mechanism, answered in writing
-//              by the platform's loop with the facts and chain behind it
 //
 // Each tool is a different question: where does this exact text occur, what
-// is most relevant to this, how much of what is where, what do the rows say,
-// how does it work. Freshness is not a tool: the first query on an unindexed
+// is most relevant to this, how much of what is where, what do the rows say.
+// Freshness is not a tool: the first query on an unindexed
 // repo builds the index (both places, with --db), and every query re-syncs
 // it against the working tree (auto-sync, below). A reindex tool used to be
 // one more; measured, no Sonnet run ever called it and Haiku called it where
@@ -71,15 +69,12 @@ import {
   autoIndexEnabled as autoIndexSetting,
   autoSyncEnabled as autoSyncSetting,
   agentToolsEnabled,
-  exploreToolEnabled,
-  exploreMaxTurns,
-  exploreMaxWallSecs,
   subagentK,
   subagentMaxTurns,
   subagentMaxWallSecs,
 } from "../core/config.js";
 import { keyFilePath, readStoredAccount } from "../core/keystore.js";
-import { runExploreAgent, runRetrievalAgent } from "../core/retrieval-agent.js";
+import { runRetrievalAgent } from "../core/retrieval-agent.js";
 import { readManifest, type Manifest } from "../core/manifest.js";
 
 /** The one refusal whose fix is a person rather than a retry: the account has
@@ -91,7 +86,7 @@ export function outOfCreditSteps(): string {
   const where = readStoredAccount()?.consoleUrl ?? "the Infino console";
   return (
     `this Infino account has no credit left. find, search and sql keep working - they run on the ` +
-    `local index and cost nothing - but ask and explore need a balance. To restore them, the ` +
+    `local index and cost nothing - but ask needs a balance. To restore it, the ` +
     `account's owner adds their billing details and a card to this same account at ${where} ` +
     `(the key on this machine keeps working and nothing needs reinstalling), then retries`
   );
@@ -152,7 +147,6 @@ import {
   searchEntry,
   rowSearchEntry,
   sqlEntry,
-  exploreEntry,
   subagentEntry,
   withPlatform,
   formatReceipt,
@@ -356,11 +350,11 @@ export function rowsInstructions(shape: TableShape, platformTools: boolean): str
     `- search - which rows are about X: exact terms and meaning in one ranked pass over ${text}.\n` +
     // On a table every question reads as counts and rankings, so the code
     // text's sql line ("counts, rankings, filters") claimed all of them and
-    // the caller never delegated (zero explore, zero ask on the first day's
-    // jobs runs, against explore every hour on the code corpora). The
-    // question shapes a table gets - who has the most X and where, what the
-    // rows about X ask for - are named on ask and explore here, and sql is
-    // the tool for one statement the caller already knows.
+    // the caller never delegated (zero ask on the first day's jobs runs,
+    // against a platform call every hour on the code corpora). The question
+    // shapes a table gets - who has the most X and where, what the rows
+    // about X ask for - are named on ask here, and sql is the tool for one
+    // statement the caller already knows.
     "- sql - one statement you already know: a count, a filter, a lookup by " +
     `${key}, a ranking in one SELECT. Ranking rows by how much they are about a topic goes through ` +
     "hybrid_search, not bm25, when the topic is a concept; a total over a search relation counts the top " +
@@ -371,10 +365,9 @@ export function rowsInstructions(shape: TableShape, platformTools: boolean): str
         "where, who has the most and where - it runs the searches and statements itself and returns the rows " +
         "it retrieved (facts as rows, with their columns and the text cut to snippets), not an answer: compose " +
         "from them. Spawn several in parallel for independent questions instead of writing the statements yourself.\n" +
-        "- explore - a question that spans the table and takes several retrievals - who is hiring for X and " +
-        "what those roles ask for, how two groups of rows compare, what the rows about X have in common; it " +
-        "queries, reads what it finds, queries again and returns a written answer grounded in the rows it " +
-        "lists, with the chain of queries. Slower than ask: use it when one retrieval will not do.\n"
+        "  A question that spans the table - who is hiring for X and what those roles ask for, how two groups " +
+        "of rows compare - is several asks in ONE reply, one per part: they run at the same time, and you " +
+        "compose from the rows they return.\n"
       : "") +
     `Hits are rows: a score, the row's ${key}, its scalar columns, and its text columns cut to a snippet of ` +
     `${SNIPPET_CHARS} characters. ${citeRows(shape)} ` +
@@ -517,24 +510,6 @@ export function rowsAskDescription(shape: TableShape, devContextNote: string): s
   );
 }
 
-export function rowsExploreDescription(shape: TableShape, devContextNote: string): string {
-  const { table, keyColumn: key } = shape;
-  return (
-    `A read-only exploration subagent over the ${table} table's index. Give it a question that takes several ` +
-    "retrievals - how two groups of rows compare, what the rows about X have in common, where a value " +
-    "concentrates; it queries, reads what it finds, queries again, and returns answer, its written answer, " +
-    "grounded in the facts it lists (as rows, never as hits: the rows it ended on, each with its " +
-    `${key}, its scalar and list columns, and its text columns as snippets of at most ${SNIPPET_CHARS} ` +
-    `characters) and the chain of queries it ran. Take the answer and cite rows by ${key} from its rows; it does not need re-reading or ` +
-    "re-checking. Slower and dearer than ask: use ask for one retrieval, explore when one retrieval will not " +
-    "do. Independent explorations run at the same time: issue them in ONE turn rather than waiting for each " +
-    "to come back, because the wait is then the slowest of them instead of the sum. For every row holding an " +
-    "exact phrase use find. " +
-    devContextNote +
-    "The result includes a 'usage' field, a one-line receipt of what the call cost."
-  );
-}
-
 /** What the default root's doors run against, decided once at startup and
  * never re-asked on a call.
  *
@@ -566,8 +541,8 @@ export type TableMode = { kind: "chunks" } | { kind: "rows"; shape: TableShape }
 export function unresolvedInstructions(table: string, cause: string, platformTools: boolean): string {
   return (
     `code-context is an index of the ${table} table on the platform, one row per record. The table could not be ` +
-    `described from the platform when this server started (${cause}), so find, search and sql` +
-    (platformTools ? ", ask and explore" : "") +
+    `described from the platform when this server started (${cause}), so ` +
+    (platformTools ? "find, search, sql and ask" : "find, search and sql") +
     " each return that error until the server is restarted with the platform reachable; nothing runs against a " +
     "local index in its place. Every tool takes an optional 'path' (an absolute repo root) to target a repository " +
     "instead, whose local code index it then reads."
@@ -595,7 +570,7 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
 
   // The platform database (--db <url>), when one is configured: the default
   // root's chunks table also lives there, written by every build and sync
-  // beside the local index and read by the `ask` and `explore` tools.
+  // beside the local index and read by the `ask` tool.
   // Resolved once here - a bad URL or a missing key fails the server at
   // startup, not on the first tool call. The key stays inside the target;
   // only `hostedLabel` ever reaches a log line.
@@ -615,9 +590,9 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
   // see the sql tool; a plain one is local either way.)
   //
   // It exists because the hosted index could not be read without the
-  // platform's answering loop. `ask` and `explore` were the only remote
-  // retrieval, and both run that loop, so the two things a caller might want
-  // separately - the index and the decider - could only be taken together.
+  // platform's answering loop. `ask` was the only remote retrieval, and it
+  // runs that loop, so the two things a caller might want separately - the
+  // index and the decider - could only be taken together.
   // With this on, a cheap local agent can hold the hosted index directly,
   // which is the configuration to beat before the loop is worth its cost.
   const remoteSearch = ["1", "true", "yes"].includes((process.env.CX_REMOTE_SEARCH ?? "").toLowerCase());
@@ -680,7 +655,7 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
   // it with CX_NO_RECEIPT. One accumulator per session (this long-lived process).
   const receiptOn = receiptEnabled();
   const session = newSession();
-  // Said in the ask/explore tool text only when it is true: with the dev
+  // Said in the ask tool text only when it is true: with the dev
   // context off (the default) the loop's model sees the question alone, and
   // telling the caller otherwise would have it leave out what the loop needs.
   const DEV_CONTEXT_NOTE = devContextEnabled()
@@ -931,21 +906,17 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
     );
   };
 
-  // The platform tools (`ask`, `explore`) are registered whenever a
-  // platform database is configured and CX_AGENT_TOOLS does not say
-  // otherwise. Their routing lines join the instructions only then: the
-  // instructions are prompt text on every turn, and a line for a tool that is
-  // not there would cost tokens and steer toward nothing - measured: a lane
-  // that hid the two through the SDK's disallowedTools alone still carried
-  // their lines here, and the caller spent a turn calling `explore` into the
-  // refusal. `platformTools` keeps what belongs to the database rather than
-  // to the loop: the sql text's card and validation note.
+  // The platform tool (`ask`) is registered whenever a platform database is
+  // configured and CX_AGENT_TOOLS does not say otherwise. Its routing line
+  // joins the instructions only then: the instructions are prompt text on
+  // every turn, and a line for a tool that is not there would cost tokens
+  // and steer toward nothing - measured: a lane that hid the platform tools
+  // through the SDK's disallowedTools alone still carried their lines here,
+  // and the caller spent a turn calling into the refusal. `platformTools`
+  // keeps what belongs to the database rather than to the loop: the sql
+  // text's card and validation note.
   const platformTools = hosted !== null;
   const agentTools = platformTools && agentToolsEnabled();
-  // `explore` on its own switch, so a caller can keep `ask` and drop the long
-  // loop. Same rule as above applies to it alone: withheld, its routing line
-  // goes too, and `ask` takes over the mechanism questions it used to claim.
-  const exploreTool = agentTools && exploreToolEnabled();
 
   // What the default root's doors run against (TableMode), decided here and
   // once. With CX_REMOTE_SEARCH, a platform database and a CX_TABLE that is
@@ -1116,12 +1087,13 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
         "and whole-repo counts come from the chunks table with no search function).\n" +
         (agentTools
           ? "- ask - a question or task in plain language; returns the rows it retrieved (facts with path:line and the code), not an answer: compose from them. Spawn several in parallel for independent questions. How often a string occurs, per file, is find's byFile.\n" +
-            (exploreTool
-              ? "- explore - a question about a mechanism that spans files (how X works end to end, what calls what); it reads and follows what it finds and returns a written answer grounded in the facts it lists, with the chain of queries. Take the answer and cite its facts. Slower than ask: use it when one retrieval will not do.\n"
-              : // Without explore, ask inherits the questions explore used to
-                // claim - otherwise a mechanism question routes to a tool that
-                // is not here and falls back to raw search.
-                "  A mechanism that spans files - how X works end to end, what calls what - is several asks in ONE reply, one per part, not one question that needs following: they run at the same time, and you do the following-up yourself from the rows they return.\n")
+            // ask owns the mechanism question too. There used to be a second
+            // tool for it that read each query's rows and followed them, and
+            // measured against several asks issued together it was slower and
+            // no more accurate - one exploration took longer than four asks
+            // running at once (2026-09-12). Fanning out beats a loop that
+            // waits on itself, so the line that used to route here says how.
+            "  A mechanism that spans files - how X works end to end, what calls what - is several asks in ONE reply, one per part, not one question that needs following: they run at the same time, and you do the following-up yourself from the rows they return.\n"
           : "") +
         "Hits carry the code: when a hit answers the question, answer from it. A hit's content shows " +
         "each line with its own number in the file, so cite a place as path:line or path:start-end " +
@@ -1217,7 +1189,7 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
           const result = await searchHosted(ctx.hosted, query, k);
           let usage: string | undefined;
           if (receiptOn) {
-            // withPlatform, as the ask and explore paths do: the platform
+            // withPlatform, as the ask path does: the platform
             // returns the tokens it metered for this call, and without this
             // a remote search is the one hosted path whose read tokens never
             // reach the ledger. They were being estimated at a measured rate
@@ -1521,13 +1493,11 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
           "several in parallel for independent questions instead of exploring the code yourself. " +
           "A single question over a large codebase splits the same way: one call per section with " +
           "`under` naming its subtree, all issued together. " +
-          // Without explore this tool owns the mechanism question, and its own
-          // text has to say so - the instructions alone did not move the model.
-          (exploreTool
-            ? ""
-            : "A mechanism that spans files - how X works end to end, what calls what - is the same " +
-              "shape: several asks in ONE reply, one per part, and you follow up yourself from the " +
-              "rows they return. ") +
+          // This tool owns the mechanism question, and its own text has to say
+          // so - the instructions alone did not move the model.
+          "A mechanism that spans files - how X works end to end, what calls what - is the same " +
+          "shape: several asks in ONE reply, one per part, and you follow up yourself from the " +
+          "rows they return. " +
           "For " +
           "every occurrence of an exact string, and for how many times it occurs per file, use find " +
           "(its byFile is the grep -c answer); for a file you already know, Read it. Answer " +
@@ -1627,107 +1597,6 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
       },
     );
 
-    if (exploreTool) {
-    server.registerTool(
-      "explore",
-      {
-        title: "Exploration subagent over the repository index",
-        annotations: READ_ONLY,
-        description: rows
-          ? rowsExploreDescription(rows, DEV_CONTEXT_NOTE)
-          : mode.kind === "unresolved"
-          ? unresolvedDescription("A read-only exploration subagent", TABLE)
-          : "A read-only exploration subagent over the repository index. Give it a question about a " +
-          "mechanism that spans files - how X works end to end, what calls what, where a value flows; " +
-          "it searches, reads what it finds, follows definitions to their uses, and returns answer, " +
-          "its written answer, grounded in the facts it lists (hits: the rows it ended on, with exact " +
-          "path, start_line, end_line and the code) and the chain of queries it ran. Take the answer " +
-          "and cite path:line from its hits; it does not need re-reading or re-checking. On a " +
-          "mechanism that spans layers, the answer's own symbols are the next question: ask again " +
-          "naming one of them to reach the file that calls it, because the layer that decides usually " +
-          "describes itself in different words than the question used. A mechanism too large for one " +
-          "exploration splits by section: one call per subtree with `under`, all issued together. " +
-          "Slower and " +
-          "dearer than ask: use ask for one retrieval, explore when one retrieval will not " +
-          "do. Independent explorations run at the same time: issue them in ONE turn rather than " +
-          "waiting for each to come back, because the wait is then the slowest of them instead of " +
-          "the sum. Only a follow-up that names a symbol from an earlier answer has to wait for it. " +
-          "For every occurrence of an exact string use find; for a file you already know, Read " +
-          "it. " +
-          DEV_CONTEXT_NOTE +
-          "The result includes a 'usage' field, a one-line receipt of what the call cost.",
-        inputSchema: {
-          question: z.string().min(1).describe("The question, in plain language, about the indexed code."),
-          under: z
-            .string()
-            .optional()
-            .describe(
-              "Repo-relative path prefix to scope to - one repository of a workspace, one subtree of a " +
-                "monorepo, one directory. Carried to the exploration loop as a constraint on where to " +
-                "look, and echoed back on the result so a scoped answer is not read as the whole " +
-                "repository's.",
-            ),
-          path: z
-            .string()
-            .optional()
-            .describe(
-              "Absolute path to the repository root to ask about. Defaults to the server's configured root; " +
-                "set it to target a specific repo when a session spans more than one.",
-            ),
-        },
-      },
-      async ({ question, under, path }) => {
-        let ctx: RepoCtx;
-        try {
-          ctx = repoFor(path);
-        } catch (err) {
-          return fail((err as Error).message);
-        }
-        const missing = noPlatform("explore", ctx);
-        if (missing) return missing;
-        const over = rowsOver("explore", ctx);
-        if (over && "failed" in over) return over.failed;
-        if (!over) {
-          const ensured = await localIndex(ctx);
-          if ("failed" in ensured) return ensured.failed;
-          if (!ensured.autoIndexed) maybeAutoSync(ctx); // a fresh build is already current
-          const notReady = await platformNotReady("explore", ctx);
-          if (notReady) return notReady;
-        }
-        try {
-          const t0 = performance.now();
-          const context = devContextEnabled() ? devContext(ctx.root) : undefined;
-          // `under` is left out over a table of another shape for the reason
-          // it is in ask: a row sits in no directory.
-          const { result, spend } = await runExploreAgent(
-            ctx.hosted!,
-            {
-              question,
-              ...(context !== undefined ? { context } : {}),
-              ...(under !== undefined && !over ? { under } : {}),
-              ...(over ? { projection: rowsProjection(over.shape), shape: over.shape } : {}),
-              // The table this client reads, for the reason ask gives it.
-              table: TABLE,
-            },
-            { maxTurns: exploreMaxTurns(), maxWallSecs: exploreMaxWallSecs(), k: subagentK() },
-          );
-          let usage: string | undefined;
-          if (receiptOn) {
-            const entry = withPlatform(exploreEntry(result, spend), ctx);
-            recordUsage(ctx.dir, entry);
-            usage = formatReceipt(entry, session);
-          }
-          return ok({
-            ...result,
-            took_ms: Math.round((performance.now() - t0) * 1000) / 1000,
-            ...(usage ? { usage } : {}),
-          });
-        } catch (err) {
-          return fail(`explore failed: ${(err as Error).message}${refusalHint(err)}`);
-        }
-      },
-    );
-    }
   }
 
   const transport = serveOptions.transport ?? new StdioServerTransport();

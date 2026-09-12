@@ -48,7 +48,7 @@ error, not a silent fall-through to the files lane. Every lane shares the same
 hermetic base and differs only in the toolset. `find`, `search` and `sql`
 read the local index in every lane with the code-context server; the platform
 lanes start the server with `--db`, which keeps the same index on a platform
-database too and registers the `ask` and `explore` tools that run there. The
+database too and registers the `ask` tool that runs there. The
 `snowflake` lane attaches a different server in its place (below).
 
 | lane           | kind   | built-in tools            | MCP server | server command line, after `cx mcp` (every MCP lane also gets `CX_ROOT`, `CX_INDEX_DIR`, `CX_AUTO_SYNC=0` in its env) | needs in your env                        |
@@ -56,15 +56,13 @@ database too and registers the `ask` and `explore` tools that run there. The
 | `files`        | local  | Glob, Grep, Read, LS, Bash | no         | -                                                                                                                      | -                                        |
 | `cx`           | local  | Read                      | yes        | -                                                                                                                      | -                                        |
 | `combo`        | local  | Glob, Grep, Read, LS, Bash | yes        | -                                                                                                                      | -                                        |
-| `hosted`       | hosted | Glob, Grep, Read, LS, Bash | yes        | `--db $CX_BENCH_DB_URL --api-key-file $CX_BENCH_KEY_FILE --embed-provider platform` (`CX_BENCH_EMBED_PROVIDER` overrides the provider), with `ask` and `explore` removed from the model's context (the SDK's `disallowedTools`): the three local tools alone, a control | `CX_BENCH_DB_URL`, `CX_BENCH_KEY_FILE`  |
-| `hosted-agent` | hosted | Glob, Grep, Read, LS, Bash | yes        | as `hosted` with `ask` kept (`explore` hidden)                                                                    | `CX_BENCH_DB_URL`, `CX_BENCH_KEY_FILE`  |
+| `hosted`       | hosted | Glob, Grep, Read, LS, Bash | yes        | `--db $CX_BENCH_DB_URL --api-key-file $CX_BENCH_KEY_FILE --embed-provider platform` (`CX_BENCH_EMBED_PROVIDER` overrides the provider), with `ask` removed from the model's context (the SDK's `disallowedTools`): the three local tools alone, a control | `CX_BENCH_DB_URL`, `CX_BENCH_KEY_FILE`  |
+| `hosted-agent` | hosted | Glob, Grep, Read, LS, Bash | yes        | as `hosted` with `ask` kept. It also hid `explore` until that tool was removed on 2026-09-12, which leaves it identical to `hosted-full` | `CX_BENCH_DB_URL`, `CX_BENCH_KEY_FILE`  |
 | `agent-only`   | hosted | Read                      | yes        | as `hosted-agent`, with `find`, `search` and `sql` removed too                                                         | `CX_BENCH_DB_URL`, `CX_BENCH_KEY_FILE`  |
-| `hosted-full`  | hosted | Glob, Grep, Read, LS, Bash | yes        | as `hosted`, with nothing hidden: all five tools stay in the model's context                                           | `CX_BENCH_DB_URL`, `CX_BENCH_KEY_FILE`  |
+| `hosted-full`  | hosted | Glob, Grep, Read, LS, Bash | yes        | as `hosted`, with nothing hidden: all four tools stay in the model's context                                           | `CX_BENCH_DB_URL`, `CX_BENCH_KEY_FILE`  |
 | `stock-explore`    | local  | Glob, Grep, Read, LS, Bash, Agent | no  | - (the built-in Explore subagent)                                                                             | -                                        |
 | `index-explore`    | local  | Glob, Grep, Read, LS, Bash, Agent | yes | `Explore` overridden: `find`, `search`, `sql`, Read, Haiku inside                                             | -                                        |
-| `platform-explore` | hosted | Glob, Grep, Read, LS, Bash, Agent | yes | `--db ...`, `Explore` overridden: `explore` (the platform's explore mode), Read, Haiku relaying                 | `CX_BENCH_DB_URL`, `CX_BENCH_KEY_FILE`  |
-| `find-subagent`    | hosted | Glob, Grep, Read, LS, Bash        | yes | `--db ...`, with `search`, `sql` and `explore` removed from the model's context: `find` and `ask` remain   | `CX_BENCH_DB_URL`, `CX_BENCH_KEY_FILE`  |
-| `find-explore`     | hosted | Glob, Grep, Read, LS, Bash        | yes | `find-subagent` with `explore` in `ask`'s place: the main agent asks the platform's explore mode directly   | `CX_BENCH_DB_URL`, `CX_BENCH_KEY_FILE`  |
+| `find-subagent`    | hosted | Glob, Grep, Read, LS, Bash        | yes | `--db ...`, with `search` and `sql` removed from the model's context: `find` and `ask` remain   | `CX_BENCH_DB_URL`, `CX_BENCH_KEY_FILE`  |
 | `snowflake`        | snowflake | Glob, Grep, Read, LS, Bash     | yes (`snowflake`, not code-context) | `node snowflake-mcp.mjs`, configured by env: `SF_ACCOUNT`, `SF_USER`, `SF_TOKEN_FILE` from `CX_BENCH_SF_ACCOUNT`, `CX_BENCH_SF_USER`, `CX_BENCH_SF_TOKEN_FILE`, and `SF_ROLE`, `SF_WAREHOUSE`, `SF_DATABASE`, `SF_SCHEMA`, `SF_TABLE` from the matching `CX_BENCH_SF_*` when set | `CX_BENCH_SF_ACCOUNT`, `CX_BENCH_SF_USER`, `CX_BENCH_SF_TOKEN_FILE` |
 
 The agent lanes pass `CX_BENCH_AGENT_MAX_TURNS`, when set, through as the
@@ -80,8 +78,8 @@ inside them), so delegation is read off the rows.
 `combo` is what installing the MCP server actually produces in a real client;
 `hosted` is the same agent and the same three tools with the server started
 against a platform database (`CX_BENCH_DB_URL` is `https://host/<database>`,
-the shape the engine's own URI parser accepts) and the two tools that brings
-hidden - a control for the lanes that use them; `hosted-agent` keeps the
+the shape the engine's own URI parser accepts) and the tool that brings
+hidden - a control for the lanes that use it; `hosted-agent` keeps the
 `ask` tool, a question or task handed to the platform's own agent loop,
 which returns the rows it retrieved, and measures whether the model picks it;
 `agent-only` leaves it as the only retrieval tool and measures its answers
@@ -245,7 +243,7 @@ is part of the instrument.
 
 1. **The engine version is a tool attribute.** `find`, `search` and `sql` run
    the `@infino-ai/infino` Node binding this checkout links, in every lane;
-   `ask` and `explore` run whatever the platform runs. A gap in hit
+   `ask` runs whatever the platform runs. A gap in hit
    ranking between the two kinds of tool can be the engine version, not the
    tool; say which binding version the run used.
 2. **The platform's metering headers are cost, not work.** Report the

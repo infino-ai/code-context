@@ -7,13 +7,13 @@ code.
 
 ## Project overview
 
-**SuperGrep is retrieval subagents for Claude Sonnet: five tools over an
+**SuperGrep is retrieval subagents for Claude Sonnet: four tools over an
 index kept in two places.** `find`, `search` and `sql` run locally - a CLI
 (`cx`) and MCP server over a ranked index in plain files inside the repo,
 fusing keyword (BM25) and semantic (vector) search into one ranked pass and
 exposing read-only SQL over it, so an agent answers questions about a
-codebase without crawling files into the context window. `explore` and `ask`
-run in the cloud, over the same index's platform copy, when a platform
+codebase without crawling files into the context window. `ask`
+runs in the cloud, over the same index's platform copy, when a platform
 database is configured (`--db`): a bearer key authenticates the connection,
 and the platform's own model embeds that copy by default. Without `--db` -
 which is what the published npm package and Claude Code plugin ship today -
@@ -33,8 +33,8 @@ live in [README.md](README.md); the honest limits in
 - `src/mcp/server.ts`: the MCP server. `find`, `search` and `sql` are always
   registered and each takes an optional `path` (repo root) so one server
   serves multiple local repos in a session, defaulting to the startup root.
-  `ask` and `explore` are registered only when the server has `--db`, read
-  the one platform database it was started with, and refuse a `path` naming
+  `ask` is registered only when the server has `--db`, reads
+  the one platform database it was started with, and refuses a `path` naming
   a different repo. Freshness is not a tool: the first query builds the
   index and every query re-syncs it.
 - `src/mcp/repos.ts`: the per-repo registry - resolves and validates a
@@ -48,7 +48,7 @@ live in [README.md](README.md); the honest limits in
   `filestate` (incremental sync state), `walker`, `manifest`, `config`,
   `context`, `output`, `usage` (the local ledger and receipts). `hosted.ts`
   (the platform client - auth, sync, metering) and `retrieval-agent.ts`
-  (the `ask`/`explore` loop) are the platform half; both exist only in the
+  (the `ask` loop) are the platform half; both exist only in the
   `--db` path.
 - `src/commands/`: CLI command implementations (`index-cmd`, `query-cmds`).
 - `test/`: vitest suites. `bench/`: the benchmark harness. `docs/`: docs.
@@ -67,14 +67,16 @@ before opening a PR.
 ## Conventions
 
 - TypeScript, ES modules. Every source file carries an SPDX header.
-- The MCP surface is deliberately five tools, one per question: where does
+- The MCP surface is deliberately four tools, one per question: where does
   this exact text occur (`find`, unranked and complete - the grep
   replacement), what is most relevant (`search`, ranked top-k), how much of
   what is where (`sql`), and - when the server has `--db` - a question worth
-  delegating rather than exploring yourself (`ask` for rows, `explore` for a
-  written, cited answer). Adding near-duplicate retrieval tools worsens an
+  delegating rather than exploring yourself (`ask`, which returns the rows
+  the platform's loop retrieved). Adding near-duplicate retrieval tools worsens an
   agent's tool selection; resist it. A new tool must answer a question none
-  of these five does. A `reindex` tool was a fourth local tool until it was
+  of these four does. An `explore` tool was a second platform tool until it
+  was measured: several asks issued together answered the same questions
+  faster and for less than its long loop. A `reindex` tool was a fourth local tool until it was
   measured: no Sonnet run called it, Haiku called it where it hurt, and
   auto-sync already does the job.
 - Search results carry chunk content plus `path:line` ranges so answers cite

@@ -4,8 +4,8 @@ description: >
   How to answer codebase questions with the SuperGrep MCP tools: find, search
   and sql locally (exact-text lookup that replaces grep, ranked hybrid
   keyword+semantic search, relevance-ranked SQL aggregation over the index),
-  and ask/explore over the platform copy when the server has --db (retrieval
-  subagents that answer or return facts instead of you crawling the repo
+  and ask over the platform copy when the server has --db (a retrieval
+  subagent that returns the facts it found instead of you crawling the repo
   yourself). Use when you would grep for an identifier or literal, when a
   question spans many files ("how does X work", "where is Y handled"), when
   ranking or counting code by topic across a repo, or when the code-context
@@ -15,20 +15,20 @@ description: >
 # code-context: search over the repository
 
 code-context maintains a local index of the repository (in `.infino/` at the
-repo root) and exposes three MCP tools; two more run over the same index's
+repo root) and exposes three MCP tools; one more runs over the same index's
 platform copy when the server has `--db`. Every lookup an agent would
 otherwise do with grep or by crawling files runs against the index instead,
 or is delegated to a retrieval subagent entirely: `find` for the exact-text
-case, one ranked pass for everything that spans the repo, `explore`/`ask`
-when you would rather hand the exploration off than do it yourself.
+case, one ranked pass for everything that spans the repo, `ask`
+when you would rather hand the retrieval off than do it yourself.
 
 ## If the tools are deferred
 
 When the tool names appear in a deferred-tools listing but their schemas are
 not loaded, load them in ONE ToolSearch call before the first use, e.g. query
-`+code-context find search sql ask explore` (or `select:` with the exact
+`+code-context find search sql ask` (or `select:` with the exact
 listed names, comma-separated) - name only the tools that actually appear in
-the deferred listing, since `ask` and `explore` are registered only when the
+the deferred listing, since `ask` is registered only when the
 server has `--db`. Never load them one call at a time.
 
 ## Choosing the right tool
@@ -37,10 +37,10 @@ server has `--db`. Never load them one call at a time.
 | --- | --- |
 | Every occurrence of an exact identifier, string, or key (where you would grep) | `find` |
 | A file you already know the path of | Read |
-| "How does X work", "where is Y handled", concept without exact name - and `ask`/`explore` are registered | `explore` (or `ask`/`search` - see below) |
+| "How does X work", "where is Y handled", concept without exact name - and `ask` is registered | `ask` (or `search` - see below) |
 | "How does X work", "where is Y handled", concept without exact name - local only | `search` |
 | Counts, rankings, GROUP BY across the repo ("which files have the most code about X") | `sql` |
-| A question you would rather delegate than explore yourself | `ask` (facts back) or `explore` (a written, cited answer) |
+| Several independent questions at once | one `ask` each, issued in the same turn |
 | Working tree changed a lot mid-session | nothing - the next query re-syncs (see lifecycle) |
 
 ## find
@@ -151,30 +151,24 @@ GROUP BY t.path ORDER BY chunks_with_term DESC LIMIT 15
   infino-platform database; the build and every sync write both, so nothing
   about the lifecycle changes for you.
 
-## ask and explore (when present)
+## ask (when present)
 
-When the server was started with `--db` two more tools are registered, both
-running on the platform copy of the index. `ask` hands a question or
+When the server was started with `--db` one more tool is registered, running
+on the platform copy of the index. `ask` hands a question or
 task in plain language to the platform's
 retrieval agent and returns the facts it retrieved, never a summary: `hits`
 (`path`, `startLine`-`endLine`, `content` - the shape of a `search` hit),
 `rows` (aggregates: a count or rank per path), and `sql` (the statement whose
 rows answer the question, when there is one). Use it for how does X work,
 where is Y handled, which files or symbols; spawn several in parallel for
-independent questions instead of exploring the code yourself. For every
+independent questions instead of exploring the code yourself. A mechanism
+that spans files is several asks issued together, one per part of it, not
+one long loop: they run at once, so the wait is the slowest of them rather
+than the sum. For every
 occurrence of an exact string, and for how many times it occurs per file,
 use `find` (`byFile` is the `grep -c` answer); for a file you already know,
 Read it. Answer from the rows and cite `path:line`. Like the other tools,
 its result carries a one-line `usage` receipt.
-
-Beside it, `explore` takes a question about a mechanism that spans files -
-how X works end to end, what calls what - and returns `answer` (its
-written answer, grounded in the facts it lists), `chain` (the queries it
-ran, in order), and those facts in the same `hits` / `rows` / `sql` shape.
-It reads and follows what it finds, so it is slower and dearer than
-`ask`: use `ask` for one retrieval, `explore` when one retrieval
-will not do. Take the answer and cite `path:line` from its hits; it does
-not need re-reading or re-checking.
 
 ## Reading results honestly
 
@@ -183,7 +177,7 @@ not need re-reading or re-checking.
   possibly-unindexed, not as proof the code doesn't exist.
 - Every tool's result carries a one-line `usage` receipt - find/search/sql's
   computed locally (tokens returned, matches or chunks / files, session
-  running total), ask/explore's naming what the platform metered for the
+  running total), ask's naming what the platform metered for the
   call. It is there for the user who asks what a lookup cost; `cx usage`
   keeps the local ledger.
 
@@ -191,15 +185,15 @@ not need re-reading or re-checking.
 
 `find`, `search` and `sql` take an optional `path` (an **absolute** repo
 root) to target a different repository than the one the server started in,
-each with its own local index. `ask` and `explore` read the one platform
+each with its own local index. `ask` reads the one platform
 database the server was started with, which holds one repository's index;
-they refuse a `path` naming a different one.
+it refuses a `path` naming a different one.
 
 ## Cost awareness
 
 - `find`/`search`/`sql` calls are cheap: milliseconds against the local
-  index. `ask` and `explore` are a platform round trip plus the
-  platform's own retrieval loop, and are metered there.
+  index. `ask` is a platform round trip plus the
+  platform's own retrieval loop, and is metered there.
 - The first index of a repo and the vector backfill are the expensive part
   (CPU for the local embedding model, proportional to repo size). Avoid
   forcing `cx index --full` rebuilds unless the index is actually wrong, and

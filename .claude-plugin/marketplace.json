@@ -8,7 +8,7 @@
     {
       "name": "code-context",
       "source": "./",
-      "description": "SuperGrep: retrieval subagents for Claude Sonnet - find/search/sql locally, ask/explore over the platform copy in the cloud."
+      "description": "SuperGrep: retrieval subagents for Claude Sonnet - find/search/sql locally, ask over the platform copy in the cloud."
     }
   ]
 }
