@@ -67,7 +67,20 @@
   }
   .theme:hover { color: var(--ink); border-color: var(--soft); }
   .theme:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-  form { display: flex; gap: 8px; margin: 18px 0 6px; flex-wrap: wrap; }
+  /* The ask zone is two columns, not four stacked strips. Full-width rows
+     put the question box at 2000px — an input nobody can read the ends of —
+     and left the corpus facts with their disclosure a desert away at the
+     far right, which is what made the top read as rows of nothing. Here the
+     box takes the space it deserves and the corpus stands beside it as a
+     card, so the width carries content instead of gap, and the panel a
+     reader had to click for is simply there. */
+  .ask {
+    display: grid; gap: 14px 20px; margin: 18px 0 20px;
+    grid-template-columns: minmax(0, 1fr) minmax(260px, 26rem);
+    align-items: start;
+  }
+  @media (max-width: 900px) { .ask { grid-template-columns: minmax(0, 1fr); } }
+  form { display: flex; gap: 8px; margin: 0; flex-wrap: wrap; }
   input[type=text] {
     flex: 1 1 420px; min-width: 0; background: var(--panel); color: var(--ink);
     border: 1px solid var(--rule); border-radius: var(--r-sm); padding: 10px 13px; font: inherit;
@@ -80,35 +93,37 @@
   button:hover:not(:disabled) { filter: brightness(1.08); }
   button:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
   button:disabled { background: var(--rule); color: var(--faint); cursor: default; filter: none; }
-  /* What the arms are looking at, as a caption under the box rather than a
-     panel of its own: the size and the commit on one line, the prose folded
-     away behind it. It used to be a bordered strip carrying the corpus name
-     as well - a second rectangle, and the name a second time, since the
-     select beside it already says which corpus this is. The facts are what a
-     reader checks at a glance; the panel appears only when opened. */
-  .about { margin: -2px 0 16px; font-size: 12px; color: var(--soft); }
-  .about > summary {
-    cursor: pointer; list-style: none; display: flex; gap: 12px; align-items: baseline;
-    flex-wrap: wrap; padding: 0 2px;
+  /* What the arms are looking at, beside the box rather than under it. The
+     facts stack down the card's own column — vertical space it has and the
+     row never did — and the paragraph that had to be clicked for is simply
+     there, because a reader who does not know what OpenSearch is cannot
+     read the comparison. */
+  .corpus-card {
+    background: var(--panel); border: 1px solid var(--rule); border-radius: var(--r);
+    padding: 12px 15px 13px; font-size: 12px; color: var(--soft);
   }
-  .about > summary::-webkit-details-marker { display: none; }
-  .about > summary::after {
-    content: "about this corpus ▸"; color: var(--faint); font-size: 11.5px; margin-left: auto;
-  }
-  .about[open] > summary::after { content: "about this corpus ▾"; }
-  .about > summary:hover::after { color: var(--ink); }
-  .about > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 4px; }
-  .about .body {
-    margin-top: 10px; padding: 12px 14px; background: var(--panel);
-    border: 1px solid var(--rule); border-radius: var(--r);
-  }
-  .about .body p { margin: 0 0 8px; }
-  .about .body p:last-child { margin-bottom: 0; }
   /* Number first, then what it counts: "16,232 files" scans in one go where
      "files 16,232" makes the eye wait for the number it came for. */
-  .facts { display: flex; gap: 10px; flex-wrap: wrap; font-variant-numeric: tabular-nums; color: var(--faint); }
-  .facts span + span::before { content: "·"; color: var(--rule); margin-right: 10px; }
-  .facts b { color: var(--soft); font-weight: 500; }
+  .facts {
+    list-style: none; margin: 0 0 10px; padding: 0;
+    display: grid; gap: 2px; font-variant-numeric: tabular-nums; color: var(--faint);
+  }
+  .facts b { color: var(--ink); font-weight: 500; }
+  .corpus-card .blurb {
+    margin: 0; padding-top: 10px; border-top: 1px solid var(--rule);
+    /* Four lines of it; the rest is behind the disclosure below. */
+    display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden;
+  }
+  .corpus-card .more { margin-top: 9px; }
+  .corpus-card .more > summary {
+    cursor: pointer; list-style: none; color: var(--faint); font-size: 11.5px;
+  }
+  .corpus-card .more > summary::-webkit-details-marker { display: none; }
+  .corpus-card .more > summary::after { content: " ▸"; }
+  .corpus-card .more[open] > summary::after { content: " ▾"; }
+  .corpus-card .more > summary:hover { color: var(--ink); }
+  .corpus-card .more > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 4px; }
+  .corpus-card .more p { margin: 9px 0 0; }
   .subsystems { color: var(--faint); }
   .subsystems code { color: var(--soft); }
   select {
@@ -316,46 +331,47 @@
      once…") said what the title and the three labelled panels already say.
      The sentence it carried about how a panel settles is in the about
      panel's body, where the arms are described. -->
-<form id="ask">
-  <select id="corpus" title="which corpus the three arms look at"></select>
-  <input type="text" id="q" placeholder="ask anything about this corpus" autocomplete="off">
-  <!-- The starters, as a control rather than a row of chips. Five questions
-       of eighty characters cannot be chips: they wrapped to two rows and
-       were cut mid-word, so all five began "Which files have the most…"
-       and none of them could be told apart. Here they are readable, they
-       cost no band, and they sit in the one row a reader is already using. -->
-  <select id="examples" title="a question to start from; it fills the box for you to edit">
-    <option value="">examples…</option>
-  </select>
-  <button type="submit" id="go">Run</button>
-</form>
+<div class="ask">
+  <div>
+    <form id="ask">
+      <select id="corpus" title="which corpus the three arms look at"></select>
+      <input type="text" id="q" placeholder="ask anything about this corpus" autocomplete="off">
+      <!-- The starters, as a control rather than a row of chips. Five
+           questions of eighty characters cannot be chips: they wrapped to
+           two rows and were cut mid-word, so all five began "Which files
+           have the most…" and none could be told apart. -->
+      <select id="examples" title="a question to start from; it fills the box for you to edit">
+        <option value="">examples…</option>
+      </select>
+      <button type="submit" id="go">Run</button>
+    </form>
+    <p class="corpus-note" id="corpus-note" hidden></p>
+  </div>
 
-<details class="about" id="corpus-panel">
-  <summary>
-    <span class="facts" id="facts"></span>
-  </summary>
-  <div class="body">
-    <p id="corpus-blurb">
+  <aside class="corpus-card" id="corpus-panel">
+    <ul class="facts" id="facts"></ul>
+    <p class="blurb" id="corpus-blurb">
       The engine repository: a retrieval engine that stores data on object storage and runs
       SQL, full-text search and vector search over it. One file (a "superfile") is a valid Parquet file with
       BM25 and vector indexes spliced in; the supertable layer composes many superfiles into a queryable
       table with snapshot-isolated reads and an atomic-commit manifest.
     </p>
-    <p class="subsystems" id="subsystems"></p>
-    <!-- What each arm reads. This text is true of every code corpus; a corpus
-         that is records rather than a checkout sends its own (`how`), and
-         describeCorpus swaps it in. -->
-    <p id="how">
-      Every arm sees the same checkout. The File Tools arm reads it off disk with Grep, Glob and Read — what a
-      developer has today; the others query an Infino index of it — one with the caller driving retrieval
-      itself, one that can also hand a search to a loop of ours. Questions that make an agent sweep many files
-      are where they diverge; a question answered from a single named file usually comes out level.
-    </p>
-    <p>All three arms answer the same question at once, and each panel settles the moment its own arm finishes.</p>
-  </div>
-</details>
-
-<p class="corpus-note" id="corpus-note" hidden></p>
+    <details class="more">
+      <summary>how the three arms read it</summary>
+      <p class="subsystems" id="subsystems"></p>
+      <!-- What each arm reads. This text is true of every code corpus; a
+           corpus that is records rather than a checkout sends its own
+           (`how`), and describeCorpus swaps it in. -->
+      <p id="how">
+        Every arm sees the same checkout. The File Tools arm reads it off disk with Grep, Glob and Read — what a
+        developer has today; the others query an Infino index of it — one with the caller driving retrieval
+        itself, one that can also hand a search to a loop of ours. Questions that make an agent sweep many files
+        are where they diverge; a question answered from a single named file usually comes out level.
+      </p>
+      <p>All three arms answer the same question at once, and each panel settles the moment its own arm finishes.</p>
+    </details>
+  </aside>
+</div>
 
 <div class="headline no-third" id="headline" hidden></div>
 <!-- Hidden until a run: before one it said "Ready.", which is a bordered
@@ -485,15 +501,15 @@ function describeCorpus(c) {
   const facts = [];
   const counted = (n, label) => `<b>${n.toLocaleString()}</b> ${label}`;
   if (c.files) facts.push(counted(c.files, "files"));
-  if (c.chunks) facts.push(counted(c.chunks, "chunks"));
+  if (c.chunks) facts.push(counted(c.chunks, "indexed chunks"));
   // A data corpus counts records, not files - and both numbers when the rows
   // are snapshots of fewer distinct records.
   if (c.postings) facts.push(counted(c.postings, "postings"));
-  if (c.rows) facts.push(counted(c.rows, "rows"));
+  if (c.rows) facts.push(counted(c.rows, "daily rows"));
   if (c.vectors) facts.push(`vectors <b>${escapeHtml(c.vectors)}</b>`);
   if (c.hosted) facts.push("index <b>hosted</b>");
-  if (c.head) facts.push(`<b>${escapeHtml(c.head.split(" ").slice(0, 2).join(" "))}</b>`);
-  document.getElementById("facts").innerHTML = facts.map((f) => `<span>${f}</span>`).join("");
+  if (c.head) facts.push(`at <b>${escapeHtml(c.head.split(" ").slice(0, 2).join(" "))}</b>`);
+  document.getElementById("facts").innerHTML = facts.map((f) => `<li>${f}</li>`).join("");
   // The line under the blurb names what a question can be about: a code
   // corpus its subsystems, a data corpus its columns.
   const parts = c.subsystems && c.subsystems.length
