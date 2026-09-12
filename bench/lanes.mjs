@@ -289,8 +289,10 @@ export function snowflakeServer(env = process.env) {
 /** The server flags that name the platform database: the same for the MCP
  * server of a platform lane and for the `cx index` of load-hosted.mjs, so the
  * table is loaded the way the lane's tools expect it. With --db the server
- * registers the ask and explore tools; find, search and sql read the
- * local index either way. The key travels as the path of its file; nothing
+ * registers the ask and explore tools, and a `sql` statement that embeds a
+ * query (a `{{q}}`, a vector function's) runs on the platform; find reads
+ * the local index either way, and so do search and plain sql unless the lane
+ * sets CX_REMOTE_SEARCH. The key travels as the path of its file; nothing
  * here reads it. */
 export function hostedFlags(env = process.env) {
   return [
@@ -536,13 +538,15 @@ export const LANES = {
     kind: "hosted",
     tools: [...STOCK_TOOLS, AGENT_TOOL],
     mcp: true,
-    // CX_REMOTE_SEARCH makes `search` read the platform's index instead of the
-    // local one. Without it this lane would be `index-explore` with a `--db`
-    // flag that changes nothing a searcher can see: `find` and `sql` are local
-    // by construction, and `search` was too, so the subagent would sit on the
-    // local MiniLM index while the lane's name claimed otherwise. Measured
-    // that way once by mistake — the platform served zero queries for the
-    // whole run, which is the only reason it was caught.
+    // CX_REMOTE_SEARCH makes `search` and `sql` read the platform's index
+    // instead of the local one. Without it this lane would be `index-explore`
+    // with a `--db` flag that changes little a searcher can see: `find` is
+    // local by construction, and `search` and `sql` were too (since
+    // 2026-09-12 a sql statement that embeds a query goes to the platform
+    // regardless), so the subagent would sit on the local MiniLM index while
+    // the lane's name claimed otherwise. Measured that way once by mistake —
+    // the platform served zero queries for the whole run, which is the only
+    // reason it was caught.
     env: (repoDir, indexDir) => ({ ...mcpEnvBase(repoDir, indexDir), CX_REMOTE_SEARCH: "1", ...NO_AGENT_TOOLS }),
     args: hostedFlags,
     disallowedTools: ["ask", "explore"].map((tool) => `${CX_TOOL_PREFIX}${tool}`),

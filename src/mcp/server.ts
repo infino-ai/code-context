@@ -31,12 +31,16 @@
 // Results carry took_ms - server-side time for the call (query embedding
 // included where one happens; no transport).
 //
-// With CX_REMOTE_SEARCH the hosted table is the index `search` reads, and
-// when CX_TABLE names a table that is not the chunks table (a hydrated data
-// set) all three doors run over its ROWS, driven by the table's own schema
-// (TableShape): find and sql then never touch the local index either, since
-// a local build would drop and recreate the platform table it was pointed
-// at. Which of the two it is - chunks or rows - is decided ONCE, at startup,
+// With CX_REMOTE_SEARCH the hosted table is the index `search` and `sql`
+// read, and when CX_TABLE names a table that is not the chunks table (a
+// hydrated data set) all three doors run over its ROWS, driven by the table's
+// own schema (TableShape): find then never touches the local index either,
+// since a local build would drop and recreate the platform table it was
+// pointed at. Without CX_REMOTE_SEARCH, a `sql` statement that embeds a query
+// (a `{{q}}` placeholder - a vector function's) still runs on the platform
+// whenever a database is configured: the platform embeds it with the table's
+// own model, and the local side is lexical - `find`, keyword `search`, plain
+// SQL. Which of the two it is - chunks or rows - is decided ONCE, at startup,
 // from the table's schema (TableMode below) when CX_TABLE names another
 // table, and every call reads that decision: no call asks the platform what
 // it is about to run against, so a local tool never waits on the platform
@@ -133,6 +137,7 @@ import {
   searchRows,
   runSql,
   runSqlRows,
+  embedsAQuery,
   jsonify,
   numberRowLines,
   partialIndex,
@@ -534,10 +539,12 @@ export function rowsExploreDescription(shape: TableShape, devContextNote: string
  * never re-asked on a call.
  *
  * - `chunks`: the chunks table this client builds. Every path and constant
- *   as before: find and sql on the local index, search on the hosted index
- *   under CX_REMOTE_SEARCH. The mode of the default table always, without a
- *   probe - it is the table this client builds, so there is nothing to ask
- *   - and the mode without CX_REMOTE_SEARCH.
+ *   as before: find on the local index; search and sql on the hosted index
+ *   under CX_REMOTE_SEARCH, and a sql statement that embeds a query on the
+ *   platform whenever there is one (see the sql tool). The mode of the
+ *   default table always, without a probe - it is the table this client
+ *   builds, so there is nothing to ask - and the mode without
+ *   CX_REMOTE_SEARCH.
  * - `rows`: a hosted table of another shape, whose rows the doors run over
  *   with its own columns; nothing touches the local index.
  * - `unresolved`: CX_TABLE names a table that is not the default and the
@@ -599,11 +606,13 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
   let embedder: Embedder | null = null;
   const getEmbedder = (): Embedder | null => (process.env.CX_NO_EMBED ? null : (embedder ??= createEmbedder()));
 
-  // CX_REMOTE_SEARCH=1 makes `search` read the HOSTED index instead of the
-  // local one, when a platform database is configured. Off by default, and
-  // deliberately a switch rather than the new behaviour: every measurement
-  // taken so far read the local index under this tool's name, and silently
-  // changing what it reads would reinterpret all of them.
+  // CX_REMOTE_SEARCH=1 makes `search` and `sql` read the HOSTED index instead
+  // of the local one, when a platform database is configured. Off by default,
+  // and deliberately a switch rather than the new behaviour: every measurement
+  // taken so far read the local index under these tools' names, and silently
+  // changing what they read would reinterpret all of them. (A `sql` statement
+  // that embeds a query is the exception and goes to the platform with or
+  // without the switch - see the sql tool.)
   //
   // It exists because the hosted index could not be read without the
   // platform's answering loop. `ask` and `explore` were the only remote
@@ -1027,6 +1036,56 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
    * naming none - omitted, it gives each fact the row id itself. */
   const rowsProjection = (shape: TableShape): readonly string[] => (shape.keyColumn === ENGINE_ID_COLUMN ? [] : [shape.keyColumn]);
 
+  /** A `sql` statement run on the platform, whichever table it is over: the
+   * statement with its `{{name}}` placeholders folded into the platform's
+   * own `{{q:"..."}}`, which it embeds with the table's model - no local
+   * index and no local embedder come into it - then the platform's verdict
+   * on the rows, and one ledger line carrying both metered reads. `column`
+   * is the text column the verdict is diagnosed against (the chunks table's
+   * content unless the table is of another shape); `numbered` says whether
+   * the rows are chunks, whose multi-line text is numbered from the row's
+   * start_line as the local path numbers it - a table of rows has no lines
+   * to number. */
+  const sqlOnPlatform = async (
+    ctx: RepoCtx,
+    query: string,
+    embeds: Record<string, string> | undefined,
+    question: string | undefined,
+    opts: { column?: string; numbered: boolean },
+  ) => {
+    try {
+      const t0 = performance.now();
+      const fromPlatform = await runSqlRows(ctx.hosted!, query, embeds);
+      const rowsOut = opts.numbered ? fromPlatform.map(numberRowLines) : fromPlatform;
+      const { verdict, telemetry } = await platformVerdict(ctx, query, rowsOut, question, opts.column);
+      let usage: string | undefined;
+      if (receiptOn) {
+        // The statement's own metered tokens, then the verdict's: two
+        // platform reads, one ledger line, so the charge shows both.
+        const entry = withPlatform(sqlEntry(query, rowsOut), ctx);
+        if (telemetry) {
+          entry.platform = {
+            rttMs: (entry.platform?.rttMs ?? 0) + telemetry.rttMs,
+            ...(entry.platform?.readTokens !== undefined || telemetry.readTokens !== undefined
+              ? { readTokens: (entry.platform?.readTokens ?? 0) + (telemetry.readTokens ?? 0) }
+              : {}),
+          };
+        }
+        recordUsage(ctx.dir, entry);
+        usage = formatReceipt(entry, session);
+      }
+      return ok({
+        rows: rowsOut,
+        ...(verdict ? { validation: verdict } : {}),
+        index: "platform",
+        took_ms: Math.round((performance.now() - t0) * 1000) / 1000,
+        ...(usage ? { usage } : {}),
+      });
+    } catch (err) {
+      return fail(`sql failed: ${(err as Error).message}${refusalHint(err)}`);
+    }
+  };
+
   const rows = mode.kind === "rows" ? mode.shape : null;
   let sqlDescription = rows ? rowsSqlDescription(rows) : mode.kind === "unresolved" ? unresolvedDescription("Read-only SQL", TABLE) : SQL_DESCRIPTION;
   if (platformTools) {
@@ -1369,47 +1428,31 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
       } catch (err) {
         return fail((err as Error).message);
       }
+      const embeds = embed as Record<string, string> | undefined;
       // Over the rows of a hosted table of another shape the statement runs
-      // on the platform, which embeds its {{q:"..."}} placeholders with the
-      // table's own model, so no local index and no local embedder come into
-      // it - and this comes before the local index for the reason find's
-      // does. The rows are returned as the platform gave them: a table of
-      // rows has no lines to number (numberRowLines is for chunks, where a
-      // start_line places the text). The verdict is diagnosed against the
-      // table's own text column.
+      // on the platform - and this comes before the local index for the
+      // reason find's does. The rows come back as the platform gave them: a
+      // table of rows has no lines to number. The verdict is diagnosed
+      // against the table's own text column.
       const over = rowsOver("sql", ctx);
       if (over && "failed" in over) return over.failed;
-      if (over) {
-        try {
-          const t0 = performance.now();
-          const rowsOut = await runSqlRows(ctx.hosted!, query, embed as Record<string, string> | undefined);
-          const { verdict, telemetry } = await platformVerdict(ctx, query, rowsOut, question, over.shape.primaryText);
-          let usage: string | undefined;
-          if (receiptOn) {
-            // The statement's own metered tokens, then the verdict's: two
-            // platform reads, one ledger line, so the charge shows both.
-            const entry = withPlatform(sqlEntry(query, rowsOut), ctx);
-            if (telemetry) {
-              entry.platform = {
-                rttMs: (entry.platform?.rttMs ?? 0) + telemetry.rttMs,
-                ...(entry.platform?.readTokens !== undefined || telemetry.readTokens !== undefined
-                  ? { readTokens: (entry.platform?.readTokens ?? 0) + (telemetry.readTokens ?? 0) }
-                  : {}),
-              };
-            }
-            recordUsage(ctx.dir, entry);
-            usage = formatReceipt(entry, session);
-          }
-          return ok({
-            rows: rowsOut,
-            ...(verdict ? { validation: verdict } : {}),
-            index: "platform",
-            took_ms: Math.round((performance.now() - t0) * 1000) / 1000,
-            ...(usage ? { usage } : {}),
-          });
-        } catch (err) {
-          return fail(`sql failed: ${(err as Error).message}${refusalHint(err)}`);
-        }
+      if (over) return sqlOnPlatform(ctx, query, embeds, question, { column: over.shape.primaryText, numbered: false });
+      // The chunks table's statement runs on the platform too when the hosted
+      // table is the index (CX_REMOTE_SEARCH - under a CX_TABLE override the
+      // local table is not even the one the statement names), and, with or
+      // without the switch, whenever the statement embeds a query: a `{{q}}`
+      // is a vector function's, the platform embeds it with the table's own
+      // model, and the local side is lexical. Until 2026-09-12 every such
+      // statement ran on the local index whatever was configured. On the
+      // engine corpus that ranked against the old local vectors while the
+      // tool read as hosted; on a corpus whose local index was built
+      // keyword-only (OpenSearch, in the side-by-side demo) it failed every
+      // hybrid_search the model wrote, and the arm was graded on the keyword
+      // fallback. Same readiness probe as search: the table has to be there.
+      if (ctx.hosted && (remoteSearch || embedsAQuery(query))) {
+        const notReady = await platformNotReady("sql", ctx);
+        if (notReady) return notReady;
+        return sqlOnPlatform(ctx, query, embeds, question, { numbered: true });
       }
       const ensured = await localIndex(ctx);
       if ("failed" in ensured) return ensured.failed;

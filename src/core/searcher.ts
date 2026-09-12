@@ -15,13 +15,17 @@
 //            GROUP BY, with {{name}} placeholders embedded server-side for the
 //            vector functions.
 //
-// Every door runs against the LOCAL index (the in-process engine on the
-// handle). The platform table the `ask` and `explore` tools read is the
-// same index in another place; these doors reach for it only when the MCP
-// server is told to (CX_REMOTE_SEARCH): `searchHosted` for the chunks
-// table, and the row doors at the end of this file for a hosted table of
-// another shape. What a platform call cost goes to the usage ledger
-// (hostedTelemetry), not into a result.
+// `find` runs against the LOCAL index (the in-process engine on the handle),
+// and so do `search` and `sql` unless the MCP server is told otherwise. The
+// platform table the `ask` and `explore` tools read is the same index in
+// another place, and the doors reach for it in two cases: under
+// CX_REMOTE_SEARCH the hosted table is the index, so `search` goes through
+// `searchHosted` and every `sql` statement through `runSqlRows`; and a `sql`
+// statement that embeds a query (`embedsAQuery`) goes through `runSqlRows`
+// whenever a database is configured at all, because the platform embeds it
+// with the table's own model and the local side is lexical. The row doors at
+// the end of this file serve a hosted table of another shape. What a platform
+// call cost goes to the usage ledger (hostedTelemetry), not into a result.
 
 import { localDb, CONTENT_COLUMN, EMBEDDING_COLUMN, type IndexHandle } from "./context.js";
 import { TABLE, DEFAULT_SEARCH_K, DEFAULT_FIND_LIMIT, MAX_FIND_LIMIT } from "./config.js";
@@ -553,6 +557,13 @@ function placeholderNames(sql: string): string[] {
   for (const m of sql.matchAll(PLACEHOLDER)) referenced.add(m[1]);
   return [...referenced];
 }
+
+/** Whether a statement embeds a query - carries a `{{name}}` placeholder,
+ * which only the vector functions (vector_search, hybrid_search) take. The
+ * MCP server reads this to send such a statement to the platform when a
+ * database is configured: the query is embedded there with the table's own
+ * model, and the local side stays lexical. */
+export const embedsAQuery = (sql: string): boolean => placeholderNames(sql).length > 0;
 
 /** The embed text for one placeholder; a referenced placeholder with no
  * supplied text is a hard error. */
