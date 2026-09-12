@@ -109,8 +109,12 @@
      not a note about it: a corpus whose hosted table is incomplete runs
      fewer arms, and a reader must not read that as the product. */
   .corpus-note { color: var(--warn); font-size: 12px; margin: 0 0 10px; }
-  .examples-label { font-size: 11.5px; color: var(--faint); margin: 0 0 6px; }
-  .examples { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 20px; }
+  /* The starters sit on the same line as their label rather than under it:
+     two strips of small grey text between the box and the panels was most of
+     what made the top of the page read as dense. */
+  .examples-row { display: flex; gap: 4px 10px; align-items: baseline; flex-wrap: wrap; margin-bottom: 18px; }
+  .examples-label { font-size: 11.5px; color: var(--faint); margin: 0; flex: none; }
+  .examples { display: flex; gap: 6px; flex-wrap: wrap; margin: 0; }
   .examples button {
     background: transparent; color: var(--soft); border: 1px solid var(--rule);
     padding: 4px 11px; font-size: 12px; font-weight: 400; border-radius: 999px;
@@ -124,6 +128,12 @@
     margin-bottom: 14px; font-size: 12px; color: var(--soft);
   }
   .swatch { display: inline-block; width: 10px; height: 10px; margin-right: 6px; vertical-align: -1px; border-radius: 3px; }
+  /* The key names the band; the gloss is the shortest thing that tells two
+     bands apart, with the full sentence on hover. The long em-dashed
+     explanations read as a paragraph laid on its side. */
+  .controls .key { color: var(--ink); }
+  .controls .gloss { color: var(--faint); }
+  .controls .legend-label { color: var(--faint); }
   .third { margin-left: auto; display: inline-flex; gap: 7px; align-items: center; cursor: pointer; color: var(--faint); }
   .third:hover { color: var(--ink); }
   .third input { accent-color: var(--accent); margin: 0; cursor: pointer; }
@@ -150,7 +160,40 @@
   .stat span { font-size: 11.5px; color: var(--faint); }
   /* A figure that went the wrong way is not dressed up as a win. */
   .stat.worse b { color: var(--soft); }
-  .status { color: var(--faint); font-size: 12.5px; min-height: 1.6em; margin-bottom: 14px; }
+  /* What is happening now, as a strip rather than a line of grey text.
+     The reason is the judge: it grades AFTER every panel has settled, so the
+     page looks finished while a strong model is still re-checking every
+     claim, and a reader who cannot see that reads the wait as a hang (the
+     owner, 2026-09-12: "when the judge is judging it needs to be more
+     obvious ... otherwise i don't know what it is doing"). The dot and the
+     left edge carry the state; the text says what it means. */
+  .status {
+    display: flex; gap: 10px; align-items: baseline;
+    background: var(--panel); border: 1px solid var(--rule); border-left-width: 3px;
+    border-radius: var(--r-sm); padding: 9px 13px; margin-bottom: 14px;
+    font-size: 12.5px; color: var(--soft);
+  }
+  .status .dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--faint); align-self: center; }
+  .status b { color: var(--ink); font-weight: 500; }
+  .status[data-state="running"] { border-left-color: var(--model); }
+  .status[data-state="running"] .dot { background: var(--model); animation: pulse 1.2s ease-in-out infinite; }
+  /* The judge's own colour is the subagent band's: both are work handed to
+     another model, and the page already teaches that colour above. */
+  .status[data-state="judging"] { border-left-color: var(--subagent); color: var(--ink); }
+  .status[data-state="judging"] .dot { background: var(--subagent); animation: pulse 1.2s ease-in-out infinite; }
+  .status[data-state="judged"] { border-left-color: var(--subagent); }
+  .status[data-state="done"] { border-left-color: var(--accent); }
+  .status[data-state="failed"] { border-left-color: var(--warn); }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .2; } }
+  @media (prefers-reduced-motion: reduce) { .status .dot { animation: none; } }
+  /* The three grades at a glance, in the same colours the per-answer verdict
+     uses below, so the strip and the panels read as one verdict. */
+  .status .grades { display: inline-flex; gap: .35em .9em; flex-wrap: wrap; }
+  .status .g { font-weight: 600; }
+  .status .g .letter { font-weight: 700; }
+  .status .g.grade-A { color: var(--grade-a); } .status .g.grade-B { color: var(--grade-b); }
+  .status .g.grade-C { color: var(--grade-c); } .status .g.grade-F { color: var(--grade-f); }
+  .status .meta { color: var(--faint); }
   .arms { display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); gap: 16px; }
   /* The third arm is off by default: the pair a reader came to compare is
      grep against the index, and a third panel competing with it is the first
@@ -268,7 +311,7 @@
   <h1><span class="prompt" aria-hidden="true">❯</span>Sonnet: File Tools &nbsp;vs&nbsp; Infino</h1>
   <button type="button" class="theme" id="theme" title="switch between the dark and light palette">☀ light</button>
 </div>
-<p class="sub">Ask your own question. All three arms run at once, each bar fills as its own run happens, coloured by where the time is going, and each panel settles the moment that arm finishes.</p>
+<p class="sub">Ask your own question. Three arms answer it at once, and each panel settles the moment its own arm finishes.</p>
 
 <details class="about" id="corpus-panel">
   <summary>
@@ -301,26 +344,38 @@
   <button type="submit" id="go">Run</button>
 </form>
 <p class="corpus-note" id="corpus-note" hidden></p>
-<p class="examples-label" id="examples-label">Or start from one of these and edit it:</p>
-<div class="examples" id="examples"></div>
+<div class="examples-row">
+  <span class="examples-label" id="examples-label">or edit one of these:</span>
+  <div class="examples" id="examples"></div>
+</div>
 
+<!-- The key to the bars below. The split is WHO ran the search, not which
+     tool: `spansOf` counts a call as retrieval only when the caller made it
+     itself (!inSubagent), so the File Tools arm - which hands almost
+     everything to its own Explore - measures ~0% retrieval and ~80%
+     subagent, and the old wording ("file tools / the index") named a band
+     that panel never shows. Both keys are always on screen: every arm can
+     spend time in all three. The full sentence for each is on hover; the
+     line itself stays short, because three em-dashed clauses read as a
+     paragraph laid on its side. -->
 <div class="controls">
-  <span><i class="swatch" style="background:var(--model)"></i>model — the caller thinking</span>
-  <!-- The split is WHO ran the search, not which tool: `spansOf` counts a call
-       as retrieval only when the caller made it itself (!inSubagent), so the
-       File Tools arm - which hands almost everything to its own Explore -
-       measures ~0% retrieval and ~80% subagent, and the old wording
-       ("file tools / the index") named a band that panel never shows.
-       Both keys are always on screen: every arm can spend time in all three. -->
-  <span><i class="swatch" style="background:var(--retrieval)"></i>retrieval — the caller searching itself</span>
-  <span><i class="swatch" style="background:var(--subagent)"></i>subagent — handed to another loop, its own searching inside</span>
+  <span class="legend-label">time in each bar:</span>
+  <span title="the caller's own model turns — reasoning, and writing the answer">
+    <i class="swatch" style="background:var(--model)"></i><span class="key">model</span> <span class="gloss">thinking</span>
+  </span>
+  <span title="the caller searching for itself — its own tool calls, whichever tool they go to">
+    <i class="swatch" style="background:var(--retrieval)"></i><span class="key">retrieval</span> <span class="gloss">searching itself</span>
+  </span>
+  <span title="handed to another loop, which does its own searching inside">
+    <i class="swatch" style="background:var(--subagent)"></i><span class="key">subagent</span> <span class="gloss">another loop</span>
+  </span>
   <label class="third" title="the third arm hands searches to a loop of ours; it runs either way, this only shows it">
     <input type="checkbox" id="show-third"> show Infino Subagents
   </label>
 </div>
 
 <div class="headline no-third" id="headline" hidden></div>
-<div class="status" id="status">Ready.</div>
+<div class="status" id="status"><span class="dot"></span><span id="status-text">Ready.</span></div>
 <div class="arms no-third" id="arms"></div>
 
 
@@ -338,7 +393,19 @@ const PHASES = ["model", "retrieval", "subagent"];
 
 const armsEl = document.getElementById("arms");
 const statusEl = document.getElementById("status");
+const statusTextEl = document.getElementById("status-text");
 const form = document.getElementById("ask");
+
+/** The run's state on one strip: `state` drives the dot and the left edge,
+ * `text` says what it means. Every write goes through here so the strip can
+ * never show one state's colour beside another's words — which is how the
+ * grading used to disappear, appended as a clause onto a line that still
+ * read "Done". `html` only for text this page built itself. */
+function setStatus(state, text, html = false) {
+  statusEl.dataset.state = state;
+  if (html) statusTextEl.innerHTML = text;
+  else statusTextEl.textContent = text;
+}
 const input = document.getElementById("q");
 const go = document.getElementById("go");
 
@@ -795,7 +862,7 @@ form.onsubmit = (e) => {
   headlineEl.innerHTML = "";
   headlineEl.hidden = true;
   go.disabled = true;
-  statusEl.textContent = "Queued…";
+  setStatus("running", "Queued…");
 
   const arms = new Map();
   const started = performance.now();
@@ -835,13 +902,13 @@ form.onsubmit = (e) => {
       armsEl.classList.remove("no-third");
       headlineEl.classList.remove("no-third");
     }
-    statusEl.textContent = "Waiting for a slot…";
+    setStatus("running", "Waiting for a slot…");
   });
 
   source.addEventListener("started", (e) => {
     const d = JSON.parse(e.data);
     for (const arm of arms.values()) arm.startedAt = performance.now();
-    statusEl.textContent = `Running — run ${d.run}. This takes tens of seconds; the File Tools arm can take minutes.`;
+    setStatus("running", `Run ${d.run} — tens of seconds; the File Tools arm can take minutes.`);
   });
 
   /** Move the bar to where this event puts it. Only calls the CALLER made
@@ -894,9 +961,11 @@ form.onsubmit = (e) => {
     finish(r);
     const waiting = [...arms.values()].filter((a) => a.finishedAt === null);
     if (waiting.length) {
-      statusEl.textContent =
+      setStatus(
+        "running",
         `${r.label} finished in ${(r.wallMs / 1000).toFixed(1)}s — ` +
-        `${waiting.map((a) => a.meta.label).join(" and ")} still running.`;
+          `${waiting.map((a) => a.meta.label).join(" and ")} still running.`,
+      );
     }
   });
 
@@ -910,23 +979,41 @@ form.onsubmit = (e) => {
     // has today, not one of ours against the other.
     const base = d.results.find((r) => r.arm === "grep");
     const ours = d.results.filter((r) => r.arm !== "grep" && !r.error);
+    let summary;
     if (base && !base.error && ours.length) {
       for (const r of ours) headlineEl.append(headlineGroup(base, r));
       headlineEl.hidden = false;
-      statusEl.textContent = "Done — against File Tools, on this one question.";
+      summary = "Done — against File Tools, on this one question.";
     } else {
-      statusEl.textContent = "Done, with an error on at least one arm.";
+      summary = "Done, with an error on at least one arm.";
     }
-    // A verdict is still coming: the stream stays open for it.
-    if (d.judge) statusEl.textContent += ` Grading accuracy with ${shortModel(d.judge)}…`;
-    else stop();
+    // A verdict is still coming: the stream stays open for it, and the strip
+    // says the run is not over rather than reading "Done" while a strong
+    // model is still checking.
+    if (d.judge) setStatus("running", `${summary} Grading to follow.`);
+    else {
+      setStatus("done", summary);
+      stop();
+    }
   });
 
-  source.addEventListener("judging", () => {
+  /** The grading, said where a reader is looking. It starts after every
+   * panel has settled, takes tens of seconds and costs a strong model's
+   * call, so it gets the strip to itself - naming the model, what it is
+   * doing and that it cannot see which arm wrote what. The per-answer
+   * markers below say the same thing where each grade will land. */
+  source.addEventListener("judging", (e) => {
+    const d = JSON.parse(e.data);
+    setStatus(
+      "judging",
+      `<b>Grading accuracy — ${escapeHtml(shortModel(d.model))} is reading every claim back against the corpus</b>, ` +
+        `blind to which arm wrote which answer. <span class="meta">Tens of seconds; its cost is the measurement's, not any arm's.</span>`,
+      true,
+    );
     for (const arm of arms.values()) {
       const answer = arm.bodyEl.querySelector(".answer");
       if (answer && !arm.bodyEl.querySelector(".judge")) {
-        answer.insertAdjacentHTML("beforebegin", `<div class="judge pending">grading…</div>`);
+        answer.insertAdjacentHTML("beforebegin", `<div class="judge pending">grading this answer…</div>`);
       }
     }
   });
@@ -942,7 +1029,7 @@ form.onsubmit = (e) => {
         const el = arm.bodyEl.querySelector(".judge");
         if (el) { el.className = "judge err"; el.textContent = `unjudged: ${v.error ?? "no verdict"}`; }
       }
-      statusEl.textContent = statusEl.textContent.replace(/ Grading accuracy.*$/, ` ${judge} returned no verdict (${escapeHtml(v.error ?? "unknown")}).`);
+      setStatus("failed", `${judge} returned no verdict (${v.error ?? "unknown"}).`);
       stop();
       return;
     }
@@ -958,25 +1045,40 @@ form.onsubmit = (e) => {
         `${g.unsupported !== null && g.unsupported !== undefined ? ` · ${g.unsupported} unsupported claim${g.unsupported === 1 ? "" : "s"}` : ""}</span>` +
         `${g.reason ? `<span class="reason">${linkify(g.reason)}</span>` : ""}`;
     }
-    const line = v.grades.map((g) => `${g.label.replace(/^Sonnet \+ /, "")} ${g.grade}`).join(" · ");
+    // The three grades in the colours the per-answer verdicts use, so the
+    // strip and the panels below read as one verdict rather than two.
+    const line = v.grades
+      .map(
+        (g) =>
+          `<span class="g grade-${g.grade}">${escapeHtml(g.label.replace(/^Sonnet \+ /, ""))} ` +
+          `<span class="letter">${g.grade}</span></span>`,
+      )
+      .join("");
     const cost = v.costUsd !== null && v.costUsd !== undefined ? ` · $${v.costUsd.toFixed(2)}` : "";
     // A verdict given at the turn budget is a verdict on what was checked;
     // the reader is told the checking stopped there.
     const capped = v.hitTurnCap ? " · graded at the turn budget, some claims unchecked" : "";
-    statusEl.textContent = statusEl.textContent.replace(
-      / Grading accuracy.*$/,
-      ` Accuracy by ${judge}, blind and verified against the repository: ${line} (${v.toolCalls} checks${cost}, ${(v.wallMs / 1000).toFixed(0)}s${capped}).`,
+    setStatus(
+      "judged",
+      `<b>Accuracy by ${escapeHtml(judge)}</b>, blind and verified: <span class="grades">${line}</span> ` +
+        `<span class="meta">(${v.toolCalls} checks${cost}, ${(v.wallMs / 1000).toFixed(0)}s${capped})</span>`,
+      true,
     );
     stop();
   });
 
   source.addEventListener("failed", (e) => {
-    statusEl.innerHTML = `<span class="err">Failed: ${escapeHtml(JSON.parse(e.data).error)}</span>`;
+    setStatus("failed", `Failed: ${JSON.parse(e.data).error}`);
     stop();
   });
 
   source.onerror = () => {
-    if (live) statusEl.textContent = statusEl.textContent.startsWith("Done") ? statusEl.textContent : "Connection closed.";
+    // A stream that closes after the verdict closed because the run ended;
+    // one that closes before it is a dropped connection, and only that is
+    // worth overwriting what the strip already says.
+    if (live && !["judged", "done"].includes(statusEl.dataset.state)) {
+      setStatus("failed", "Connection closed.");
+    }
     stop();
   };
 
