@@ -668,15 +668,15 @@ export function dbHost(lane, env = process.env) {
 /** The MCP servers a lane attaches, from its own definition: the lane's
  * `server` when it names one, else the code-context server with the lane's
  * env and flags. */
-function laneServers(def, repoDir, indexDir, env = process.env) {
+function laneServers(def, repoDir, indexDir, env = process.env, serverEnv = {}) {
   if (def.server) return def.server(repoDir, indexDir, env);
-  return cxServer(def.env(repoDir, indexDir), def.args?.(env) ?? []);
+  return cxServer({ ...def.env(repoDir, indexDir), ...serverEnv }, def.args?.(env) ?? []);
 }
 
 /** Lane options: identical hermetic base; only the toolset and, for a hosted
  * lane, the server's command line differ (and for the Snowflake lane, the
  * server itself). */
-export function laneOptions(lane, repoDir, indexDir) {
+export function laneOptions(lane, repoDir, indexDir, serverEnv = {}) {
   const def = laneDef(lane);
   checkLaneEnv(lane);
   const hermetic = {
@@ -714,7 +714,7 @@ export function laneOptions(lane, repoDir, indexDir) {
     // permission denial the model would see), which is what makes a forced
     // lane a fair measurement: the hidden tools cost no prompt text either.
     ...(def.disallowedTools ? { disallowedTools: def.disallowedTools } : {}),
-    mcpServers: laneServers(def, repoDir, indexDir),
+    mcpServers: laneServers(def, repoDir, indexDir, process.env, serverEnv),
   };
 }
 
@@ -953,8 +953,14 @@ export const dataSystemPrompt = (dir, subject) =>
  * live page draws a bar while the answer is still being written; every caller
  * that does not pass it gets exactly the behaviour it had before. A throwing
  * callback must not take the run down with it - the run is the expensive
- * thing - so each call is guarded. */
-export async function runLane({ lane, prompt, system, repoDir, indexDir, maxTurns = SESSION_MAX_TURNS, onEvent }) {
+ * thing - so each call is guarded.
+ *
+ * `serverEnv` is laid over the lane's own environment for the MCP server this
+ * run spawns, and nothing else: it exists so a caller running several
+ * conversations AT ONCE can give each one its own `CX_TABLE` without writing
+ * to `process.env`, which is one variable shared by every concurrent run. The
+ * runner passes none and is unchanged. */
+export async function runLane({ lane, prompt, system, repoDir, indexDir, maxTurns = SESSION_MAX_TURNS, onEvent, serverEnv }) {
   const t0 = performance.now();
   const acc = newToolAccounting();
   const emit = onEvent
@@ -998,7 +1004,7 @@ export async function runLane({ lane, prompt, system, repoDir, indexDir, maxTurn
         systemPrompt: laneDef(lane).mcp ? system : { type: "preset", preset: "claude_code", append: system },
         permissionMode: "bypassPermissions",
         env: { ...process.env, IS_SANDBOX: "1" },
-        ...laneOptions(lane, repoDir, indexDir),
+        ...laneOptions(lane, repoDir, indexDir, serverEnv),
       },
     })) {
       const at = Math.round(performance.now() - t0);

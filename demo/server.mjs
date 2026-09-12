@@ -16,26 +16,35 @@
 // The three are the decision the tokenomics work is about, so the page shows
 // all three rather than making a reader hold one in their head.
 //
-// All arms run at once, because side by side is the point. Runs are serialized
-// against each other for one reason now, and it is spend rather than
-// correctness: three agent runs at a time is enough, and a queue makes a click
-// predictable.
+// All arms run at once, because side by side is the point, and so do RUNS:
+// nothing is queued. The page is a link several people hold at once, and a
+// queue meant the second reader's question sat behind the first reader's grep
+// arm, which can take five minutes - one reader's click made the demo look
+// broken to everyone else (owner, 2026-09-12: "you might have several
+// different users running the demo at the same time").
 //
-// Two reasons used to be given here and both have since stopped applying, so
-// they are written down rather than left as folklore:
+// What concurrency costs, and how each is paid:
 //
-//   The ledger. It carries no run id, so two writers against one index dir
-//   could not be told apart. That is fixed: each hosted arm gets its own view
-//   of the index with its own ledger (`armIndexDir`), and attribution is exact
-//   whether or not runs overlap.
+//   The ledger. Charge attribution is a byte offset into one file, exact for
+//   one writer and wrong for two. Every arm of every run now reads through its
+//   own view of the index with its own ledger (`armIndexDir`, keyed by run as
+//   well as arm), removed when the run ends.
+//
+//   The table. `CX_TABLE` names the hosted table the client reads and used to
+//   be set on `process.env` for the length of a run - one variable, shared by
+//   every run in flight, so two readers on different corpora would race and
+//   the loser's agents would answer from the winner's table. It travels on the
+//   run's own server environment now (`runLane`'s `serverEnv`).
 //
 //   The model pool. The worker admits `ask.max_concurrent_model_calls`
 //   sub-agent calls per database and refuses the next with a 429 rather than
-//   queueing it; the compiled default is 4 (`shared/src/config.rs`). That is
-//   slack today because the caller turns out to issue its sub-agent calls one
-//   at a time - measured across 622 recorded runs, no assistant message ever
-//   carried two tool calls. It becomes binding the moment the caller does fan
-//   out, which is why the serialization stays.
+//   queueing it; the compiled default is 4 (`shared/src/config.rs`). One run
+//   issues its sub-agent calls one at a time - measured across 622 recorded
+//   runs, no assistant message ever carried two tool calls - so the ceiling is
+//   four concurrent readers on the subagents arm, and the fifth sees a 429 in
+//   that arm alone. Raising it is a platform config change, not a demo one.
+//
+//   The spend. Concurrent runs spend concurrently, and there is no cap.
 //
 //   PORT=7777 node demo/server.mjs
 //
@@ -44,13 +53,15 @@
 //
 // SPENDING: every question is THREE full agent runs. On the recorded
 // 36-question set that is about $0.40 a click - grep $0.24, index-only $0.09,
-// subagents $0.08 - and the grep arm alone can run five minutes. DEMO_MAX_RUNS
-// caps how many a process will serve before it refuses; there is no way to
-// make a click free.
+// subagents $0.08 - and the grep arm alone can run five minutes. There is no
+// run budget: the tailnet is the whole of the access control, so whoever holds
+// the link spends, and nothing here makes a click free. A 25-run cap used to
+// stand here; it refused the owner's own demo mid-session while reporting
+// nothing a reader could act on, and he had it removed (2026-09-12).
 
 import { createServer } from "node:http";
 import { execFileSync } from "node:child_process";
-import { lstatSync, mkdirSync, readFileSync, readdirSync, symlinkSync, unlinkSync } from "node:fs";
+import { lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, unlinkSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -242,7 +253,6 @@ const PORT = Number(process.env.PORT ?? 7777);
 const HOST = process.env.DEMO_HOST ?? "127.0.0.1";
 const REPO_DIR = resolve(process.env.CX_BENCH_REPO ?? "/home/ubuntu/infino-ai/workspace/bench-repos/infino-ed4e020");
 const INDEX_DIR = resolve(process.env.CX_INDEX_DIR ?? join(REPO_DIR, ".infino-hosted"));
-const MAX_RUNS = Number(process.env.DEMO_MAX_RUNS ?? 25);
 
 // A demo run must never build an index. The client's first `find`/`sql`/`ask`
 // on an index dir without a manifest builds one from the checkout — and with
@@ -261,22 +271,24 @@ const SYSTEM = systemPrompt(REPO_DIR);
  * share. */
 const LEDGER_NAME = "usage.jsonl";
 
-/** A per-arm view of the index: the same data, its own usage ledger.
+/** A per-arm, per-RUN view of the index: the same data, its own usage ledger.
  *
  * Charge attribution reads the ledger's byte length before an arm runs and
  * parses what was appended after (charge.mjs). That is exact for one writer
- * and wrong for two, and there are now two hosted arms running side by side —
- * each would count the other's retrieval calls as its own. So every hosted arm
- * gets a directory of symlinks to the real index plus a `usage.jsonl` of its
- * own: the arms read the same bytes and meter separately.
+ * and wrong for two. Two hosted arms run side by side within a question, and
+ * since runs stopped being serialized two readers can ask the same question
+ * of the same corpus at once — so the view is per run as well as per arm, or
+ * one reader's charge would carry the other's retrieval calls.
  *
  * The links are reconciled on every call rather than created once, because a
  * reindex writes new superfile directories and a view built earlier would
- * quietly serve a stale subset of them.
+ * quietly serve a stale subset of them. `dropIndexView` removes the run's
+ * directory afterwards; the links are the only thing in it besides the
+ * ledger, and the ledger has been read by then.
  */
-function armIndexDir(arm, corpus) {
+function armIndexDir(arm, corpus, runId) {
   if (!arm.hosted) return corpus.index;
-  const view = `${corpus.index}-${arm.id}`;
+  const view = `${corpus.index}-${arm.id}-r${runId}`;
   mkdirSync(view, { recursive: true });
   const want = new Set(readdirSync(corpus.index).filter((e) => e !== LEDGER_NAME));
   for (const entry of readdirSync(view)) {
@@ -297,21 +309,19 @@ function armIndexDir(arm, corpus) {
   return view;
 }
 
-let runsServed = 0;
-/** One run at a time, process-wide. A second request waits on this. */
-let queue = Promise.resolve();
-
-/** Run `job` once the run before it has finished, so the ledger delta and the
- * platform's model pool both belong to one question at a time. */
-function serialize(job) {
-  const next = queue.then(job, job);
-  // A failed run must not poison the queue for the next one.
-  queue = next.then(
-    () => undefined,
-    () => undefined,
-  );
-  return next;
+/** Remove a run's index views. Best-effort: a view left behind is a few dead
+ * symlinks and a spent ledger, which costs nothing but tidiness, and a run
+ * must not fail on its own cleanup. */
+function dropIndexViews(arms, corpus, runId) {
+  for (const arm of arms) {
+    if (!arm.hosted) continue;
+    rmSync(`${corpus.index}-${arm.id}-r${runId}`, { recursive: true, force: true });
+  }
 }
+
+/** Runs this process has served: the status line's number, and the id that
+ * keeps concurrent runs' ledgers apart. */
+let runsServed = 0;
 
 /** One SSE frame. */
 function send(res, event, data) {
@@ -350,7 +360,7 @@ function callerTokens(row) {
  * `open` tracks the calls in flight so the bar knows what colour its growing
  * edge is right now - which is the whole difference between a bar that fills
  * live and one that appears at the end. */
-async function runArm(arm, corpus, question, emit) {
+async function runArm(arm, corpus, question, emit, runId) {
   // The fixture path answers nothing and spends nothing; it exists so the page
   // can be worked on without a model. It returns a row of the same shape, and
   // the split below is computed by the same code, so what it exercises is the
@@ -379,7 +389,7 @@ async function runArm(arm, corpus, question, emit) {
     };
   }
 
-  const indexDir = armIndexDir(arm, corpus);
+  const indexDir = armIndexDir(arm, corpus, runId);
   const mark = arm.hosted ? ledgerMark(indexDir) : 0;
   const open = new Map();
   emit({ arm: arm.id, kind: "arm_start", label: arm.label, lane: arm.lane, at: 0 });
@@ -392,6 +402,13 @@ async function runArm(arm, corpus, question, emit) {
     system: corpus.system ?? systemPrompt(corpus.repo),
     repoDir: corpus.repo,
     indexDir,
+    // The corpus decides which hosted table the client reads. It travels on
+    // the run's own server environment rather than through `process.env`,
+    // which is one variable shared by every run in flight: two readers asking
+    // about different corpora at the same moment would each set it and the
+    // loser's agents would answer from the winner's table - a wrong answer
+    // that looks exactly like a right one.
+    serverEnv: { CX_TABLE: corpus.table },
     onEvent: (e) => {
       // A subagent's inner calls sit inside their parent's span, so they must
       // not repaint the bar's growing edge - it would flicker to their colour
@@ -464,9 +481,13 @@ async function runArm(arm, corpus, question, emit) {
 /** GET /run?q=... - the whole exchange, as server-sent events. */
 async function handleRun(req, res, url) {
   const question = (url.searchParams.get("q") ?? "").trim();
-  if (!question) return plain(res, 400, "ask a question: /run?q=...");
-  if (question.length > MAX_QUESTION_CHARS) return plain(res, 413, `question over ${MAX_QUESTION_CHARS} characters`);
-  if (runsServed >= MAX_RUNS) return plain(res, 429, `this demo has served its ${MAX_RUNS} runs; restart it to serve more`);
+  // Refused as an SSE `failed` frame rather than a status code, because the
+  // page reads this endpoint with an EventSource: a browser hands a non-200
+  // to `onerror` with no status and no body, so the reason - the one thing
+  // that says what to do about it - reached nobody and the page said
+  // "Connection closed." for a server that was healthy and deliberate.
+  if (!question) return refuse(res, "ask a question: /run?q=...");
+  if (question.length > MAX_QUESTION_CHARS) return refuse(res, `question over ${MAX_QUESTION_CHARS} characters`);
   const corpus = corpusFor(url.searchParams.get("corpus"));
   const arms = armsFor(corpus);
 
@@ -504,38 +525,28 @@ async function handleRun(req, res, url) {
   // The harness row behind each arm, for the judge: the recorded queries
   // live there and never reach the page.
   const rows = new Map();
+  const runId = (runsServed += 1);
   try {
-    await serialize(async () => {
-      runsServed += 1;
-      send(res, "started", { question, run: runsServed, of: MAX_RUNS });
-      // The corpus decides which hosted table the client reads. Set for the
-      // whole run rather than per arm: the lanes spawn the client as a child
-      // process and it takes the table from its environment.
-      const previousTable = process.env.CX_TABLE;
-      process.env.CX_TABLE = corpus.table;
-      // Each arm reports the instant it finishes, in its own `arm_done` frame.
-      // The claim of the page is that one arm gets there first, so holding the
-      // faster arm's numbers back until the slower one lands hides the only
-      // thing a reader came to see - and the bar keeps growing while it waits,
-      // which makes the fast arm look exactly as slow as the slow one.
-      results = await Promise.all(
-        arms.map(async (arm) => {
-          const { result, row } = await runArm(arm, corpus, question, guarded);
-          rows.set(arm.id, row);
-          guarded({ ...result, kind: "arm_done" });
-          return result;
-        }),
-      ).finally(() => {
-        if (previousTable === undefined) delete process.env.CX_TABLE;
-        else process.env.CX_TABLE = previousTable;
-      });
-      // `done` no longer carries the rendering. It closes the run and carries
-      // the comparison between the arms, which is the one thing that does need
-      // both of them - and says whether a verdict is still to come.
-      if (alive) send(res, "done", { results, judge: judgeOn ? DEFAULT_JUDGE_MODEL : null });
-    });
-    // Outside the queue: the judge reads the checkout and the LOCAL index and
-    // spends no platform call, so the next question need not wait for it.
+    send(res, "started", { question, run: runId });
+    // Each arm reports the instant it finishes, in its own `arm_done` frame.
+    // The claim of the page is that one arm gets there first, so holding the
+    // faster arm's numbers back until the slower one lands hides the only
+    // thing a reader came to see - and the bar keeps growing while it waits,
+    // which makes the fast arm look exactly as slow as the slow one.
+    results = await Promise.all(
+      arms.map(async (arm) => {
+        const { result, row } = await runArm(arm, corpus, question, guarded, runId);
+        rows.set(arm.id, row);
+        guarded({ ...result, kind: "arm_done" });
+        return result;
+      }),
+    ).finally(() => dropIndexViews(arms, corpus, runId));
+    // `done` no longer carries the rendering. It closes the run and carries
+    // the comparison between the arms, which is the one thing that does need
+    // both of them - and says whether a verdict is still to come.
+    if (alive) send(res, "done", { results, judge: judgeOn ? DEFAULT_JUDGE_MODEL : null });
+    // The judge reads the checkout and the LOCAL index and spends no platform
+    // call, so it is outside everything the arms' numbers are drawn from.
     if (judgeOn && alive && results) {
       send(res, "judging", { model: DEFAULT_JUDGE_MODEL });
       const verdict = await judgeArms({ repoDir: corpus.repo, indexDir: corpus.index, question, results, rows });
@@ -550,6 +561,15 @@ async function handleRun(req, res, url) {
 function plain(res, status, body) {
   res.writeHead(status, { "content-type": "text/plain; charset=utf-8" });
   res.end(`${body}\n`);
+}
+
+/** Refuse a run with a reason the page can show: one SSE `failed` frame on a
+ * 200, because a browser's EventSource reports a non-200 as an error with no
+ * status and no body, and the page then says only "Connection closed.". */
+function refuse(res, error) {
+  res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache, no-transform", connection: "keep-alive" });
+  send(res, "failed", { error });
+  res.end();
 }
 
 /** GET /source?corpus=&path=&line=&end= - the cited stretch of a file in the
@@ -766,7 +786,7 @@ server.listen(PORT, HOST, () => {
   console.log(`  repo   ${REPO_DIR}`);
   console.log(`  index  ${INDEX_DIR}`);
   console.log(`  arms   ${ARMS.map((a) => `${a.id} (${a.lane})`).join("  vs  ")}`);
-  console.log(`  budget ${MAX_RUNS} runs, one at a time`);
+  console.log("  runs   unlimited, one at a time - every click spends");
   if (isFixture()) console.log("  FIXTURE MODE - invented data, no model runs, nothing here is a result");
   console.log(
     rates.readTokenUsdPerMillion === null || rates.modelTokenUsdPerMillion === null

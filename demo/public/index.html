@@ -841,7 +841,7 @@ form.onsubmit = (e) => {
   source.addEventListener("started", (e) => {
     const d = JSON.parse(e.data);
     for (const arm of arms.values()) arm.startedAt = performance.now();
-    statusEl.textContent = `Running — run ${d.run} of ${d.of}. This takes tens of seconds; the File Tools arm can take minutes.`;
+    statusEl.textContent = `Running — run ${d.run}. This takes tens of seconds; the File Tools arm can take minutes.`;
   });
 
   /** Move the bar to where this event puts it. Only calls the CALLER made

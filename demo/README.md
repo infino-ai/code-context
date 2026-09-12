@@ -62,7 +62,6 @@ it wipes the existing `/` proxy to the shared gateway.
 | `CX_BENCH_REPO` | `bench-repos/infino-ed4e020` | the repo under test |
 | `CX_INDEX_DIR` | `<repo>/.infino-hosted` | the index dir, and the ledger read for our charge |
 | `CX_BENCH_DB_URL`, `CX_BENCH_KEY_FILE` | — | the platform database and its key file |
-| `DEMO_MAX_RUNS` | `25` | runs served before the process refuses more |
 | `DEMO_FIXTURE` | off | scripted run, no spend |
 | `DEMO_READ_TOKEN_USD_PER_M` | unset | price of a read token |
 | `DEMO_MODEL_TOKEN_USD_PER_M` | unset | blended inference cost |
