@@ -440,6 +440,21 @@ export function excerpt(text: string, at: number, needleLength: number): string 
   return `${start > 0 ? "..." : ""}${text.slice(start, end)}${end < text.length ? "..." : ""}`;
 }
 
+/** An `under` prefix as the scope it names, or undefined when it names none.
+ *
+ * A prefix with no trailing slash still means "this directory", so `src` and
+ * `src/` both scope to the subtree rather than also matching `src-gen/`. A
+ * prefix naming a single file is left as given, and one that is empty once the
+ * slashes come off scopes nothing at all.
+ *
+ * Exported because the platform tools take the same prefix and have to read it
+ * the same way: `under` is one concept, and a second spelling of it there would
+ * drift from this one the first time either side changed. */
+export function normalizeUnder(under: string | undefined): string | undefined {
+  const trimmed = under?.replace(/\/+$/, "");
+  return trimmed === undefined || trimmed === "" ? undefined : trimmed;
+}
+
 /** What every find - over chunks or over rows - refuses before it asks the
  * index: an empty query, a query spanning lines, one the index's analyzer
  * keeps no token from (it would match nothing and read as "no occurrences"
@@ -482,13 +497,10 @@ export async function find(handle: IndexHandle, query: string, opts: FindOptions
   // arrives again from an overlapping chunk that does not, so the declaring
   // chunk always wins the dedupe rather than whichever chunk came first.
   const declaring = new Set<string>();
-  // A prefix with no trailing slash still means "this directory", so `src` and
-  // `src/` both scope to the subtree rather than also matching `src-gen/`. A
-  // prefix naming a single file is left as given.
-  const under = opts.under?.replace(/\/+$/, "");
+  const under = normalizeUnder(opts.under);
   for (const row of candidates) {
     const path = String(row.path);
-    if (under !== undefined && under !== "" && path !== under && !path.startsWith(`${under}/`)) continue;
+    if (under !== undefined && path !== under && !path.startsWith(`${under}/`)) continue;
     const symbol = row.symbol ? String(row.symbol) : undefined;
     const declares = definesName(symbol, query, ignoreCase);
     for (const m of matchLines(String(row.content), Number(row.start_line), query, ignoreCase)) {
@@ -527,7 +539,7 @@ export async function find(handle: IndexHandle, query: string, opts: FindOptions
     ...(rows.length > limit ? { truncated: true } : {}),
     ...(partial ? { partial } : {}),
     ...(opts.defines ? { definedFrom: matched } : {}),
-    ...(under !== undefined && under !== "" ? { under } : {}),
+    ...(under !== undefined ? { under } : {}),
   };
 }
 

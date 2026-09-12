@@ -502,3 +502,106 @@ describe("runRetrievalAgent", () => {
     await expect(runRetrievalAgent(hosted, { question: "q" }, { maxTurns: 4, maxWallSecs: 120 })).rejects.toThrow(/501/);
   });
 });
+
+// --- `under`: one question, one subtree -------------------------------------------------------
+
+describe("a question scoped to a subtree", () => {
+  /** A platform client that records every request it is handed. */
+  const recorder = () => {
+    const sent: Array<Record<string, unknown>> = [];
+    return {
+      sent,
+      subAgent: async (req: unknown) => {
+        sent.push(req as Record<string, unknown>);
+        return answered();
+      },
+    };
+  };
+
+  /** The scope as the loop is told it. The sub_agent request has no path
+   * field, so this sentence IS the scope - an instruction the loop is asked to
+   * hold to, never a filter the platform applies. */
+  const SCOPE =
+    "Scope: answer only from files whose repo-relative path starts with `src/superfile` - ignore everything outside that prefix.";
+
+  it("travels to the platform as a context constraint naming the prefix, and changes nothing else in the request", async () => {
+    const hosted = recorder();
+    await runRetrievalAgent(hosted, { question: "how are superfiles built?", under: "src/superfile" }, { maxWallSecs: 90 });
+    expect(hosted.sent).toEqual([
+      {
+        question: "how are superfiles built?",
+        context: SCOPE,
+        k: MAX_HITS,
+        projection: ["path", "start_line", "end_line", "symbol"],
+        max_wall_secs: 90,
+      },
+    ]);
+  });
+
+  it("sends no context at all when the call names no scope", async () => {
+    const hosted = recorder();
+    const { result } = await runRetrievalAgent(hosted, { question: "q" }, { maxWallSecs: 90 });
+    expect(hosted.sent[0]).not.toHaveProperty("context");
+    expect(result).not.toHaveProperty("under");
+  });
+
+  it("scopes an exploration the same way, and leaves an unscoped one without a context field", async () => {
+    const whole = recorder();
+    await runExploreAgent(whole, { question: "q" }, { maxWallSecs: 300 });
+    expect(whole.sent[0]).not.toHaveProperty("context");
+
+    const scoped = recorder();
+    await runExploreAgent(scoped, { question: "q", under: "src/superfile" }, { maxWallSecs: 300 });
+    expect(scoped.sent[0]).toMatchObject({ context: SCOPE, mode: "explore" });
+  });
+
+  it("adds the scope to the repository's own instructions rather than replacing them", async () => {
+    // Both are background the loop reads beside the question, so a scoped
+    // call must not cost the caller the instructions it would otherwise get.
+    const context = "# CLAUDE.md\n\nThe manifest layer lives under src/supertable/manifest/.";
+    const hosted = recorder();
+    await runRetrievalAgent(hosted, { question: "q", context, under: "src/superfile" }, { maxWallSecs: 90 });
+    expect(hosted.sent[0].context).toBe(`${context}\n\n${SCOPE}`);
+  });
+
+  it("echoes the scope on the result, so a subtree's facts are not read as the repository's", async () => {
+    const { result } = await runRetrievalAgent(recorder(), { question: "q", under: "src/superfile" }, { maxWallSecs: 90 });
+    expect(result.under).toBe("src/superfile");
+    // The facts are whatever the platform returned: the scope is an
+    // instruction to the loop, so nothing on this side filters them.
+    expect(result.rows).toEqual([
+      { path: "src/f1.ts", n: 7 },
+      { path: "src/f0.ts", n: 2 },
+    ]);
+    const explored = await runExploreAgent(recorder(), { question: "q", under: "src" }, { maxWallSecs: 300 });
+    expect(explored.result.under).toBe("src");
+  });
+
+  it("reads a prefix the way find reads its own: a trailing slash is the same scope", async () => {
+    const hosted = recorder();
+    const { result } = await runRetrievalAgent(hosted, { question: "q", under: "src/superfile/" }, { maxWallSecs: 90 });
+    // Both spellings normalise to one scope on both doors, so a caller cannot
+    // tell from either answer which one was typed.
+    expect(hosted.sent[0]).toMatchObject({ context: SCOPE });
+    expect(result.under).toBe("src/superfile");
+  });
+
+  it("refuses a prefix exactly where find refuses one - which is nowhere", async () => {
+    // find validates no prefix at all: a leading slash or a `..` segment there
+    // is a filter that matches nothing, not an error. `under` is one concept,
+    // so a prefix that reaches find reaches the loop too, verbatim.
+    const odd = recorder();
+    const run = await runRetrievalAgent(odd, { question: "q", under: "/abs/../x" }, { maxWallSecs: 90 });
+    expect(odd.sent[0]).toMatchObject({ context: expect.stringContaining("`/abs/../x`") });
+    expect(run.result.under).toBe("/abs/../x");
+  });
+
+  it("scopes nothing when the prefix names no subtree, rather than sending an empty constraint", async () => {
+    for (const nothing of ["", "/", "///"]) {
+      const hosted = recorder();
+      const { result } = await runRetrievalAgent(hosted, { question: "q", under: nothing }, { maxWallSecs: 90 });
+      expect(hosted.sent[0]).not.toHaveProperty("context");
+      expect(result).not.toHaveProperty("under");
+    }
+  });
+});

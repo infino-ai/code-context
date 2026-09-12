@@ -18,7 +18,7 @@
 
 import type { HostedDb, RowRecord } from "./hosted.js";
 import { DEFAULT_SEARCH_K } from "./config.js";
-import { numberLines } from "./searcher.js";
+import { normalizeUnder, numberLines } from "./searcher.js";
 import { rowFact, type TableShape } from "./table-shape.js";
 
 /** Place-naming rows kept in one result: as many as a search returns by
@@ -75,6 +75,11 @@ const NO_ANSWER_HINT = "ask again more narrowly, or use find or search";
 
 export interface RetrievalAgentRequest {
   question: string;
+  /** Repo-relative path prefix the question is about, read the way `find`
+   * reads its own: one subtree of the index rather than all of it. Absent
+   * asks about the whole repository. Reaches the loop inside `context` - see
+   * `agentContext` for why, and for what that does and does not promise. */
+  under?: string;
   /** Background the loop's model reads beside the question - the
    * repository's own instructions (see `devContext`) - and not part of what
    * a result must contain. Sent as the platform's `context` field. */
@@ -103,6 +108,40 @@ export interface RetrievalAgentRequest {
 function factProjection(request: RetrievalAgentRequest): { projection: string[] } | Record<string, never> {
   const columns = request.projection ?? FACT_PROJECTION;
   return columns.length > 0 ? { projection: [...columns] } : {};
+}
+
+/** `under` as the one sentence that tells the loop where to look. */
+function scopeInstruction(under: string): string {
+  return `Scope: answer only from files whose repo-relative path starts with \`${under}\` - ignore everything outside that prefix.`;
+}
+
+/** The `context` field of a sub_agent request for `request`: the caller's
+ * background and the scope, whichever are there, and no field at all for
+ * neither.
+ *
+ * This is where `under` becomes an INSTRUCTION rather than a filter. The
+ * sub_agent request type rejects unknown keys and has no path field of any
+ * kind, so free text beside the question is the only carrier a prefix has.
+ * The loop is asked to hold to the prefix and nothing on the platform makes
+ * it - a scoped call must not be read as a guarantee that every fact came
+ * from inside the prefix, which is what the echoed `under` on the result is
+ * for.
+ *
+ * The repository's own instructions and the scope are both background, so a
+ * scoped call keeps the instructions rather than replacing them; the scope
+ * goes last, where the shorter of the two is still read after a long
+ * instruction file. */
+function agentContext(request: RetrievalAgentRequest, under: string | undefined): { context: string } | Record<string, never> {
+  const parts: string[] = [];
+  if (request.context !== undefined) parts.push(request.context);
+  if (under !== undefined) parts.push(scopeInstruction(under));
+  return parts.length > 0 ? { context: parts.join("\n\n") } : {};
+}
+
+/** The result with `under` echoed on it when the call named a scope, the same
+ * echo `find` makes: facts from a subtree must not read as the repository's. */
+function scoped<T extends RetrievalAgentResult>(result: T, under: string | undefined): T {
+  return under === undefined ? result : { ...result, under };
 }
 
 export interface RetrievalAgentBudget {
@@ -175,6 +214,9 @@ export interface RetrievalAgentResult {
    * run - the platform's account of why. The answer stands unaudited, and the
    * caller should weigh it knowing that. Absent when the audit ran. */
   unaudited?: string;
+  /** Echoed when `under` scoped the question, so a caller reading the facts
+   * knows they answer for a subtree and not the repository. */
+  under?: string;
 }
 
 /** What the loop cost on the platform, for the usage ledger and receipt:
@@ -212,15 +254,17 @@ export async function runRetrievalAgent(
   budget: RetrievalAgentBudget,
 ): Promise<RetrievalAgentRun> {
   const k = budget.k ?? MAX_HITS;
+  const under = normalizeUnder(request.under);
   const response = await hosted.subAgent({
     question: request.question,
-    ...(request.context !== undefined ? { context: request.context } : {}),
+    ...agentContext(request, under),
     k,
     ...factProjection(request),
     ...(budget.maxTurns !== undefined ? { max_turns: budget.maxTurns } : {}),
     max_wall_secs: budget.maxWallSecs,
   });
-  return retrievalAgentRunFrom(request.question, response, k, request.shape);
+  const run = retrievalAgentRunFrom(request.question, response, k, request.shape);
+  return { ...run, result: scoped(run.result, under) };
 }
 
 /** Hand the platform's loop one question in `explore` mode: it reads what it
@@ -233,16 +277,18 @@ export async function runExploreAgent(
   budget: RetrievalAgentBudget,
 ): Promise<{ result: ExploreResult; spend: RetrievalAgentSpend }> {
   const k = budget.k ?? MAX_HITS;
+  const under = normalizeUnder(request.under);
   const response = await hosted.subAgent({
     question: request.question,
-    ...(request.context !== undefined ? { context: request.context } : {}),
+    ...agentContext(request, under),
     mode: "explore",
     k,
     ...factProjection(request),
     ...(budget.maxTurns !== undefined ? { max_turns: budget.maxTurns } : {}),
     max_wall_secs: budget.maxWallSecs,
   });
-  return exploreRunFrom(request.question, response, k, request.shape);
+  const run = exploreRunFrom(request.question, response, k, request.shape);
+  return { ...run, result: scoped(run.result, under) };
 }
 
 /** The explore run for one platform response: the retrieval run of the last

@@ -1432,7 +1432,9 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
           "search hits, plus aggregate rows (counts, rankings) and the SQL whose rows answer the " +
           "question - never a summary. Use it " +
           "for how does X work, where is Y handled, which files or symbols; spawn " +
-          "several in parallel for independent questions instead of exploring the code yourself. For " +
+          "several in parallel for independent questions instead of exploring the code yourself. " +
+          "A single question over a large codebase splits the same way: one call per section with " +
+          "`under` naming its subtree, all issued together. For " +
           "every occurrence of an exact string, and for how many times it occurs per file, use find " +
           "(its byFile is the grep -c answer); for a file you already know, Read it. Answer " +
           "from the rows and cite path:line. " +
@@ -1440,6 +1442,15 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
           "The result includes a 'usage' field, a one-line receipt of what the call cost.",
         inputSchema: {
           question: z.string().min(1).describe("The question or task, in plain language, about the indexed code."),
+          under: z
+            .string()
+            .optional()
+            .describe(
+              "Repo-relative path prefix to scope to - one repository of a workspace, one subtree of a " +
+                "monorepo, one directory. Carried to the retrieval loop as a constraint on where to look, " +
+                "and echoed back on the result so a scoped answer's facts are not read as the whole " +
+                "repository's.",
+            ),
           path: z
             .string()
             .optional()
@@ -1449,7 +1460,7 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
             ),
         },
       },
-      async ({ question, path }) => {
+      async ({ question, under, path }) => {
         let ctx: RepoCtx;
         try {
           ctx = repoFor(path);
@@ -1487,9 +1498,17 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
           // when asked for (CX_DEV_CONTEXT=1); off, the loop's model gets the
           // question alone.
           const context = devContextEnabled() ? devContext(ctx.root) : undefined;
+          // `under` names a subtree of a code index, and a row of a hosted
+          // table of another shape sits in no directory - so it is left out
+          // there, exactly as find leaves its own out.
           const { result, spend } = await runRetrievalAgent(
             ctx.hosted!,
-            { question, ...(context !== undefined ? { context } : {}), ...(over ? { projection: rowsProjection(over.shape), shape: over.shape } : {}) },
+            {
+              question,
+              ...(context !== undefined ? { context } : {}),
+              ...(under !== undefined && !over ? { under } : {}),
+              ...(over ? { projection: rowsProjection(over.shape), shape: over.shape } : {}),
+            },
             { maxTurns: subagentMaxTurns(), maxWallSecs: subagentMaxWallSecs(), k: subagentK() },
           );
           let usage: string | undefined;
@@ -1525,7 +1544,9 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
           "and cite path:line from its hits; it does not need re-reading or re-checking. On a " +
           "mechanism that spans layers, the answer's own symbols are the next question: ask again " +
           "naming one of them to reach the file that calls it, because the layer that decides usually " +
-          "describes itself in different words than the question used. Slower and " +
+          "describes itself in different words than the question used. A mechanism too large for one " +
+          "exploration splits by section: one call per subtree with `under`, all issued together. " +
+          "Slower and " +
           "dearer than ask: use ask for one retrieval, explore when one retrieval will not " +
           "do. Independent explorations run at the same time: issue them in ONE turn rather than " +
           "waiting for each to come back, because the wait is then the slowest of them instead of " +
@@ -1536,6 +1557,15 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
           "The result includes a 'usage' field, a one-line receipt of what the call cost.",
         inputSchema: {
           question: z.string().min(1).describe("The question, in plain language, about the indexed code."),
+          under: z
+            .string()
+            .optional()
+            .describe(
+              "Repo-relative path prefix to scope to - one repository of a workspace, one subtree of a " +
+                "monorepo, one directory. Carried to the exploration loop as a constraint on where to " +
+                "look, and echoed back on the result so a scoped answer is not read as the whole " +
+                "repository's.",
+            ),
           path: z
             .string()
             .optional()
@@ -1545,7 +1575,7 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
             ),
         },
       },
-      async ({ question, path }) => {
+      async ({ question, under, path }) => {
         let ctx: RepoCtx;
         try {
           ctx = repoFor(path);
@@ -1566,9 +1596,16 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
         try {
           const t0 = performance.now();
           const context = devContextEnabled() ? devContext(ctx.root) : undefined;
+          // `under` is left out over a table of another shape for the reason
+          // it is in ask: a row sits in no directory.
           const { result, spend } = await runExploreAgent(
             ctx.hosted!,
-            { question, ...(context !== undefined ? { context } : {}), ...(over ? { projection: rowsProjection(over.shape), shape: over.shape } : {}) },
+            {
+              question,
+              ...(context !== undefined ? { context } : {}),
+              ...(under !== undefined && !over ? { under } : {}),
+              ...(over ? { projection: rowsProjection(over.shape), shape: over.shape } : {}),
+            },
             { maxTurns: exploreMaxTurns(), maxWallSecs: exploreMaxWallSecs(), k: subagentK() },
           );
           let usage: string | undefined;
