@@ -100,6 +100,13 @@ export interface RetrievalAgentRequest {
    * ten of those whole per call cost more than the answer, exactly as they
    * would in a search. Absent, the chunks table's rule stands unchanged. */
   shape?: TableShape;
+  /** The hosted table the question is about - the one this client reads
+   * (`TABLE`). Sent as the platform's `table` field so the loop is shown that
+   * table's card alone. Unlike `under`, this one IS a filter on the platform:
+   * a database holding two code indexes and a jobs table answered every
+   * question about the second index from the first until the loop was told
+   * which table (2026-09-12). Absent, the loop sees every table's card. */
+  table?: string;
 }
 
 /** The `projection` field of a sub_agent request for `request`: the caller's
@@ -262,6 +269,7 @@ export async function runRetrievalAgent(
     ...factProjection(request),
     ...(budget.maxTurns !== undefined ? { max_turns: budget.maxTurns } : {}),
     max_wall_secs: budget.maxWallSecs,
+    ...(request.table !== undefined ? { table: request.table } : {}),
   });
   const run = retrievalAgentRunFrom(request.question, response, k, request.shape);
   return { ...run, result: scoped(run.result, under) };
@@ -286,6 +294,7 @@ export async function runExploreAgent(
     ...factProjection(request),
     ...(budget.maxTurns !== undefined ? { max_turns: budget.maxTurns } : {}),
     max_wall_secs: budget.maxWallSecs,
+    ...(request.table !== undefined ? { table: request.table } : {}),
   });
   const run = exploreRunFrom(request.question, response, k, request.shape);
   return { ...run, result: scoped(run.result, under) };

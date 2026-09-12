@@ -1560,6 +1560,11 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
               ...(context !== undefined ? { context } : {}),
               ...(under !== undefined && !over ? { under } : {}),
               ...(over ? { projection: rowsProjection(over.shape), shape: over.shape } : {}),
+              // The table this client reads, in either mode: the database can
+              // hold several and the loop, shown all of them, does not always
+              // pick this one (measured 2026-09-12: two code indexes, and every
+              // ask about the second was answered from the first).
+              table: TABLE,
             },
             { maxTurns: subagentMaxTurns(), maxWallSecs: subagentMaxWallSecs(), k: subagentK() },
           );
@@ -1659,6 +1664,8 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
               ...(context !== undefined ? { context } : {}),
               ...(under !== undefined && !over ? { under } : {}),
               ...(over ? { projection: rowsProjection(over.shape), shape: over.shape } : {}),
+              // The table this client reads, for the reason ask gives it.
+              table: TABLE,
             },
             { maxTurns: exploreMaxTurns(), maxWallSecs: exploreMaxWallSecs(), k: subagentK() },
           );

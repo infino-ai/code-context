@@ -588,6 +588,11 @@ export class HostedDb {
     max_turns?: number;
     max_wall_secs?: number;
     include_transcript?: boolean;
+    /** The one table the question is about. The database holds several and
+     * the loop, shown every table's card, picks - and on a database with two
+     * code indexes it picked the wrong one for every question about the
+     * other (2026-09-12). Named, the loop sees that table's card alone. */
+    table?: string;
   }): Promise<RowRecord> {
     // Only the fields given are sent: the request type rejects unknown keys and
     // defaults the rest itself.
@@ -599,6 +604,7 @@ export class HostedDb {
     if (req.max_turns !== undefined) body.max_turns = req.max_turns;
     if (req.max_wall_secs !== undefined) body.max_wall_secs = req.max_wall_secs;
     if (req.include_transcript !== undefined) body.include_transcript = req.include_transcript;
+    if (req.table !== undefined) body.table = req.table;
     const timeoutMs =
       req.max_wall_secs !== undefined ? (req.max_wall_secs + ASK_TIMEOUT_MARGIN_SECS) * MS_PER_SEC : this.timeoutMs;
     const exchange = await this.call({

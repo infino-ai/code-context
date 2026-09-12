@@ -538,6 +538,19 @@ describe("a question scoped to a subtree", () => {
     ]);
   });
 
+  it("names the table the question is about as the platform's `table` field, on both modes, and sends none when the request names none", async () => {
+    // Unlike `under`, this is a filter the platform applies: the loop is shown
+    // that table's card alone. On a database holding two code indexes the
+    // unscoped loop answered every question about one from the other.
+    const hosted = recorder();
+    await runRetrievalAgent(hosted, { question: "q", table: "chunks_opensearch" }, { maxWallSecs: 90 });
+    await runExploreAgent(hosted, { question: "q", table: "chunks_opensearch" }, { maxWallSecs: 300 });
+    await runRetrievalAgent(hosted, { question: "q" }, { maxWallSecs: 90 });
+    expect(hosted.sent[0]).toMatchObject({ table: "chunks_opensearch" });
+    expect(hosted.sent[1]).toMatchObject({ table: "chunks_opensearch", mode: "explore" });
+    expect(hosted.sent[2]).not.toHaveProperty("table");
+  });
+
   it("sends no context at all when the call names no scope", async () => {
     const hosted = recorder();
     const { result } = await runRetrievalAgent(hosted, { question: "q" }, { maxWallSecs: 90 });
