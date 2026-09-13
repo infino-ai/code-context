@@ -1046,7 +1046,7 @@ test("readGrades maps the verdict back onto the arms and refuses a half verdict"
   const text =
     "I checked both files.\n" +
     JSON.stringify({ grades: { 1: "B", 2: "A", 3: "F" }, unsupported: { 1: 1, 2: 0, 3: 0 }, reasons: { 1: "handle.rs holds the handle, the swap is in commit.rs", 2: "exact", 3: "no answer" } });
-  const grades = readGrades(text, labelled);
+  const { grades } = readGrades(text, labelled);
   assert.deepEqual(
     grades.map((g) => [g.arm, g.grade, g.unsupported]),
     [["grep", "B", 1], ["index", "A", 0], ["subagents", "F", 0]],
@@ -1058,12 +1058,21 @@ test("readGrades maps the verdict back onto the arms and refuses a half verdict"
   const spelled = readGrades(
     JSON.stringify({ grades: { "Answer 1": "C", "answer 2": "A", " Answer 3 ": "F" }, unsupported: { "Answer 1": 2 }, reasons: { "Answer 2": "exact" } }),
     labelled,
-  );
+  ).grades;
   assert.deepEqual(spelled.map((g) => [g.arm, g.grade, g.unsupported, g.reason]), [["grep", "C", 2, null], ["index", "A", null, "exact"], ["subagents", "F", null, null]]);
-  // A grade outside the rubric, or a missing label, is no verdict at all.
-  assert.equal(readGrades(JSON.stringify({ grades: { 1: "A+", 2: "A", 3: "F" } }), labelled), null);
-  assert.equal(readGrades(JSON.stringify({ grades: { 1: "A", 2: "A" } }), labelled), null);
-  assert.equal(readGrades("no json here", labelled), null);
+  // A grade outside the rubric, or a missing label, is no verdict at all -
+  // and each refusal SAYS which it was, because on the page they read
+  // identically and a reader (and I) could not tell a malformed verdict from
+  // an answer the judge simply skipped.
+  const bad = readGrades(JSON.stringify({ grades: { 1: "A+", 2: "A", 3: "F" } }), labelled);
+  assert.equal(bad.grades, undefined);
+  assert.match(bad.error, /graded answer 1 "A\+"/);
+  const short = readGrades(JSON.stringify({ grades: { 1: "A", 2: "A" } }), labelled);
+  assert.equal(short.grades, undefined);
+  assert.match(short.error, /but not answer 3/);
+  const none = readGrades("no json here", labelled);
+  assert.equal(none.grades, undefined);
+  assert.match(none.error, /without a JSON verdict/);
   // parseVerdict takes the LAST object, outermost: the judge's working may
   // hold braces, and the verdict itself is nested.
   assert.deepEqual(parseVerdict('{"draft":1} then {"grades":{"1":"A"}}'), { grades: { 1: "A" } });

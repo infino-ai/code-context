@@ -96,19 +96,38 @@ export function gradingPrompt(question, labelled, rows = new Map()) {
   return `Question:\n${question}\n\n${blocks.join("\n\n")}\n\nVerify the claims against the repository, then give the JSON verdict.`;
 }
 
-/** The verdict mapped back onto the arms: one grade per arm, or null when
- * the text carries no verdict, a label is missing, or a grade is not one of
- * ours - a half-read verdict would show a grade the judge did not give. */
+/** The verdict mapped back onto the arms: `{grades}` with one grade per arm,
+ * or `{error}` saying which way it failed - the text carried no JSON verdict,
+ * an answer went ungraded, or a grade was not one of ours. A half-read
+ * verdict would show a grade the judge did not give, so any of the three
+ * refuses the whole thing.
+ *
+ * The three used to return a bare `null` alike, and the caller turned every
+ * one of them into "no verdict in: <the last 200 characters>". That reads as
+ * "the judge wrote nothing usable" whatever happened, and the 200 characters
+ * are the END of a verdict a thousand characters long - so a run that failed
+ * because one answer went ungraded looked exactly like a run whose JSON was
+ * malformed, and neither could be told from the page (2026-09-13: three
+ * arms, all "unjudged", no way to say why). */
 export function readGrades(text, labelled) {
   const v = parseVerdict(text);
-  if (!v || typeof v.grades !== "object" || v.grades === null) return null;
+  if (!v || typeof v.grades !== "object" || v.grades === null) {
+    return { error: "the judge's reply ended without a JSON verdict this page could parse" };
+  }
   const graded = byLabel(v.grades);
   const unsupportedBy = byLabel(v.unsupported);
   const reasons = byLabel(v.reasons);
   const grades = [];
   for (const { label, result } of labelled) {
     const grade = graded.get(label);
-    if (!GRADES.includes(grade)) return null;
+    if (!GRADES.includes(grade)) {
+      return {
+        error:
+          grade === undefined
+            ? `the judge graded ${[...graded.keys()].join(", ") || "nothing"} but not answer ${label}`
+            : `the judge graded answer ${label} "${grade}", which is not one of ${GRADES.join(", ")}`,
+      };
+    }
     const unsupported = Number(unsupportedBy.get(label));
     const reason = reasons.get(label);
     grades.push({
@@ -119,7 +138,7 @@ export function readGrades(text, labelled) {
       reason: typeof reason === "string" ? reason : null,
     });
   }
-  return grades;
+  return { grades };
 }
 
 /** Grade every arm's answer to `question`. Returns the grades in the arms'
@@ -158,11 +177,19 @@ export async function judgeArms({
     // looks finished while a strong model works reads as a hung one.
     onEvent,
   });
-  const byArm = run.error ? null : readGrades(run.text, labelled);
+  const read = run.error ? null : readGrades(run.text, labelled);
+  const byArm = read?.grades ?? null;
   const grades = byArm ? results.map((r) => byArm.find((g) => g.arm === r.arm)) : null;
   const noVerdict = run.hitTurnCap
     ? `the judge reached its ${maxTurns}-turn cap before writing a verdict`
-    : `no verdict in: ${run.text.slice(-200)}`;
+    : (read?.error ?? "the judge produced no text");
+  // The whole reply, to this process's log and never to the page: a verdict
+  // that could not be read is only diagnosable from what the judge actually
+  // wrote, and the page's one-line reason cannot carry a thousand characters
+  // of it. Logged on failure alone, so an ordinary run stays quiet.
+  if (!grades && !run.error && run.text) {
+    console.warn(`judge verdict unreadable (${noVerdict}); its whole reply follows:\n${run.text}`);
+  }
   return {
     model: run.model,
     grades,
