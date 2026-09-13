@@ -277,7 +277,12 @@
      happen, and the switch only reveals the third. */
   .arms.no-third .arm[data-arm="index"], .headline.no-third .hgroup.index { display: none; }
   .arm { background: var(--panel); border: 1px solid var(--rule); border-radius: var(--r); padding: 16px 18px 18px; }
-  .arm h2 { font-size: 13px; font-weight: 500; margin: 0 0 2px; }
+  /* The panel's title is what the whole page is comparing — "Opus + File
+     Tools" against "Opus + Infino Subagents" — and at the body's own 13px it
+     read as a caption on the bar rather than as the name of the thing being
+     measured. It is the one line a reader has to get right, so it is set
+     above every other label in the panel. */
+  .arm h2 { font-size: 17px; font-weight: 600; margin: 0 0 6px; letter-spacing: -0.01em; line-height: 26px; }
   /* A panel before any run: the same frame, set back, holding the one line
      that says what this arm will do. It is plainly empty — an empty track and
      grey text — so nothing on it can be mistaken for a result, and the page
@@ -287,7 +292,9 @@
   .arm.resting .track { opacity: .5; }
   .arm.resting .waiting { margin: 10px 0 0; font-size: 11.5px; color: var(--faint); }
   .lane { color: var(--faint); font-size: 11.5px; margin: 0 0 14px; }
-  .clock { float: right; font-variant-numeric: tabular-nums; color: var(--soft); font-size: 12px; }
+  /* Both floats share the title's line box (26px) so they sit on its line
+     rather than riding up to the top of it now that it is the taller text. */
+  .clock { float: right; font-variant-numeric: tabular-nums; color: var(--soft); font-size: 12px; line-height: 26px; }
   .track { height: 26px; background: var(--ground); border: 1px solid var(--rule); display: flex; overflow: hidden; border-radius: 999px; }
   .seg { height: 100%; transition: width .12s linear; }
   .seg.model { background: var(--model); }
@@ -303,7 +310,7 @@
   }
   @keyframes sweep { from { background-position: -140px 0; } to { background-position: calc(100% + 140px) 0; } }
   .now { margin-top: 7px; font-size: 11.5px; color: var(--faint); font-variant-numeric: tabular-nums; min-height: 1.3em; }
-  .count { float: right; margin-right: 12px; font-size: 12px; color: var(--faint); font-variant-numeric: tabular-nums; }
+  .count { float: right; margin-right: 12px; font-size: 12px; color: var(--faint); font-variant-numeric: tabular-nums; line-height: 26px; }
   /* Every tool call as it happens, newest last. Capped in height so a
      sixty-call grep run scrolls instead of pushing the numbers off screen. */
   .feed { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 4px; max-height: 96px; overflow-y: auto; }
@@ -367,7 +374,14 @@
 /* The judge's grade above each answer: the letter, what it means, the
    one-line reason. Colour says the grade; the words say why. */
 .judge { display: flex; flex-wrap: wrap; gap: .4rem .7rem; align-items: baseline; margin: .9rem 0 .4rem; padding: .55rem .75rem; border-left: 4px solid var(--faint); border-radius: var(--r-sm); background: var(--judge-bg); font-size: .9rem; }
-.judge.pending { color: var(--faint); font-style: italic; }
+/* The placeholder above each answer used to sit perfectly still for the whole
+   half-minute of grading — three static lines saying "grading this answer…"
+   while nothing on the page moved, which is most of why a working judge read
+   as a hung one. It breathes instead. Gentler than the status dot's pulse,
+   which drops to .2 and would make text flicker rather than wait. */
+.judge.pending { color: var(--faint); font-style: italic; animation: breathe 1.8s ease-in-out infinite; }
+@keyframes breathe { 0%, 100% { opacity: 1; } 50% { opacity: .45; } }
+@media (prefers-reduced-motion: reduce) { .judge.pending { animation: none; } }
 .judge .grade { font-size: 1.25rem; font-weight: 700; letter-spacing: .02em; min-width: 1.4rem; }
 .judge .meaning { color: var(--faint); }
 .judge .reason { flex-basis: 100%; }
@@ -433,10 +447,13 @@
     <!-- What to expect, in the space under the box where a reader's eye
          already is before they ask. It is here rather than in a footnote
          because it is the honest frame for every number below it: the gap
-         is not a constant, it is a property of the question, and a reader
-         who learns that from a footnote has already read one run as the
-         whole claim. The owner's words, 2026-09-13. -->
-    <p class="expect">You will see larger performance improvement between when frontier models use their own agents and when they use Infino Subagents on exploratory questions or on private data. On simple file lookups or open source code bases that the frontier model has already been trained on, the performance difference will typically be less.</p>
+         is not a constant, it is a property of the corpus, and a reader who
+         learns that from a footnote has already read one run as the whole
+         claim. It opens by asking the reader to try more than one corpus,
+         because the selector beside it is what settles the question and a
+         run they can make beats a prediction they cannot check. The owner's
+         words, 2026-09-13. -->
+    <p class="expect">Try Infino on different corpora. On simple greps or open source code bases on which a frontier model has already been trained, the performance impact may be less.</p>
   </div>
 
   <aside class="corpus-card" id="corpus-panel">
@@ -1280,10 +1297,19 @@ form.onsubmit = (e) => {
   function drawJudging() {
     if (!judging) return;
     const secs = ((performance.now() - judging.at) / 1000).toFixed(0);
-    const doing = judging.checks
-      ? `${judging.checks} check${judging.checks === 1 ? "" : "s"}`
-      : "reading the answers";
-    setStatus("judging", `Grading — ${doing}, ${secs}s.`);
+    // A count with no end to it is why this read as stuck: "7 checks, 29s"
+    // could equally be a judge working and a judge hung, and a reader has no
+    // way to tell which. The cap is known (`maxChecks`, sent when grading
+    // begins) so the count gets a denominator — "up to", because the judge
+    // normally finishes well short of it and a bare "7 of 43" would promise a
+    // wait that is not coming.
+    const of = judging.maxChecks ? ` of up to ${judging.maxChecks}` : "";
+    const doing = judging.checks ? `check ${judging.checks}${of}` : "reading the answers";
+    // What it is checking RIGHT NOW. The event has carried the tool name all
+    // along and the page discarded it, which left the clock as the only thing
+    // that moved — one digit a second, in a line of static text.
+    const at = judging.tool ? ` · ${judging.tool}` : "";
+    setStatus("judging", `Grading — ${doing}${at} · ${secs}s`);
   }
 
   /** Stop the clock; called when the verdict lands or the run ends. */
