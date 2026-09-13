@@ -158,6 +158,15 @@
      not a note about it: a corpus whose hosted table is incomplete runs
      fewer arms, and a reader must not read that as the product. */
   .corpus-note { color: var(--warn); font-size: 12px; margin: 0 0 10px; }
+  /* What to expect, filling the space the form leaves under it. Its box is
+     bounded rather than the paragraph inside it: at 2,000px the column is
+     1,500px wide, and a sentence that wraps at 60% of a visibly wider box
+     reads as random newlines. Bounded, the text fills its own width and the
+     narrowness reads as a column rather than as broken wrapping. */
+  .expect {
+    max-width: 88ch; margin: 16px 0 0; color: var(--soft); font-size: 12.5px; line-height: 1.65;
+    border-left: 2px solid var(--rule); padding-left: 13px;
+  }
   /* The starters are a control in the form's own row, not a band of chips
      under it: five eighty-character questions cannot be chips, and as chips
      they wrapped to two rows and were cut mid-word into five that all began
@@ -416,6 +425,17 @@
       <button type="submit" id="go">Run</button>
     </form>
     <p class="corpus-note" id="corpus-note" hidden></p>
+    <!-- What to expect, in the space under the box where a reader's eye
+         already is before they ask. It is here rather than in a footnote
+         because it is the honest frame for every number below it: the gap
+         is not a constant, it is a property of the question, and a reader
+         who learns that from a footnote has already read one run as the
+         whole claim. The owner's words, 2026-09-13. -->
+    <p class="expect">
+      You will see larger performance improvement between frontier models and Infino Subagents on
+      exploratory questions or on private data. On simple file lookups or open source code bases the
+      frontier model already knows, the performance difference will typically be less.
+    </p>
   </div>
 
   <aside class="corpus-card" id="corpus-panel">
