@@ -1144,7 +1144,13 @@ form.onsubmit = (e) => {
     for (const arm of arms.values()) arm.startedAt = performance.now();
     // No run number: this page is reachable by anyone the tailnet lets in,
     // and how many runs the box has served is our business, not a reader's.
-    setStatus("running", "Running — tens of seconds; the File Tools arm can take minutes.");
+    //
+    // No per-arm timing either. Saying "tens of seconds; the File Tools arm
+    // can take minutes" put our result in the sentence that asks a reader to
+    // wait: it predicts the outcome before the run has produced one, and on
+    // a question where the arms come out level it reads as a claim the page
+    // then fails to make. The wait is the only thing this line is for.
+    setStatus("running", "Please be patient. A single question can take minutes for Claude to resolve.");
   });
 
   /** Move the bar to where this event puts it. Only calls the CALLER made
