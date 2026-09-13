@@ -235,6 +235,26 @@
   .status .g.grade-A { color: var(--grade-a); } .status .g.grade-B { color: var(--grade-b); }
   .status .g.grade-C { color: var(--grade-c); } .status .g.grade-F { color: var(--grade-f); }
   .status .meta { color: var(--faint); }
+  /* The judge's workings, behind a disclosure in the strip itself: the
+     verdict is one line, and how it was reached is there for a reader who
+     wants it and out of the way of one who does not. */
+  .status .judge-more { color: var(--faint); }
+  .status .judge-more > summary { cursor: pointer; list-style: none; }
+  .status .judge-more > summary::-webkit-details-marker { display: none; }
+  .status .judge-more > summary::after { content: " ▸"; }
+  .status .judge-more[open] > summary::after { content: " ▾"; }
+  .status .judge-more > summary:hover { color: var(--ink); }
+  .status .judge-more > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 4px; }
+  .status .judge-more p { margin: 8px 0 0; max-width: 90ch; }
+  .status .judge-more .why b { font-weight: 600; }
+  .status .judge-more .why b.grade-A { color: var(--grade-a); } .status .judge-more .why b.grade-B { color: var(--grade-b); }
+  .status .judge-more .why b.grade-C { color: var(--grade-c); } .status .judge-more .why b.grade-F { color: var(--grade-f); }
+  /* The one paragraph that must not read as fine print: it is the page's
+     own claim about what the grade is worth. */
+  .status .judge-more .caveat { color: var(--soft); border-top: 1px solid var(--rule); padding-top: 8px; }
+  /* The verdict line wraps above its own disclosure rather than beside it. */
+  .status[data-state="judged"] { display: block; }
+  .status[data-state="judged"] .dot { display: inline-block; margin-right: 8px; }
   .arms { display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); gap: 16px; }
   /* The third arm is off by default: the pair a reader came to compare is
      grep against the index, and a third panel competing with it is the first
@@ -1221,23 +1241,21 @@ form.onsubmit = (e) => {
     drawJudging();
   });
 
-  /** The grading strip as it stands right now: the model and what it is
-   * doing, then the elapsed seconds and how many checks it has made - the
-   * two numbers that say it is moving. */
+  /** The grading, on one quiet line: it is moving, and how far.
+   *
+   * It used to be the loudest thing on the page — a bold sentence naming the
+   * model and what it was doing. The owner, 2026-09-13: "let's not make such
+   * a big deal about the judges". It is a second model's opinion, and both
+   * answers are already on screen for a reader to compare; the clock and the
+   * count are here only so a page that is still working does not read as a
+   * hung one, which is what the loud version was for. */
   function drawJudging() {
     if (!judging) return;
     const secs = ((performance.now() - judging.at) / 1000).toFixed(0);
-    const of = judging.maxChecks ? ` of up to ${judging.maxChecks}` : "";
     const doing = judging.checks
-      ? `<b>${judging.checks}</b> check${judging.checks === 1 ? "" : "s"}${of}`
+      ? `${judging.checks} check${judging.checks === 1 ? "" : "s"}`
       : "reading the answers";
-    setStatus(
-      "judging",
-      `<b>Grading accuracy — ${escapeHtml(judging.model)} is checking every claim against the corpus</b>, ` +
-        `blind to which arm wrote which answer. ` +
-        `<span class="meta">${doing} · <b>${secs}s</b> · its cost is the measurement's, not any arm's.</span>`,
-      true,
-    );
+    setStatus("judging", `Grading — ${doing}, ${secs}s.`);
   }
 
   /** Stop the clock; called when the verdict lands or the run ends. */
@@ -1263,6 +1281,10 @@ form.onsubmit = (e) => {
       return;
     }
     stopJudging();
+    // Above each answer, the letter and what it means — and nothing more.
+    // The judge's prose about that answer moves into the strip's own
+    // dropdown, so a panel carries its arm's result and not an argument
+    // about it.
     for (const g of v.grades) {
       const arm = arms.get(g.arm);
       if (!arm) continue;
@@ -1272,26 +1294,48 @@ form.onsubmit = (e) => {
       el.innerHTML =
         `<b class="grade">${g.grade}</b>` +
         `<span class="meaning">${escapeHtml(GRADE_MEANING[g.grade] ?? "")}` +
-        `${g.unsupported !== null && g.unsupported !== undefined ? ` · ${g.unsupported} unsupported claim${g.unsupported === 1 ? "" : "s"}` : ""}</span>` +
-        `${g.reason ? `<span class="reason">${linkify(g.reason)}</span>` : ""}`;
+        `${g.unsupported !== null && g.unsupported !== undefined ? ` · ${g.unsupported} unsupported claim${g.unsupported === 1 ? "" : "s"}` : ""}</span>`;
     }
     // The three grades in the colours the per-answer verdicts use, so the
-    // strip and the panels below read as one verdict rather than two.
+    // strip and the panels below read as one verdict rather than two. The
+    // arm's own name only: the family prefix is in the title already.
     const line = v.grades
       .map(
         (g) =>
-          `<span class="g grade-${g.grade}">${escapeHtml(g.label.replace(/^Sonnet \+ /, ""))} ` +
+          `<span class="g grade-${g.grade}">${escapeHtml(g.label.replace(/^\w+ \+ /, ""))} ` +
           `<span class="letter">${g.grade}</span></span>`,
       )
       .join("");
-    const cost = v.costUsd !== null && v.costUsd !== undefined ? ` · $${v.costUsd.toFixed(2)}` : "";
+    const cost = v.costUsd !== null && v.costUsd !== undefined ? `, $${v.costUsd.toFixed(2)}` : "";
     // A verdict given at the turn budget is a verdict on what was checked;
     // the reader is told the checking stopped there.
-    const capped = v.hitTurnCap ? " · graded at the turn budget, some claims unchecked" : "";
+    const capped = v.hitTurnCap ? ", stopped at its turn budget with some claims unchecked" : "";
+    const reasons = v.grades
+      .filter((g) => g.reason)
+      .map(
+        (g) =>
+          `<p class="why"><b class="grade-${g.grade}">${escapeHtml(g.label)} — ${g.grade}</b> ` +
+          `${linkify(g.reason)}</p>`,
+      )
+      .join("");
+    // The verdict in the strip, its workings behind a dropdown. The
+    // disclaimer is not a hedge: the judge is one more model with an opinion,
+    // it does not give the same verdict twice on the same pair, and the thing
+    // that settles it — both answers, with their citations — is on the page.
+    // The owner, 2026-09-13: "the judge itself is unstable and we literally
+    // show the results that people can compare themselves".
     setStatus(
       "judged",
-      `<b>Accuracy by ${escapeHtml(judge)}</b>, blind and verified: <span class="grades">${line}</span> ` +
-        `<span class="meta">(${v.toolCalls} checks${cost}, ${(v.wallMs / 1000).toFixed(0)}s${capped})</span>`,
+      `<span class="grades">${line}</span>` +
+        `<details class="judge-more"><summary>how this was graded</summary>` +
+        `<p>${escapeHtml(judge)} read all ${v.grades.length} answers without being told which arm wrote which, ` +
+        `and checked their claims against the corpus: ${v.toolCalls} checks in ` +
+        `${(v.wallMs / 1000).toFixed(0)}s${cost}${capped}. Its cost is the measurement's, not any arm's.</p>` +
+        reasons +
+        `<p class="caveat">Treat this as a second opinion, not a verdict. One model grading another is ` +
+        `unstable — the same two answers can come back graded differently — and it is why both answers are ` +
+        `here in full, with the files and lines each one cites. Read them and decide for yourself.</p>` +
+        `</details>`,
       true,
     );
     stop();
