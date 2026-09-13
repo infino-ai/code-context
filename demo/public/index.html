@@ -366,7 +366,7 @@
   <h1><span class="prompt" aria-hidden="true">❯</span><span class="same">Claude <b class="fam">Sonnet</b> with</span> <b>File Tools</b><span class="vs">vs</span><span class="same">Claude <b class="fam">Sonnet</b> with</span> <b>Infino Subagents</b></h1>
   <!-- Both switches change how the page reads rather than what it runs, so
        they sit together, out of the reading order. -->
-  <label class="third" title="the third arm hands searches to a loop of ours; it runs either way, this only shows it">
+  <label class="third" title="show the third arm, which can also be asked in plain English; it runs either way, this only shows it">
     <input type="checkbox" id="show-third"> subagents
   </label>
   <button type="button" class="theme" id="theme" title="switch between the dark and light palette">☀ light</button>
@@ -413,10 +413,11 @@
            corpus that is records rather than a checkout sends its own
            (`how`), and describeCorpus swaps it in. -->
       <p id="how">
-        Every arm sees the same checkout. The File Tools arm reads it off disk with Grep, Glob and Read — what a
-        developer has today; the others query an Infino index of it — one with the caller driving retrieval
-        itself, one that can also hand a search to a loop of ours. Questions that make an agent sweep many files
-        are where they diverge; a question answered from a single named file usually comes out level.
+        All three see the same files and get the same question. File Tools opens them one by one, the way a
+        developer does today. The other two search the same files through two Infino indexes — an open-source
+        one on your own machine and one in the cloud — and Subagents adds asking in plain English. Questions
+        that send an agent across many files are where they come apart; one answered from a single named file
+        usually comes out level.
       </p>
       <p>All three arms answer the same question at once, and each panel settles the moment its own arm finishes.</p>
     </details>
@@ -629,10 +630,18 @@ function drawRestingArms(families) {
   armsEl.innerHTML = "";
   const family = modelEl.value || families?.[0] || "sonnet";
   const shown = `${family[0].toUpperCase()}${family.slice(1)}`;
+  // Written for a reader who has never seen this page, in their words rather
+  // than ours (the owner, 2026-09-13: "this is a public demo and need to be
+  // simple to understnad for humans"). Two things it must get right and used
+  // to get wrong: every Infino client searches BOTH indexes, the open-source
+  // one on your machine and the one in the cloud — not "an index" — and what
+  // subagents add is asking in plain English, which is what helps on an
+  // open-ended question. Nothing here about loops: "it's nothing of concern
+  // to the user".
   for (const arm of [
-    { id: "grep", tools: "File Tools", waiting: "reads the corpus off disk with Grep, Glob and Read" },
-    { id: "index", tools: "Infino", waiting: "queries an index of the same corpus, driving retrieval itself" },
-    { id: "subagents", tools: "Infino Subagents", waiting: "hands a question to a retrieval loop of ours" },
+    { id: "grep", tools: "File Tools", waiting: "opens the files one by one, the way a developer does today" },
+    { id: "index", tools: "Infino", waiting: "searches the same files through two indexes: one on your machine, one in the cloud" },
+    { id: "subagents", tools: "Infino Subagents", waiting: "the same two indexes, and you can ask in plain English — which is what open-ended questions need" },
   ]) {
     const el = document.createElement("section");
     el.className = "arm resting";
