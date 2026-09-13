@@ -265,11 +265,14 @@
   .status[data-state="judged"] { display: block; }
   .status[data-state="judged"] .dot { display: inline-block; margin-right: 8px; }
   .arms { display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); gap: 16px; }
-  /* The third arm is off by default: the pair a reader came to compare is
-     grep against the index, and a third panel competing with it is the first
-     thing that made the page dense. The run is unchanged - it still happens,
-     and the switch reveals it. */
-  .arms.no-third .arm[data-arm="subagents"], .headline.no-third .hgroup.subagents { display: none; }
+  /* The INDEX-ONLY arm is the optional one, off by default. The pair the page
+     names in its own title is File Tools against Infino Subagents, and that
+     is the pair a reader came to see; the middle arm — the index driven by
+     the caller itself, with no subagent — answers a narrower question about
+     where the value sits, and a third panel beside the pair is the first
+     thing that made the page dense. The run is unchanged: all three still
+     happen, and the switch only reveals the third. */
+  .arms.no-third .arm[data-arm="index"], .headline.no-third .hgroup.index { display: none; }
   .arm { background: var(--panel); border: 1px solid var(--rule); border-radius: var(--r); padding: 16px 18px 18px; }
   .arm h2 { font-size: 13px; font-weight: 500; margin: 0 0 2px; }
   /* A panel before any run: the same frame, set back, holding the one line
@@ -395,8 +398,8 @@
   <h1><span class="prompt" aria-hidden="true">❯</span><span class="same">Claude <b class="fam">Sonnet</b> with</span> <b>File Tools</b><span class="vs">vs</span><span class="same">Claude <b class="fam">Sonnet</b> with</span> <b>Infino Subagents</b></h1>
   <!-- Both switches change how the page reads rather than what it runs, so
        they sit together, out of the reading order. -->
-  <label class="third" title="show the third arm, which can also be asked in plain English; it runs either way, this only shows it">
-    <input type="checkbox" id="show-third"> subagents
+  <label class="third" title="show the middle arm: the same two indexes, driven by the caller itself with no subagent. It runs either way; this only shows it">
+    <input type="checkbox" id="show-third"> index only
   </label>
   <button type="button" class="theme" id="theme" title="switch between the dark and light palette">☀ light</button>
 </div>
@@ -1029,11 +1032,12 @@ function headlineGroup(base, r) {
   return group;
 }
 
-/** The third arm - the one that hands a search to a loop of ours - is off by
- * default. The comparison a reader came for is File Tools against Infino, and
- * a third panel beside it was the first thing that made the page dense. The arm
- * still RUNS either way: the switch reveals what already happened, so turning
- * it on mid-run shows a panel that has been filling all along.
+/** The INDEX-ONLY arm — the middle one, the same two indexes driven by the
+ * caller itself with no subagent — is off by default. The comparison a reader
+ * came for is the one the title names, File Tools against Infino Subagents,
+ * and a third panel beside it was the first thing that made the page dense.
+ * The arm still RUNS either way: the switch reveals what already happened, so
+ * turning it on mid-run shows a panel that has been filling all along.
  *
  * Deliberately NOT remembered per browser, unlike the theme: this was stored
  * once and a browser that had ever turned it on then opened every later run
@@ -1126,9 +1130,9 @@ form.onsubmit = (e) => {
       arm.startedAt = performance.now();
       arms.set(meta.id, arm);
     }
-    // A run without the index arm has the subagents arm as its only
-    // comparison, so the third-arm switch must not hide it.
-    if (!d.arms.some((a) => a.id === "index")) {
+    // A run without the subagents arm has the index arm as its only
+    // comparison against File Tools, so the switch must not hide it.
+    if (!d.arms.some((a) => a.id === "subagents")) {
       armsEl.classList.remove("no-third");
       headlineEl.classList.remove("no-third");
     }
