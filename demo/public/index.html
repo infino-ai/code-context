@@ -158,13 +158,14 @@
      not a note about it: a corpus whose hosted table is incomplete runs
      fewer arms, and a reader must not read that as the product. */
   .corpus-note { color: var(--warn); font-size: 12px; margin: 0 0 10px; }
-  /* What to expect, filling the space the form leaves under it. Its box is
-     bounded rather than the paragraph inside it: at 2,000px the column is
-     1,500px wide, and a sentence that wraps at 60% of a visibly wider box
-     reads as random newlines. Bounded, the text fills its own width and the
-     narrowness reads as a column rather than as broken wrapping. */
+  /* What to expect, filling the space the form leaves under it — and filling
+     it to the edge. No `max-width` here: a reading measure on the paragraph
+     breaks every line at some fraction of a visibly wider box, and the short
+     ragged lines read as newlines somebody typed rather than as prose (the
+     owner, twice: "make sure you don't add newlines prematurely"). The grid
+     column is the constraint; the text takes all of it. */
   .expect {
-    max-width: 88ch; margin: 16px 0 0; color: var(--soft); font-size: 12.5px; line-height: 1.65;
+    margin: 16px 0 0; color: var(--soft); font-size: 12.5px; line-height: 1.65;
     border-left: 2px solid var(--rule); padding-left: 13px;
   }
   /* The starters are a control in the form's own row, not a band of chips
@@ -254,7 +255,9 @@
   .status .judge-more[open] > summary::after { content: " ▾"; }
   .status .judge-more > summary:hover { color: var(--ink); }
   .status .judge-more > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 4px; }
-  .status .judge-more p { margin: 8px 0 0; max-width: 90ch; }
+  /* No reading measure here either: the strip is the container and the
+     paragraph takes all of it. See `.expect`. */
+  .status .judge-more p { margin: 8px 0 0; }
   .status .judge-more .why b { font-weight: 600; }
   .status .judge-more .why b.grade-A { color: var(--grade-a); } .status .judge-more .why b.grade-B { color: var(--grade-b); }
   .status .judge-more .why b.grade-C { color: var(--grade-c); } .status .judge-more .why b.grade-F { color: var(--grade-f); }
@@ -357,7 +360,6 @@
   .code .hit .ln { color: var(--accent); }
   .code .err { padding: 8px 10px; }
   .err { color: var(--warn); }
-  .note { margin-top: 26px; color: var(--faint); font-size: 11.5px; max-width: 70ch; }
   .fixture {
     background: var(--warn); color: #1a0c0c; padding: 8px 13px; margin-bottom: 16px;
     font-size: 12px; font-weight: 500; border-radius: var(--r-sm);
@@ -434,11 +436,7 @@
          is not a constant, it is a property of the question, and a reader
          who learns that from a footnote has already read one run as the
          whole claim. The owner's words, 2026-09-13. -->
-    <p class="expect">
-      You will see larger performance improvement between frontier models and Infino Subagents on
-      exploratory questions or on private data. On simple file lookups or open source code bases the
-      frontier model already knows, the performance difference will typically be less.
-    </p>
+    <p class="expect">You will see larger performance improvement between when frontier models use their own agents and when they use Infino Subagents on exploratory questions or on private data. On simple file lookups or open source code bases that the frontier model has already been trained on, the performance difference will typically be less.</p>
   </div>
 
   <aside class="corpus-card" id="corpus-panel">
