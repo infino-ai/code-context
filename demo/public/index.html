@@ -682,7 +682,7 @@ function drawRestingArms(families) {
   for (const arm of [
     { id: "grep", tools: "File Tools", waiting: "opens the files one by one, the way a developer does today" },
     { id: "index", tools: "Infino", waiting: "searches the same files through two indexes: one on your machine, one in the cloud" },
-    { id: "subagents", tools: "Infino Subagents", waiting: "the same two indexes, and you can ask in plain English — which is what open-ended questions need" },
+    { id: "subagents", tools: "Infino Subagents", waiting: "using Infino subagents + local index to answer the question" },
   ]) {
     const el = document.createElement("section");
     el.className = "arm resting";
