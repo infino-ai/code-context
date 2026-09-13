@@ -67,7 +67,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { DEFAULT_JUDGE_MODEL } from "../bench/judge-core.mjs";
-import { checkLaneEnv, dataSystemPrompt, hostedFlags, runLane, systemPrompt } from "../bench/lanes.mjs";
+import { callerModel, checkLaneEnv, dataSystemPrompt, hostedFlags, runLane, systemPrompt } from "../bench/lanes.mjs";
 // The resolver under a name no local shares: `const rates = resolveRates()` at the
 // rates endpoint shadowed the import and threw at boot (2026-09-12).
 import { armCost, ledgerMark, ledgerSince, rates as resolveRates } from "./charge.mjs";
@@ -86,10 +86,33 @@ const HERE = dirname(fileURLToPath(import.meta.url));
  * page's own rules - while the LABELS are what a reader sees and name the
  * products rather than the mechanism. */
 export const ARMS = [
-  { id: "grep", label: "Sonnet + File Tools", lane: "stock-explore", hosted: false },
-  { id: "index", label: "Sonnet + Infino", lane: "hosted-index", hosted: true },
-  { id: "subagents", label: "Sonnet + Infino Subagents", lane: "hosted-full-remote", hosted: true },
+  { id: "grep", tools: "File Tools", lane: "stock-explore", hosted: false },
+  { id: "index", tools: "Infino", lane: "hosted-index", hosted: true },
+  { id: "subagents", tools: "Infino Subagents", lane: "hosted-full-remote", hosted: true },
 ];
+
+/** The caller model families the page offers, cheapest first. The lane is
+ * identical across them - same tools, same prompt, same corpus - so a pair
+ * of runs that differ only here prices the model rather than the product,
+ * which is the comparison a reader who asks "does this still hold on a
+ * cheaper model?" is after. */
+export const FAMILIES = ["haiku", "sonnet", "opus"];
+/** The family a run uses when the page names none. */
+export const DEFAULT_FAMILY = "sonnet";
+
+/** The family name a reader asked for, or the default when they asked for
+ * nothing this server offers. Never an unchecked passthrough: an id the
+ * provider does not know 404s halfway into a paid run. */
+function familyFor(name) {
+  const asked = String(name ?? "").toLowerCase();
+  return FAMILIES.includes(asked) ? asked : DEFAULT_FAMILY;
+}
+
+/** An arm's label for one run: the family that drives it and the tools it
+ * drives. The model is half the claim on this page - the same Claude on
+ * both sides, different tools - so it is named, and it moves with the
+ * selector rather than staying frozen at "Sonnet". */
+const armLabel = (arm, family) => `${family[0].toUpperCase()}${family.slice(1)} + ${arm.tools}`;
 
 /** The job-postings corpus on disk: the same rows the hosted table holds, as
  * NDJSON the file-tools arm can grep (see its CLAUDE.md for the layout). */
@@ -239,11 +262,15 @@ function corpusFor(id) {
  * grep arm only: the index arms would answer from a fraction of it and look
  * like a fair comparison, which is worse than not running them. A corpus may
  * also name its arms (`arms`) and give an arm a different lane (`lanes`). */
-function armsFor(corpus) {
+function armsFor(corpus, family = DEFAULT_FAMILY) {
   const ready = corpus.ready ? ARMS : ARMS.filter((arm) => !arm.hosted);
   return ready
     .filter((arm) => !corpus.arms || corpus.arms.includes(arm.id))
-    .map((arm) => (corpus.lanes?.[arm.id] ? { ...arm, lane: corpus.lanes[arm.id] } : arm));
+    .map((arm) => ({
+      ...arm,
+      label: armLabel(arm, family),
+      ...(corpus.lanes?.[arm.id] ? { lane: corpus.lanes[arm.id] } : {}),
+    }));
 }
 
 /** Longest question accepted. A question is a prompt to an agent holding Bash
@@ -362,7 +389,7 @@ function callerTokens(row) {
  * `open` tracks the calls in flight so the bar knows what colour its growing
  * edge is right now - which is the whole difference between a bar that fills
  * live and one that appears at the end. */
-async function runArm(arm, corpus, question, emit, runId) {
+async function runArm(arm, corpus, question, emit, runId, model) {
   // The fixture path answers nothing and spends nothing; it exists so the page
   // can be worked on without a model. It returns a row of the same shape, and
   // the split below is computed by the same code, so what it exercises is the
@@ -398,6 +425,7 @@ async function runArm(arm, corpus, question, emit, runId) {
 
   const row = await runLane({
     lane: arm.lane,
+    model,
     prompt: question,
     // A data corpus carries its own prompt (records, not a checkout); a code
     // corpus gets the bench's, so its runs stay comparable with the runner's.
@@ -491,7 +519,9 @@ async function handleRun(req, res, url) {
   if (!question) return refuse(res, "ask a question: /run?q=...");
   if (question.length > MAX_QUESTION_CHARS) return refuse(res, `question over ${MAX_QUESTION_CHARS} characters`);
   const corpus = corpusFor(url.searchParams.get("corpus"));
-  const arms = armsFor(corpus);
+  const family = familyFor(url.searchParams.get("model"));
+  const model = callerModel(family);
+  const arms = armsFor(corpus, family);
 
   res.writeHead(200, {
     "content-type": "text/event-stream",
@@ -518,6 +548,9 @@ async function handleRun(req, res, url) {
   send(res, "queued", {
     arms: arms.map(({ id, label, lane }) => ({ id, label, lane })),
     question,
+    // The family drives both sides, so the page can put it in the title and
+    // a reader can see which model the figures below are about.
+    family,
     corpus: { id: corpus.id, label: corpus.label, ready: corpus.ready, note: corpus.note ?? null },
     fixture: isFixture(),
     judge: judgeOn ? DEFAULT_JUDGE_MODEL : null,
@@ -529,7 +562,7 @@ async function handleRun(req, res, url) {
   const rows = new Map();
   const runId = (runsServed += 1);
   try {
-    send(res, "started", { question, run: runId });
+    send(res, "started", { question, run: runId, family });
     // Each arm reports the instant it finishes, in its own `arm_done` frame.
     // The claim of the page is that one arm gets there first, so holding the
     // faster arm's numbers back until the slower one lands hides the only
@@ -537,7 +570,7 @@ async function handleRun(req, res, url) {
     // which makes the fast arm look exactly as slow as the slow one.
     results = await Promise.all(
       arms.map(async (arm) => {
-        const { result, row } = await runArm(arm, corpus, question, guarded, runId);
+        const { result, row } = await runArm(arm, corpus, question, guarded, runId, model);
         rows.set(arm.id, row);
         guarded({ ...result, kind: "arm_done" });
         return result;
@@ -770,6 +803,10 @@ const server = createServer(async (req, res) => {
         chosen: chosen.id,
         ready: chosen.ready,
         note: chosen.note ?? null,
+        // The caller models on offer, so the page's selector is this server's
+        // list rather than a second copy of it that can drift.
+        families: FAMILIES,
+        family: DEFAULT_FAMILY,
         // The starters belong to the corpus: infino's name its subsystems,
         // OpenSearch's name its own, and neither set means anything against
         // the other repository.

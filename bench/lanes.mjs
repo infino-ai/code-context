@@ -20,6 +20,25 @@ export const CX = process.env.CX_BENCH_CLI ? resolve(process.env.CX_BENCH_CLI) :
 export const BUILD = process.env.CX_BENCH_BUILD ?? null;
 export const MODEL = process.env.BENCH_MODEL ?? "claude-sonnet-4-6";
 
+/** The caller models a run may be asked on, by the short family name a
+ * reader knows them by. A lane's own shape never changes with the model:
+ * the same tools, the same prompt, the same corpus — so a pair of runs that
+ * differ only here prices the model, which is the one comparison the ladder
+ * of families is good for. `BENCH_MODEL` still names the default for a run
+ * that asks for none. */
+export const CALLER_MODELS = {
+  haiku: "claude-haiku-4-5-20251001",
+  sonnet: "claude-sonnet-4-6",
+  opus: "claude-opus-5",
+};
+
+/** The model id for a family name, or null when the name is not one of
+ * ours. A caller-supplied name is checked here rather than passed through:
+ * an unknown id reaches the provider as a 404 halfway into a paid run. */
+export function callerModel(name) {
+  return CALLER_MODELS[String(name ?? "").toLowerCase()] ?? null;
+}
+
 /** The built-in tool set of real Claude Code (Bash included, since a real
  * client has it). Every lane but `cx` gets exactly this. */
 const STOCK_TOOLS = ["Glob", "Grep", "Read", "LS", "Bash"];
@@ -934,8 +953,23 @@ export const dataSystemPrompt = (dir, subject) =>
  * run spawns, and nothing else: it exists so a caller running several
  * conversations AT ONCE can give each one its own `CX_TABLE` without writing
  * to `process.env`, which is one variable shared by every concurrent run. The
- * runner passes none and is unchanged. */
-export async function runLane({ lane, prompt, system, repoDir, indexDir, maxTurns = SESSION_MAX_TURNS, onEvent, serverEnv }) {
+ * runner passes none and is unchanged.
+ *
+ * `model` is the caller model for this run alone, for the same reason:
+ * `BENCH_MODEL` is read once at import and is the default, so a caller that
+ * wants a run on another family says so here rather than reaching for the
+ * process's environment. */
+export async function runLane({
+  lane,
+  prompt,
+  system,
+  repoDir,
+  indexDir,
+  maxTurns = SESSION_MAX_TURNS,
+  onEvent,
+  serverEnv,
+  model = MODEL,
+}) {
   const t0 = performance.now();
   const acc = newToolAccounting();
   const emit = onEvent
@@ -957,7 +991,7 @@ export async function runLane({ lane, prompt, system, repoDir, indexDir, maxTurn
     for await (const m of query({
       prompt,
       options: {
-        model: MODEL,
+        model,
         maxTurns,
         // A bare string here is a CUSTOM prompt: the SDK drops Claude Code's
         // default system prompt entirely, and with it Claude Code's guidance
@@ -1023,7 +1057,10 @@ export async function runLane({ lane, prompt, system, repoDir, indexDir, maxTurn
     lane,
     laneKind: laneDef(lane).kind,
     dbHost: dbHost(lane),
-    model: MODEL,
+    // The model this run was actually asked on, not the process default: a
+    // row recording `BENCH_MODEL` while the call went to another family
+    // would make every later comparison read the wrong way round.
+    model,
     build: BUILD,
     cli: CX,
     tokens,

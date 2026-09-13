@@ -60,6 +60,10 @@
      open whether Infino was a model. */
   h1 .same { color: var(--faint); }
   h1 b { color: var(--ink); font-weight: 500; }
+  /* The family inside the set-back half: brighter than the words around it,
+     because it is the one part of "Claude ___ with" the reader chose, and
+     dimmer than the tools, which are what the page compares. */
+  h1 .same .fam { color: var(--soft); font-weight: 500; }
   h1 .vs { color: var(--faint); margin: 0 .45em; }
   .theme {
     background: transparent; color: var(--faint); border: 1px solid var(--rule); padding: 3px 11px;
@@ -126,10 +130,30 @@
   .corpus-card .more p { margin: 9px 0 0; }
   .subsystems { color: var(--faint); }
   .subsystems code { color: var(--soft); }
+  /* The selects, drawn rather than inherited. A native select renders the
+     host OS's own control — on this box a grey bevelled box with a 3D arrow,
+     which is a Windows 95 widget sitting in a 2026 page (the owner,
+     2026-09-13: "your drop down boxes are old school 90s windows"). They
+     stay real `<select>` elements — a listbox is the one control a browser
+     does better than any div, on touch, with a keyboard, and with a screen
+     reader — and `appearance: none` takes only the chrome, leaving the
+     behaviour. The caret is one inline SVG in the background, tinted by
+     `--faint`, so it follows the theme like every other mark on the page. */
   select {
-    background: var(--panel); color: var(--ink); border: 1px solid var(--rule);
-    padding: 10px 13px; font: inherit; border-radius: var(--r-sm);
+    appearance: none; -webkit-appearance: none;
+    background-color: var(--panel); color: var(--ink);
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23888f9a' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat; background-position: right 12px center; background-size: 10px 6px;
+    border: 1px solid var(--rule); border-radius: var(--r-sm);
+    padding: 10px 32px 10px 13px; font: inherit; cursor: pointer;
+    transition: border-color .12s ease, color .12s ease;
   }
+  select:hover { border-color: var(--soft); }
+  /* The open list is the one part `appearance: none` does not reach: it is
+     the OS's popup. Naming the two colours it reads keeps a dark page's list
+     dark instead of flashing white. */
+  select, select option { color-scheme: inherit; }
+  select option { background: var(--panel); color: var(--ink); }
   /* Said in the warning colour because it is a limit on what the run means,
      not a note about it: a corpus whose hosted table is incomplete runs
      fewer arms, and a reader must not read that as the product. */
@@ -148,6 +172,15 @@
   /* The headline: what the run actually showed, as figures rather than a
      sentence. A reader who takes one thing from the page takes this, so it is
      the largest type on it and sits above the panels it summarises. */
+  /* `display` on a class beats the browser's own `[hidden] { display: none }`,
+     which is a UA rule at the lowest specificity — so every element on this
+     page that is BOTH laid out by a class and hidden by the attribute was
+     drawn anyway: an empty bordered strip under the form and an empty flex
+     row above it, on a page that had never been run (the owner, 2026-09-13:
+     "this random bar in the middle of the page"). One rule, once, for all of
+     them, rather than a `display: none` per class that the next such element
+     would miss. */
+  [hidden] { display: none !important; }
   .headline { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
   .hgroup {
     flex: 1 1 300px; background: var(--panel); border: 1px solid var(--rule);
@@ -210,6 +243,14 @@
   .arms.no-third .arm[data-arm="subagents"], .headline.no-third .hgroup.subagents { display: none; }
   .arm { background: var(--panel); border: 1px solid var(--rule); border-radius: var(--r); padding: 16px 18px 18px; }
   .arm h2 { font-size: 13px; font-weight: 500; margin: 0 0 2px; }
+  /* A panel before any run: the same frame, set back, holding the one line
+     that says what this arm will do. It is plainly empty — an empty track and
+     grey text — so nothing on it can be mistaken for a result, and the page
+     at rest shows the shape of the answer rather than a screen of ground. */
+  .arm.resting { border-style: dashed; background: transparent; }
+  .arm.resting h2 { color: var(--soft); margin-bottom: 10px; }
+  .arm.resting .track { opacity: .5; }
+  .arm.resting .waiting { margin: 10px 0 0; font-size: 11.5px; color: var(--faint); }
   .lane { color: var(--faint); font-size: 11.5px; margin: 0 0 14px; }
   .clock { float: right; font-variant-numeric: tabular-nums; color: var(--soft); font-size: 12px; }
   .track { height: 26px; background: var(--ground); border: 1px solid var(--rule); display: flex; overflow: hidden; border-radius: 999px; }
@@ -318,7 +359,11 @@
 
 <div class="top">
   <a class="brand" href="https://infino.ai" target="_blank" rel="noopener">infino</a>
-  <h1><span class="prompt" aria-hidden="true">❯</span><span class="same">Claude Sonnet with</span> <b>File Tools</b><span class="vs">vs</span><span class="same">Claude Sonnet with</span> <b>Infino Subagents</b></h1>
+  <!-- The model appears twice because it is the constant: the same Claude on
+       both sides, different tools. Both halves are written by `drawTitle`
+       from the model selector, so the title never claims a family the run
+       did not use. -->
+  <h1><span class="prompt" aria-hidden="true">❯</span><span class="same">Claude <b class="fam">Sonnet</b> with</span> <b>File Tools</b><span class="vs">vs</span><span class="same">Claude <b class="fam">Sonnet</b> with</span> <b>Infino Subagents</b></h1>
   <!-- Both switches change how the page reads rather than what it runs, so
        they sit together, out of the reading order. -->
   <label class="third" title="the third arm hands searches to a loop of ours; it runs either way, this only shows it">
@@ -335,6 +380,11 @@
   <div>
     <form id="ask">
       <select id="corpus" title="which corpus the three arms look at"></select>
+      <!-- The caller model, the same on every arm. The lane is identical
+           across the three families — same tools, same prompt, same corpus —
+           so switching here prices the model rather than the product, which
+           is the answer to "does this still hold on a cheaper one?". -->
+      <select id="model" title="which Claude drives every arm; the tools are what differ between them"></select>
       <input type="text" id="q" placeholder="ask anything about this corpus" autocomplete="off">
       <!-- The starters, as a control rather than a row of chips. Five
            questions of eighty characters cannot be chips: they wrapped to
@@ -424,6 +474,42 @@ function setStatus(state, text, html = false) {
 const input = document.getElementById("q");
 const go = document.getElementById("go");
 
+/** The caller model every arm runs on. The families come from the server, so
+ * the list is never a second copy that can drift from what the run accepts;
+ * the page only draws them and remembers the choice.
+ *
+ * It is a choice rather than a constant because the comparison the page makes
+ * is not about Sonnet: the same tools against the same corpus on a cheaper
+ * or a stronger caller is the question a reader asks next, and until now the
+ * only way to ask it was to restart the server with `BENCH_MODEL` set. */
+const modelEl = document.getElementById("model");
+const familyTitles = document.querySelectorAll("h1 .fam");
+
+/** Put the chosen family in the title's two set-back halves, so the page
+ * never says Sonnet over a run that was Haiku's. */
+function drawTitle(family) {
+  const shown = `${family[0].toUpperCase()}${family.slice(1)}`;
+  for (const el of familyTitles) el.textContent = shown;
+  document.title = `Claude ${shown}: File Tools vs Infino Subagents`;
+}
+
+function drawFamilies(families, chosen) {
+  if (!Array.isArray(families) || !families.length || modelEl.options.length) return;
+  for (const family of families) {
+    const option = document.createElement("option");
+    option.value = family;
+    option.textContent = `${family[0].toUpperCase()}${family.slice(1)}`;
+    modelEl.append(option);
+  }
+  modelEl.value = chosen ?? families[0];
+  drawTitle(modelEl.value);
+  drawRestingArms(families);
+}
+modelEl.onchange = () => {
+  drawTitle(modelEl.value);
+  drawRestingArms();
+};
+
 /** Draw the chosen corpus's starters into the form's own select. Called on
  * every corpus change, so the questions offered always name the repository
  * the arms are about. Picking one fills the box rather than firing: an
@@ -471,6 +557,7 @@ function loadCorpus(id) {
         corpusEl.value = c.chosen;
       }
       drawExamples(c.examples ?? []);
+      drawFamilies(c.families, c.family);
       corpusNoteEl.hidden = c.ready !== false;
       corpusNoteEl.textContent = c.ready === false ? `File Tools arm only — ${c.note}` : "";
       describeCorpus(c);
@@ -508,7 +595,11 @@ function describeCorpus(c) {
   if (c.rows) facts.push(counted(c.rows, "daily rows"));
   if (c.vectors) facts.push(`vectors <b>${escapeHtml(c.vectors)}</b>`);
   if (c.hosted) facts.push("index <b>hosted</b>");
-  if (c.head) facts.push(`at <b>${escapeHtml(c.head.split(" ").slice(0, 2).join(" "))}</b>`);
+  // Not the commit the index was built from. It is a build detail of this
+  // machine, it means nothing to a reader who does not have the checkout,
+  // and this page is public (the owner, 2026-09-13: "why do we need this in
+  // a public demo?"). What the corpus IS - its size and its subject - is
+  // what a reader needs to judge the answers, and that is what is left.
   document.getElementById("facts").innerHTML = facts.map((f) => `<li>${f}</li>`).join("");
   // The line under the blurb names what a question can be about: a code
   // corpus its subsystems, a data corpus its columns.
@@ -523,6 +614,36 @@ function describeCorpus(c) {
 }
 
 loadCorpus();
+
+/** The arms at rest: one empty panel per arm, labelled, before a question has
+ * been asked.
+ *
+ * They exist because the page at rest was a form and then nothing — a screen
+ * of ground with the answer area invisible (the owner, 2026-09-13: "you have
+ * all this unused space"). A reader could not see that three panels were
+ * about to fill, where, or in what order. These carry no numbers and say so;
+ * the first run replaces them outright, so nothing here can ever be read as a
+ * measurement. */
+function drawRestingArms(families) {
+  if (live) return;
+  armsEl.innerHTML = "";
+  const family = modelEl.value || families?.[0] || "sonnet";
+  const shown = `${family[0].toUpperCase()}${family.slice(1)}`;
+  for (const arm of [
+    { id: "grep", tools: "File Tools", waiting: "reads the corpus off disk with Grep, Glob and Read" },
+    { id: "index", tools: "Infino", waiting: "queries an index of the same corpus, driving retrieval itself" },
+    { id: "subagents", tools: "Infino Subagents", waiting: "hands a question to a retrieval loop of ours" },
+  ]) {
+    const el = document.createElement("section");
+    el.className = "arm resting";
+    el.dataset.arm = arm.id;
+    el.innerHTML =
+      `<h2>${shown} + ${escapeHtml(arm.tools)}</h2>` +
+      `<div class="track"></div>` +
+      `<p class="waiting">${escapeHtml(arm.waiting)}</p>`;
+    armsEl.append(el);
+  }
+}
 
 /** Live state for one arm: the segments drawn so far plus the one still
  * growing. A segment is {phase, from, to} in milliseconds since the arm began;
@@ -919,8 +1040,16 @@ form.onsubmit = (e) => {
   // the first corpus, so a reader who picked OpenSearch got an agent pointed at
   // the engine repository instead - a wrong answer that looks like a real one.
   const chosen = corpusEl.value;
+  // The model travels the same way and for the same reason: the server
+  // defaults to Sonnet, so a reader who picked Haiku and got Sonnet's bill
+  // would be reading the wrong comparison with no sign of it.
+  const family = modelEl.value;
   const source = new EventSource(
-    api(`run?q=${encodeURIComponent(question)}${chosen ? `&corpus=${encodeURIComponent(chosen)}` : ""}`),
+    api(
+      `run?q=${encodeURIComponent(question)}` +
+        `${chosen ? `&corpus=${encodeURIComponent(chosen)}` : ""}` +
+        `${family ? `&model=${encodeURIComponent(family)}` : ""}`,
+    ),
   );
   live = source;
 
@@ -940,6 +1069,9 @@ form.onsubmit = (e) => {
     document.getElementById("fixture").hidden = !d.fixture;
     // Citations in this run's answers fetch from this corpus's checkout.
     runCorpus = d.corpus?.id ?? runCorpus;
+    // The server decides the family — it refuses one it does not offer — so
+    // the title follows what ran rather than what was picked.
+    if (d.family) drawTitle(d.family);
     for (const meta of d.arms) {
       const arm = newArm(meta);
       arm.startedAt = performance.now();
