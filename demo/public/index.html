@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Claude Sonnet with File Tools vs Claude Sonnet with Infino Subagents</title>
+<title>Side-by-side demo</title>
 <style>
   /* infino's own scheme (infino.ai): near-black ground with a faint grid,
      warm white text, ONE accent - the orange - and monospace throughout. Dark
@@ -411,7 +411,7 @@
        both sides, different tools. Both halves are written by `drawTitle`
        from the model selector, so the title never claims a family the run
        did not use. -->
-  <h1><span class="prompt" aria-hidden="true">❯</span><span class="same">Claude <b class="fam">Sonnet</b> with</span> <b>File Tools</b><span class="vs">vs</span><span class="same">Claude <b class="fam">Sonnet</b> with</span> <b>Infino Subagents</b></h1>
+  <h1><span class="prompt" aria-hidden="true">❯</span><span class="same"><b class="fam">Sonnet</b> with</span> <b>File Tools</b><span class="vs">vs</span><span class="same"><b class="fam">Sonnet</b> with</span> <b>Infino Subagents</b></h1>
   <!-- Both switches change how the page reads rather than what it runs, so
        they sit together, out of the reading order. -->
   <label class="third" title="show the middle arm: the same two indexes, driven by the caller itself with no subagent. It runs either way; this only shows it">
@@ -543,21 +543,27 @@ const go = document.getElementById("go");
  * only way to ask it was to restart the server with `BENCH_MODEL` set. */
 const modelEl = document.getElementById("model");
 const familyTitles = document.querySelectorAll("h1 .fam");
+/** Display names from the server (`familyLabels` on /corpus). */
+let familyLabels = {};
 
-/** Put the chosen family in the title's two set-back halves, so the page
- * never says Sonnet over a run that was Haiku's. */
-function drawTitle(family) {
-  const shown = `${family[0].toUpperCase()}${family.slice(1)}`;
-  for (const el of familyTitles) el.textContent = shown;
-  document.title = `Claude ${shown}: File Tools vs Infino Subagents`;
+function labelForFamily(family) {
+  return familyLabels[family] ?? `${family[0].toUpperCase()}${family.slice(1)}`;
 }
 
-function drawFamilies(families, chosen) {
+/** Put the chosen family in the title's two set-back halves. */
+function drawTitle(family) {
+  const shown = labelForFamily(family);
+  for (const el of familyTitles) el.textContent = shown;
+  document.title = `${shown}: File Tools vs Infino Subagents`;
+}
+
+function drawFamilies(families, chosen, labels) {
+  if (labels && typeof labels === "object") familyLabels = labels;
   if (!Array.isArray(families) || !families.length || modelEl.options.length) return;
   for (const family of families) {
     const option = document.createElement("option");
     option.value = family;
-    option.textContent = `${family[0].toUpperCase()}${family.slice(1)}`;
+    option.textContent = labelForFamily(family);
     modelEl.append(option);
   }
   modelEl.value = chosen ?? families[0];
@@ -616,7 +622,7 @@ function loadCorpus(id) {
         corpusEl.value = c.chosen;
       }
       drawExamples(c.examples ?? []);
-      drawFamilies(c.families, c.family);
+      drawFamilies(c.families, c.family, c.familyLabels);
       corpusNoteEl.hidden = c.ready !== false;
       corpusNoteEl.textContent = c.ready === false ? `File Tools arm only — ${c.note}` : "";
       describeCorpus(c);
@@ -687,7 +693,7 @@ function drawRestingArms(families) {
   if (live) return;
   armsEl.innerHTML = "";
   const family = modelEl.value || families?.[0] || "sonnet";
-  const shown = `${family[0].toUpperCase()}${family.slice(1)}`;
+  const shown = labelForFamily(family);
   // Written for a reader who has never seen this page, in their words rather
   // than ours (the owner, 2026-09-13: "this is a public demo and need to be
   // simple to understnad for humans"). Two things it must get right and used

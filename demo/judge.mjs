@@ -14,6 +14,7 @@
 // The judge's own cost is reported beside the grades and kept out of every
 // arm's numbers; it is the price of the measurement, not of any arm.
 import { DEFAULT_JUDGE_MODEL, judgeOnce, judgeRules, parseVerdict, queriesBlock } from "../bench/judge-core.mjs";
+import { resolveJudgeModel } from "../bench/caller-models.mjs";
 
 /** Turns the demo's judge may take. The bench's judge has 30 for two
  * answers; the demo grades three, about mechanisms that span layers, and on
@@ -151,7 +152,7 @@ export async function judgeArms({
   question,
   results,
   rows = new Map(),
-  model = DEFAULT_JUDGE_MODEL,
+  model = resolveJudgeModel(),
   maxTurns = demoJudgeMaxTurns(),
   random = Math.random,
   onEvent,

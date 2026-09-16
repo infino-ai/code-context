@@ -17,7 +17,20 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { dataSystemPrompt, foldToolMessage, newToolAccounting, systemPrompt } from "../bench/lanes.mjs";
+import {
+  CALLER_FAMILIES,
+  callerModel,
+  callerRunEnv,
+  familyFor,
+  familyLabel,
+  openRouterConfigured,
+  openRouterOuterCaller,
+  resolveJudgeModel,
+  sdkAuthEnv,
+} from "../bench/caller-models.mjs";
 import { ledgerMark, ledgerSince, meteredFrom, ourCharge, rates } from "./charge.mjs";
+import { corpusPathsReady, resolveCorpus } from "./corpora.mjs";
+import { assertDemoPlatformReady, hostedTables } from "./platform-health.mjs";
 import { livePhase, phaseOf, phaseShares, phaseSplit, spansOf, unionMs } from "./phases.mjs";
 
 /** One assistant message carrying one tool_use block. */
@@ -84,6 +97,44 @@ test("a file value that is not a non-negative number is absent, and a file that 
   assert.deepEqual(rates({}, bad), { readTokenUsdPerMillion: null, modelTokenUsdPerMillion: null, markup: 0.1 });
   const notJson = pricingFile("not json at all");
   assert.deepEqual(rates({}, notJson), { readTokenUsdPerMillion: null, modelTokenUsdPerMillion: null, markup: 0 });
+});
+
+// --- caller models ----------------------------------------------------------
+
+test("familyFor accepts known families and defaults unknown ids", () => {
+  assert.equal(familyFor("opus"), "opus");
+  assert.equal(familyFor("deepseek-flash"), "deepseek-flash");
+  assert.equal(familyFor("not-a-model"), "sonnet");
+});
+
+test("callerModel resolves anthropic and openrouter defaults", () => {
+  assert.equal(callerModel("sonnet"), "claude-sonnet-4-6");
+  assert.equal(callerModel("deepseek-flash"), "deepseek/deepseek-v4.1-flash");
+  assert.equal(callerModel("glm-5"), "z-ai/glm-4.6");
+});
+
+test("DEMO_MODEL_* overrides the default slug for a family", () => {
+  assert.equal(callerModel("glm-5", { DEMO_MODEL_GLM_5: "vendor/custom-glm" }), "vendor/custom-glm");
+});
+
+test("callerRunEnv points the SDK at OpenRouter for openrouter families", () => {
+  assert.deepEqual(callerRunEnv("sonnet", { ANTHROPIC_API_KEY: "sk-ant-test" }), {});
+  assert.throws(() => callerRunEnv("kimi-k3", {}));
+  const env = callerRunEnv("kimi-k3", { OPENROUTER_API_KEY: "sk-or-test" });
+  assert.equal(env.ANTHROPIC_BASE_URL, "https://openrouter.ai/api/v1");
+  assert.equal(env.ANTHROPIC_API_KEY, "sk-or-test");
+});
+
+test("without ANTHROPIC_API_KEY, haiku/sonnet/opus route through OpenRouter", () => {
+  const env = { OPENROUTER_API_KEY: "sk-or-test" };
+  assert.equal(callerModel("sonnet", env), "anthropic/claude-sonnet-4.6");
+  assert.deepEqual(callerRunEnv("sonnet", env).ANTHROPIC_API_KEY, "sk-or-test");
+});
+
+test("familyLabel uses display names for the selector", () => {
+  assert.equal(familyLabel("gpt-5-sol"), "GPT 5.6 Sol");
+  assert.ok(CALLER_FAMILIES.includes("kimi-k3"));
+  assert.equal(openRouterConfigured({ OPENROUTER_API_KEY: "x" }), true);
 });
 
 // --- classification ---------------------------------------------------------
@@ -341,4 +392,46 @@ test("an end-to-end grep-shaped stream splits the way the bar will draw it", () 
   assert.equal(acc.subagentCalls, 1, "the inner grep is counted as a subagent call");
   assert.deepEqual(acc.subagents, ["Explore"]);
   assert.equal(at, 30_000);
+});
+
+test("sdkAuthEnv maps OpenRouter to Anthropic SDK vars when direct Anthropic is unset", () => {
+  const env = { OPENROUTER_API_KEY: "or-key", ANTHROPIC_API_KEY: undefined };
+  assert.equal(sdkAuthEnv(env).ANTHROPIC_API_KEY, "or-key");
+  assert.equal(sdkAuthEnv(env).ANTHROPIC_BASE_URL, "https://openrouter.ai/api/v1");
+  assert.deepEqual(sdkAuthEnv({ ...env, ANTHROPIC_API_KEY: "direct" }), {});
+});
+
+test("resolveJudgeModel uses OpenRouter opus slug without direct Anthropic", () => {
+  assert.equal(
+    resolveJudgeModel({ OPENROUTER_API_KEY: "k", ANTHROPIC_API_KEY: "" }),
+    "anthropic/claude-opus-4.6",
+  );
+});
+
+test("openRouterOuterCaller is true only for non-Anthropic OpenRouter families", () => {
+  const env = { OPENROUTER_API_KEY: "sk-or-test" };
+  assert.equal(openRouterOuterCaller("deepseek-flash", env), true);
+  assert.equal(openRouterOuterCaller("sonnet", env), false);
+});
+
+test("resolveCorpus marks ready false when checkout paths are absent", () => {
+  const c = resolveCorpus({
+    id: "test-missing",
+    repoDir: "no-such-repo-ever",
+    indexDir: ".infino-hosted",
+    hostedTableReady: true,
+    label: "x",
+  });
+  assert.equal(c.ready, false);
+  assert.match(c.note ?? "", /not on this host/);
+  assert.equal(corpusPathsReady(c.repo, c.index), false);
+});
+
+test("hostedTables lists every demo corpus table name", () => {
+  const tables = hostedTables([
+    { table: "chunks" },
+    { table: "chunks_opensearch" },
+    { table: "chunks_jobs" },
+  ]);
+  assert.deepEqual(tables.sort(), ["chunks", "chunks_jobs", "chunks_opensearch"]);
 });

@@ -15,15 +15,28 @@ Each bar is coloured by where the arm's time went:
 
 ## Running it
 
-Needs Node ≥ 20 (this box's system node is 18 — use a 22), `ANTHROPIC_API_KEY`, and the bench deps.
+Needs Node ≥ 20 (this box's system node is 18 — use a 22), `ANTHROPIC_API_KEY`,
+`OPENROUTER_API_KEY` (for the non-Anthropic caller models in the selector), and
+the bench deps.
 
 ```bash
 cd bench && npm install && cd ..
 ```
 
 ```bash
+# Keys live in ~/.zshrc (OPENROUTER_API_KEY, optional ANTHROPIC_API_KEY)
+source ~/.zshrc
+export CX_BENCH_DB_URL=...
+export CX_BENCH_KEY_FILE=...
+node demo/server.mjs
+```
+
+When **`ANTHROPIC_API_KEY` is unset** but **`OPENROUTER_API_KEY` is set**, Haiku/Sonnet/Opus use the Claude Agent SDK with OpenRouter env when configured; **`deepseek-flash`**, **`kimi-k3`**, **`glm-5`**, and **`gpt-5-sol`** use a direct OpenRouter chat runner (same HTTP path as the platform inner loop), not Claude Code.
+
+```bash
 export PATH=/home/ubuntu/.local/node/bin:$PATH
 export ANTHROPIC_API_KEY=...
+export OPENROUTER_API_KEY=...
 export CX_BENCH_DB_URL=http://127.0.0.1:9110/cxbench
 export CX_BENCH_KEY_FILE=/path/to/cxbench.key
 node demo/server.mjs
@@ -42,6 +55,32 @@ That replays a scripted run — invented data, a red banner on the page saying s
 no model and no platform call. Its spans go through the real phase arithmetic,
 so what it exercises is the actual code over made-up numbers.
 
+### Where the corpora come from
+
+The demo **provisions nothing**. It expects, already in place:
+
+- the **checkout** on disk (what the grep arm greps), under `DEMO_BENCH_ROOT`;
+- the **index dir** beside it, for the manifest the page reads and the ledger
+  the charge is measured from;
+- the **platform table** the Infino arms query, named by each corpus's `table`.
+
+Creating those is a separate, deliberate act — and the platform tables in
+particular are shared state that outlives any one demo run.
+
+**Never point `bench/load-hosted.mjs hosted` (or a bare `cx index --db`) at the
+demo's database to "fix" a missing index dir.** Its platform load is a full
+rebuild: it drops the table and recreates it from the checkout, which throws
+away a table that was provisioned some other way. If what you are missing is
+the local index dir, build that alone:
+
+```bash
+node bench/load-hosted.mjs /path/to/checkout local
+```
+
+The server refuses to boot when the platform, a corpus's lean table card or the
+embedder is unreachable (`platform-health.mjs`), so a half-provisioned demo
+fails at startup rather than serving degraded arms that still look green.
+
 ### Over the tailnet
 
 `tailscale serve` already proxies `/` to the gateway on this box, so give the
@@ -59,7 +98,10 @@ it wipes the existing `/` proxy to the shared gateway.
 | variable | default | what it does |
 | --- | --- | --- |
 | `PORT` / `DEMO_HOST` | `7777` / `127.0.0.1` | where it binds |
-| `CX_BENCH_REPO` | `bench-repos/infino-ed4e020` | the repo under test |
+| `DEMO_BENCH_ROOT` | `$HOME/bench-repos` | parent directory for default corpus checkout folder names |
+| `DEMO_CORPUS_<ID>_REPO` | under `DEMO_BENCH_ROOT` | override checkout path for corpus `infino`, `opensearch`, or `jobs` |
+| `DEMO_CORPUS_<ID>_INDEX` | `<repo>/.infino-hosted` or `.infino` | override index dir; otherwise `.infino-hosted` / `.infino` with fallback |
+| `CX_BENCH_REPO` | first corpus default | legacy default repo for boot logs only |
 | `CX_INDEX_DIR` | `<repo>/.infino-hosted` | the index dir, and the ledger read for our charge |
 | `CX_BENCH_DB_URL`, `CX_BENCH_KEY_FILE` | — | the platform database and its key file |
 | `DEMO_FIXTURE` | off | scripted run, no spend |
@@ -67,6 +109,13 @@ it wipes the existing `/` proxy to the shared gateway.
 | `DEMO_READ_TOKEN_USD_PER_M` | from the file | price of a read token |
 | `DEMO_MODEL_TOKEN_USD_PER_M` | from the file | blended inference cost |
 | `DEMO_INFERENCE_MARKUP` | from the file, else `0` | fraction added to inference, e.g. `0.3` |
+| `OPENROUTER_API_KEY` | — | required for OpenRouter caller models (`deepseek-flash`, `kimi-k3`, `glm-5`, `gpt-5-sol`) |
+| `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | OpenRouter Anthropic-compatible API base |
+| `DEMO_CALLER_OPENROUTER` | auto | `1` forces all caller models through OpenRouter; `0` forces direct Anthropic for Haiku/Sonnet/Opus when `ANTHROPIC_API_KEY` is set |
+| `DEMO_MODEL_<FAMILY>` | see `bench/caller-models.mjs` | override the provider model id for one family (e.g. `DEMO_MODEL_GLM_5=z-ai/glm-4.6`) |
+
+Caller model families and default OpenRouter slugs live in **`bench/caller-models.mjs`**
+(single source for the demo selector and `bench/lanes.mjs`).
 
 **No price is baked in.** With the rate variables unset the demo shows metered
 tokens and no dollar sign. A rate is a commercial decision; one guessed here

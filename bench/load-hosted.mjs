@@ -22,6 +22,9 @@ import { fileURLToPath } from "node:url";
 import { CX, BUILD, BENCH_DB_URL, BENCH_KEY_FILE, hostedFlags, record } from "./lanes.mjs";
 
 export const INDEX_BUILD_FILE = "index-build.jsonl";
+/** Set to "1" to allow the hosted side, whose platform load drops and
+ * recreates the table. Without it only `local` runs. */
+export const ALLOW_TABLE_REBUILD = "CX_BENCH_ALLOW_TABLE_REBUILD";
 /** How much of the CLI's stderr to keep on a failed record - enough for the
  * error line, not the progress spam. */
 const STDERR_TAIL_CHARS = 500;
@@ -82,15 +85,34 @@ export const hostOf = (url) => {
 };
 
 async function main() {
-  const [repoArg, sideArg = "hosted"] = process.argv.slice(2);
+  const [repoArg, sideArg] = process.argv.slice(2);
   const repoPath = repoArg ?? process.env.CX_BENCH_REPO;
   if (!repoPath || !["hosted", "local"].includes(sideArg)) {
-    console.error("usage: node load-hosted.mjs [repoPath] [side=hosted|local]   (or set CX_BENCH_REPO)");
+    console.error("usage: node load-hosted.mjs <repoPath> <hosted|local>   (or set CX_BENCH_REPO)");
+    console.error("  local   local index only - writes nothing to a platform database");
+    console.error("  hosted  ALSO DROPS AND RECREATES the platform table (see below)");
     process.exit(1);
   }
   const dbUrl = process.env[BENCH_DB_URL];
   if (sideArg === "hosted" && (!dbUrl || !process.env[BENCH_KEY_FILE])) {
     console.error(`the hosted side needs ${BENCH_DB_URL} (https://host/<database>) and ${BENCH_KEY_FILE} (the file holding the key) in the environment`);
+    process.exit(1);
+  }
+  // The hosted side is `cx index --db`, whose platform load is a full rebuild:
+  // drop the table, recreate it, append this repo's chunks. Pointed at a
+  // database whose tables someone else provisioned (a demo, a shared corpus,
+  // anything hydrated), it destroys them - which is exactly what happened to
+  // the demo's `chunks` table on 2026-09-14, because `hosted` used to be the
+  // default when the argument was left off. It is opt-in now, and names what
+  // it will overwrite before it does it.
+  if (sideArg === "hosted" && process.env[ALLOW_TABLE_REBUILD] !== "1") {
+    const table = process.env.CX_TABLE ?? "chunks";
+    console.error(
+      `refusing to rebuild: the hosted side DROPS AND RECREATES table "${table}" in ${hostOf(dbUrl)}/${dbUrl.slice(dbUrl.lastIndexOf("/") + 1)}, ` +
+        `discarding whatever is in it now.\n` +
+        `  to build only the local index (no platform write): node load-hosted.mjs ${repoPath} local\n` +
+        `  to go ahead with the rebuild anyway:                ${ALLOW_TABLE_REBUILD}=1 node load-hosted.mjs ${repoPath} hosted`,
+    );
     process.exit(1);
   }
   const repo = resolve(repoPath);

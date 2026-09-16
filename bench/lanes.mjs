@@ -28,31 +28,40 @@ export const CX = process.env.CX_BENCH_CLI ? resolve(process.env.CX_BENCH_CLI) :
 export const BUILD = process.env.CX_BENCH_BUILD ?? null;
 export const MODEL = process.env.BENCH_MODEL ?? "claude-sonnet-4-6";
 
-/** The caller models a run may be asked on, by the short family name a
- * reader knows them by. A lane's own shape never changes with the model:
- * the same tools, the same prompt, the same corpus — so a pair of runs that
- * differ only here prices the model, which is the one comparison the ladder
- * of families is good for. `BENCH_MODEL` still names the default for a run
- * that asks for none. */
-export const CALLER_MODELS = {
-  haiku: "claude-haiku-4-5-20251001",
-  sonnet: "claude-sonnet-4-6",
-  opus: "claude-opus-5",
-};
+import {
+  CALLER_FAMILIES,
+  CALLER_LABELS,
+  CALLER_MODELS,
+  DEFAULT_CALLER_FAMILY,
+  callerModel,
+  callerRunEnv,
+  sdkAuthEnv,
+  openRouterOuterCaller,
+  stockExploreSystemPrompt,
+  familyFor,
+  familyLabel,
+} from "./caller-models.mjs";
 
-/** The model id for a family name, or null when the name is not one of
- * ours. A caller-supplied name is checked here rather than passed through:
- * an unknown id reaches the provider as a 404 halfway into a paid run. */
-export function callerModel(name) {
-  return CALLER_MODELS[String(name ?? "").toLowerCase()] ?? null;
-}
+export {
+  CALLER_FAMILIES,
+  CALLER_LABELS,
+  CALLER_MODELS,
+  DEFAULT_CALLER_FAMILY,
+  callerModel,
+  callerRunEnv,
+  sdkAuthEnv,
+  openRouterOuterCaller,
+  stockExploreSystemPrompt,
+  familyFor,
+  familyLabel,
+};
 
 /** The built-in tool set of real Claude Code (Bash included, since a real
  * client has it). Every lane but `cx` gets exactly this. */
 const STOCK_TOOLS = ["Glob", "Grep", "Read", "LS", "Bash"];
+export const CX_TOOL_PREFIX = "mcp__code-context__";
 /** The prefix the SDK puts on the code-context MCP tools; results record the
  * short `cx:<tool>` form so they stay readable and comparable across builds. */
-const CX_TOOL_PREFIX = "mcp__code-context__";
 const CX_SHORT_PREFIX = "cx:";
 /** The prefix the SDK puts on the Snowflake server's tools, and the short
  * `sf:<tool>` form results record for them, beside `cx:` for code-context. */
@@ -977,7 +986,24 @@ export async function runLane({
   onEvent,
   serverEnv,
   model = MODEL,
+  /** Short family name (`haiku`, `deepseek-flash`, …) for provider env (OpenRouter). */
+  family = null,
 }) {
+  if (family && openRouterOuterCaller(family)) {
+    const { runOpenRouterLane } = await import("./openrouter-lane.mjs");
+    return runOpenRouterLane({
+      lane,
+      prompt,
+      system,
+      repoDir,
+      indexDir,
+      maxTurns,
+      onEvent,
+      serverEnv,
+      model,
+      family,
+    });
+  }
   const t0 = performance.now();
   const acc = newToolAccounting();
   const emit = onEvent
@@ -1018,7 +1044,7 @@ export async function runLane({
         // as stock Claude has it ("we should keep our custom prompts").
         // Project instructions and skills reach both kinds alike; see
         // `laneOptions`.
-        systemPrompt: laneDef(lane).mcp ? system : { type: "preset", preset: "claude_code", append: system },
+        systemPrompt: laneDef(lane).mcp ? system : stockExploreSystemPrompt(system),
         // On the tailnet every visitor already holds a key to it, so the arms
         // run under `bypassPermissions` and hold the tools a real developer
         // session holds — which is the comparison. Reachable from the internet
@@ -1038,7 +1064,7 @@ export async function runLane({
         ...(publicDemo()
           ? { permissionMode: "default", canUseTool: publicGuard(repoDir) }
           : { permissionMode: "bypassPermissions" }),
-        env: { ...process.env, IS_SANDBOX: "1" },
+        env: { ...process.env, ...sdkAuthEnv(), ...(family ? callerRunEnv(family) : {}), IS_SANDBOX: "1" },
         ...laneOptions(lane, repoDir, indexDir, serverEnv),
       },
     })) {
