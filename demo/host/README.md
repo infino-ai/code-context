@@ -24,6 +24,12 @@ reason. This is that, for this machine.
 
 ## The corpora
 
+**No corpus is in this repository.** Eight gigabytes of checkouts and postings
+are fetched or converted on the build VM; what is checked in is four files
+totalling about three kilobytes — one `codecontext.json` per corpus naming its
+hosted table, and the job-postings field documentation. `files/corpus-metadata/`
+is exactly that and nothing else.
+
 Each corpus is a checkout the File Tools arm greps plus an index directory whose
 `codecontext.json` names the hosted table. **The local superfile index is not
 needed and is not built**: the file-tools arm reads the checkout and the hosted

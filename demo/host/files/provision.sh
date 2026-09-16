@@ -149,17 +149,24 @@ done
 rm -rf "$stage"
 say "job postings: $total rows in $(find "$JOBS_DIR" -name '*.ndjson' | wc -l) files"
 
-# The index directories are metadata only: a codecontext.json naming the hosted
-# table, which is what lets ask/explore skip a build. A build here would be
-# actively harmful — with a platform database configured it DROPS and recreates
-# the table, which is how the demo's `chunks` lost its 768-dim vectors once.
-say "installing the corpora's index metadata"
-cp "$STAGING_DIR/corpora/jobs-codecontext.json"       "$JOBS_DIR/.infino-hosted/codecontext.json" 2>/dev/null \
-  || { mkdir -p "$JOBS_DIR/.infino-hosted"; cp "$STAGING_DIR/corpora/jobs-codecontext.json" "$JOBS_DIR/.infino-hosted/codecontext.json"; }
-cp "$STAGING_DIR/corpora/jobs-CLAUDE.md" "$JOBS_DIR/CLAUDE.md"
-mkdir -p "$BENCH_ROOT/opensearch-shallow/.infino" "$BENCH_ROOT/infino-ed4e020/.infino-hosted"
-cp "$STAGING_DIR/corpora/opensearch-codecontext.json" "$BENCH_ROOT/opensearch-shallow/.infino/codecontext.json"
-cp "$STAGING_DIR/corpora/infino-codecontext.json"     "$BENCH_ROOT/infino-ed4e020/.infino-hosted/codecontext.json"
+# An index directory here holds METADATA ONLY — a codecontext.json naming the
+# hosted table, a few hundred bytes, which is what lets ask/explore skip a
+# build. No corpus and no local index is checked in or copied from anywhere: the
+# two code corpora are cloned above and the postings are converted above, both
+# on the build VM.
+#
+# A build must never happen on a host: with a platform database configured, the
+# client's first find/sql/ask on an index directory without a manifest DROPS and
+# recreates the hosted table. That is how the demo's `chunks` lost its 768-dim
+# vectors on 2026-09-14.
+say "installing the corpora's index metadata (a codecontext.json each)"
+mkdir -p "$JOBS_DIR/.infino-hosted" \
+         "$BENCH_ROOT/opensearch-shallow/.infino" \
+         "$BENCH_ROOT/infino-ed4e020/.infino-hosted"
+cp "$STAGING_DIR/corpus-metadata/jobs-codecontext.json"       "$JOBS_DIR/.infino-hosted/codecontext.json"
+cp "$STAGING_DIR/corpus-metadata/jobs-CLAUDE.md"              "$JOBS_DIR/CLAUDE.md"
+cp "$STAGING_DIR/corpus-metadata/opensearch-codecontext.json" "$BENCH_ROOT/opensearch-shallow/.infino/codecontext.json"
+cp "$STAGING_DIR/corpus-metadata/infino-codecontext.json"     "$BENCH_ROOT/infino-ed4e020/.infino-hosted/codecontext.json"
 
 # --- The units --------------------------------------------------------------
 
