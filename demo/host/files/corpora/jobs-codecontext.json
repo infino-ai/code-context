@@ -1,0 +1,18 @@
+{
+  "version": 2,
+  "table": "chunks_jobs",
+  "vectors": "ready",
+  "analyzer": "standard",
+  "embedder": {
+    "provider": "platform",
+    "model": "nomic-embed-text-v1.5",
+    "dim": 768
+  },
+  "files": 3518,
+  "chunks": 878682,
+  "languages": {
+    "ndjson": 878682
+  },
+  "indexedAt": "2026-09-11T17:03:00.000Z",
+  "indexMs": 0
+}

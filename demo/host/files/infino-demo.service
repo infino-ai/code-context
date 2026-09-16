@@ -1,0 +1,39 @@
+# The side-by-side demo.
+#
+# Retried rather than one-shot: it refuses to start when the embedding host is
+# not answering, which is correct — an arm that cannot embed would quietly
+# compare against nothing — and that host is stopped when idle and started on
+# demand, so "not yet" is an ordinary state rather than a fault.
+#
+# It reads its secrets from /etc/infino/demo.env, which the image ships empty
+# and root-only; launch-host.sh writes the real one. An image is a thing you
+# share, so nothing in it is a credential.
+[Unit]
+Description=Infino side-by-side demo
+Documentation=https://github.com/infino-ai/code-context/blob/main/demo/host/README.md
+After=network-online.target infino-gateway-proxy.service
+Wants=network-online.target infino-gateway-proxy.service
+
+[Service]
+Type=simple
+User=infino-demo
+Group=infino-demo
+WorkingDirectory=/opt/infino/demo/code-context/demo
+EnvironmentFile=/etc/infino/demo.env
+ExecStart=/usr/local/bin/infino-demo-start
+Restart=always
+RestartSec=20
+
+# The lanes hand an agent file tools over a corpus. Nothing it is given needs
+# to write outside its own state, so it cannot.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/infino
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target
