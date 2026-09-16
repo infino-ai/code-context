@@ -124,11 +124,18 @@ Getting the index in place, on both sides:
 
 ```bash
 export CX_BENCH_DB_URL=https://<host>/<database> CX_BENCH_KEY_FILE=~/.infino/key
-node load-hosted.mjs /path/to/repo              # cx index --json --db ... --api-key-file ... --embed-provider platform <repo>: local index + platform table, timed -> .work/results/index-build.jsonl
 node load-hosted.mjs /path/to/repo local        # the same CLI without --db (local index only), for the comparison row
+CX_BENCH_ALLOW_TABLE_REBUILD=1 \
+  node load-hosted.mjs /path/to/repo hosted     # cx index --json --db ... --api-key-file ... --embed-provider platform <repo>: local index + platform table, timed -> .work/results/index-build.jsonl
 node warm-hosted.mjs                            # POST /v1/list_tables until 200; prints rtt and whether a cold start was seen
 node run-questions.mjs /path/to/repo combo,hosted
 ```
+
+The side is a required argument, and the `hosted` side additionally needs
+`CX_BENCH_ALLOW_TABLE_REBUILD=1`, because its platform load **drops and
+recreates** the table: pointed at a database whose tables someone else
+provisioned - a demo, a shared corpus, anything hydrated - it destroys them.
+Use `local` unless you mean to rebuild the table this repo owns.
 
 `load-hosted.mjs` runs the server build's own CLI (`dist/cli.js`, or
 `CX_BENCH_CLI`) with the `--db` flags the platform lanes pass to `cx mcp`. A

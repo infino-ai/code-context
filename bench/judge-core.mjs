@@ -9,6 +9,7 @@
 // everything that decides whether a claim is supported; what differs is the
 // verdict each asks for.
 import { query } from "@anthropic-ai/claude-agent-sdk";
+import { sdkAuthEnv } from "./caller-models.mjs";
 import { cxServer, mcpEnvBase, foldToolMessage, newToolAccounting, recordedQueries } from "./lanes.mjs";
 
 /** The judge: a stronger model than any arm runs. JUDGE_MODEL overrides. */
@@ -171,7 +172,7 @@ export async function judgeOnce({
         maxTurns,
         systemPrompt: system,
         permissionMode: "bypassPermissions",
-        env: { ...process.env, IS_SANDBOX: "1" },
+        env: { ...process.env, ...sdkAuthEnv(), IS_SANDBOX: "1" },
         cwd: repoDir,
         settingSources: [],
         strictMcpConfig: true,

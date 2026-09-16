@@ -67,14 +67,27 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { DEFAULT_JUDGE_MODEL } from "../bench/judge-core.mjs";
-import { callerModel, checkLaneEnv, dataSystemPrompt, hostedFlags, runLane, systemPrompt } from "../bench/lanes.mjs";
+import {
+  assertCallerModelsConfigured,
+  CALLER_FAMILIES,
+  CALLER_LABELS,
+  callerModel,
+  DEFAULT_CALLER_FAMILY,
+  familyFor,
+  familyLabel,
+} from "../bench/caller-models.mjs";
+import { checkLaneEnv, hostedFlags, runLane, systemPrompt } from "../bench/lanes.mjs";
 // The resolver under a name no local shares: `const rates = resolveRates()` at the
 // rates endpoint shadowed the import and threw at boot (2026-09-12).
 import { armCost, ledgerMark, ledgerSince, rates as resolveRates } from "./charge.mjs";
 import { fixtureArm, isFixture } from "./fixture.mjs";
+import { CORPORA, corpusFor, DEFAULT_INFINO_REPO } from "./corpora.mjs";
+import { assertDemoPlatformReady } from "./platform-health.mjs";
 import { demoJudgeMaxTurns, judgeArms, judgeEnabled } from "./judge.mjs";
 import { livePhase, phaseOf, phaseSplit } from "./phases.mjs";
 import { sourceWindow } from "./source.mjs";
+
+export { CORPORA, corpusFor };
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -91,172 +104,15 @@ export const ARMS = [
   { id: "subagents", tools: "Infino Subagents", lane: "hosted-full-remote", hosted: true },
 ];
 
-/** The caller model families the page offers, cheapest first. The lane is
- * identical across them - same tools, same prompt, same corpus - so a pair
- * of runs that differ only here prices the model rather than the product,
- * which is the comparison a reader who asks "does this still hold on a
- * cheaper model?" is after. */
-export const FAMILIES = ["haiku", "sonnet", "opus"];
-/** The family a run uses when the page names none. */
-export const DEFAULT_FAMILY = "sonnet";
-
-/** The family name a reader asked for, or the default when they asked for
- * nothing this server offers. Never an unchecked passthrough: an id the
- * provider does not know 404s halfway into a paid run. */
-function familyFor(name) {
-  const asked = String(name ?? "").toLowerCase();
-  return FAMILIES.includes(asked) ? asked : DEFAULT_FAMILY;
-}
+/** @deprecated alias for CALLER_FAMILIES */
+export const FAMILIES = CALLER_FAMILIES;
+export const DEFAULT_FAMILY = DEFAULT_CALLER_FAMILY;
 
 /** An arm's label for one run: the family that drives it and the tools it
  * drives. The model is half the claim on this page - the same Claude on
  * both sides, different tools - so it is named, and it moves with the
  * selector rather than staying frozen at "Sonnet". */
-const armLabel = (arm, family) => `${family[0].toUpperCase()}${family.slice(1)} + ${arm.tools}`;
-
-/** The job-postings corpus on disk: the same rows the hosted table holds, as
- * NDJSON the file-tools arm can grep (see its CLAUDE.md for the layout). */
-const JOBS_DIR = "/home/ubuntu/infino-ai/workspace/bench-repos/jobs-ndjson";
-
-/** The corpora the page can ask about.
- *
- * One is the engine repository the recorded comparison was measured on; the
- * other is an OpenSearch checkout thirty-eight times its file count, which is
- * the regime the recorded numbers do NOT cover — at 450 files a tree walk is
- * nearly free, and grep's cost is a tree walk. The third is not code at all:
- * 878,682 job postings, a table whose questions are counts, rankings and "who
- * is hiring for X" — sweeps over rows rather than files.
- *
- * `table` is the hosted table each one lives in, because all share a
- * database: the client's table name is a constant that `CX_TABLE` overrides,
- * and a second database is not this key's to create.
- *
- * `ready` says whether the hosted arms can answer for this corpus at all. An
- * incomplete hosted table still answers — with a fraction of the corpus —
- * which is the one failure a demo must not have, so the page says so and the
- * server refuses the hosted arms rather than quietly under-answering.
- *
- * `kind` is "code" unless said otherwise; a "data" corpus gets its own system
- * prompt (`system`, records rather than a checkout), its own paragraph on the
- * page (`how`), a row count (`rows`) in place of a file count, and no judge
- * (`judge: false`): the judge verifies claims against a checkout with the
- * code-grain rules of bench/judge-core.mjs, which say nothing about a row.
- */
-export const CORPORA = [
-  {
-    id: "infino",
-    label: "infino — the engine, 450 files",
-    name: "infino",
-    blurb:
-      "The engine repository: a retrieval engine that stores data on object storage and runs SQL, " +
-      "full-text search and vector search over it. One file (a \"superfile\") is a valid Parquet file " +
-      "with BM25 and vector indexes spliced in; the supertable layer composes many superfiles into a " +
-      "queryable table with snapshot-isolated reads and an atomic-commit manifest.",
-    repo: "/home/ubuntu/infino-ai/workspace/bench-repos/infino-ed4e020",
-    index: "/home/ubuntu/infino-ai/workspace/bench-repos/infino-ed4e020/.infino-hosted",
-    table: "chunks",
-    ready: true,
-    // Chosen by the measured gap on the recorded set, not by how they read:
-    // 336s to 22s, 270s to 24s, 340s to 78s, 179s to 38s, and one that is
-    // near enough even (0.75x on the clock, 1.9x on the bill) kept so the
-    // starters are not only wins.
-    examples: [
-      "Which files have the most code about the full-text-search (FTS) index? Ranked list.",
-      "Which files have the most code about the vector index? Ranked list with reasons.",
-      "How does incremental indexing work end to end when a file changes?",
-      "Where does an append become durable, and what is the last step before other readers can see the new rows?",
-      "How does hybrid search combine BM25 and vector results into one ranked list?",
-    ],
-  },
-  {
-    id: "opensearch",
-    label: "OpenSearch — 17,092 files, 38x",
-    name: "OpenSearch",
-    blurb:
-      "The search engine: a distributed search and analytics engine in Java. A REST layer takes a " +
-      "query, the coordinating node fans it out to the shards that hold the data, each shard scores " +
-      "its own segments with Lucene, and the results are merged back. Thirty-eight times the engine " +
-      "repository's file count, which is the point - it is the size at which sweeping the tree stops " +
-      "being free.",
-    repo: "/home/ubuntu/infino-ai/workspace/bench-repos/opensearch-shallow",
-    index: "/home/ubuntu/infino-ai/workspace/bench-repos/opensearch-shallow/.infino",
-    table: "chunks_opensearch",
-    // Loaded whole on 2026-09-11 by a hydrate job from nine NDJSON files
-    // staged under the database root: 67,721 chunks across 16,230 files,
-    // embedded on the GPU host, one commit per 8,192-row group, then
-    // optimized. (Two earlier loads did not get here: one lost its
-    // embedding host at 15,872 rows; one committed every row and then
-    // dropped the table over a compaction race - see the platform's
-    // hydrate and optimizer commits of the same night.)
-    ready: true,
-    // UNMEASURED. Nothing has been run against this corpus, so unlike the
-    // infino starters these carry no recorded gap. They are the SHAPES that
-    // separated there — "which files hold the most code about X", a
-    // mechanism that spans layers, a write path — because the shape is what
-    // makes an agent sweep the tree, and here the tree is 17,092 files.
-    examples: [
-      "Which files have the most code about query DSL parsing? Ranked list.",
-      "Which files have the most code about shard allocation? Ranked list with reasons.",
-      "How does a search request travel from the REST layer to the shards and back?",
-      "Where does an index write become durable, and what is the last step before a search can see it?",
-      "Where is the similarity scoring implemented, and which class computes the score?",
-    ],
-  },
-  {
-    id: "jobs",
-    label: "job postings — 284,622 postings in 878,682 daily rows, Ashby · Greenhouse · Lever",
-    name: "job postings",
-    kind: "data",
-    blurb:
-      "284,622 job postings from three applicant-tracking systems — Ashby, Greenhouse and Lever — as daily " +
-      "snapshots taken 8–11 September 2026 (the open-apply-jobs dataset): 878,682 rows, a posting appearing " +
-      "once per day it was open. Every column is carried: the title, the whole description as HTML, employer, " +
-      "department, locations, remote flag, posting dates, salary range and currency, and the apply link.",
-    how:
-      "Every arm sees the same 878,682 rows. The File Tools arm reads them off disk — one posting per line " +
-      "as JSON, 250 lines per file, 6.4 GB — with Grep, Glob and Read; the others query an Infino table of " +
-      "the same rows, full-text indexed on the title and the description and with a vector index over the " +
-      "titles. A question that spans many postings — a count, a ranking, who is hiring for what — is where " +
-      "they diverge; a question about one named posting usually comes out level.",
-    repo: JOBS_DIR,
-    index: join(JOBS_DIR, ".infino-hosted"),
-    table: "chunks_jobs",
-    rows: 878_682,
-    // Measured on the loaded table (COUNT(DISTINCT id), 0.77 s): the daily
-    // snapshots repeat an open posting, so a count that means postings has to
-    // dedupe by id. The page says both numbers for that reason.
-    postings: 284_622,
-    // Loaded whole on 2026-09-11 by a hydrate job straight from the ten
-    // parquet shards staged under the database root: every column, full-text
-    // on title and description_html (inferred), the vector column from the
-    // title alone — the full descriptions embed at 4.5 texts/s on the GPU
-    // host, which is 54 hours for this many rows; titles take minutes.
-    ready: true,
-    judge: false,
-    system: dataSystemPrompt(
-      JOBS_DIR,
-      "284,622 job postings from Ashby, Greenhouse and Lever, held as 878,682 rows of daily snapshots " +
-        "(a posting repeats once per day it was open, so count postings by distinct id; columns: title, " +
-        "description, employer, department, locations, salary, dates)",
-    ),
-    // UNMEASURED, like the OpenSearch starters. They are the shapes a
-    // recruiting product asks - who is hiring for what, where, at what pay -
-    // each a sweep over hundreds of thousands of rows, which is the regime the
-    // comparison is about.
-    examples: [
-      "Which employers have the most open machine learning engineer roles, and where are they hiring? Ranked list.",
-      "How many postings are remote, and which departments have the highest share of remote roles?",
-      "What salary ranges do entry-level or new-grad software engineering postings list, and which employers pay the most?",
-      "Which companies are hiring for GPU or CUDA experience, and what do those roles ask for?",
-      "Which postings mention a security clearance, and which departments and locations do they cluster in?",
-    ],
-  },
-];
-
-/** The corpus a request names, or the first. */
-function corpusFor(id) {
-  return CORPORA.find((c) => c.id === id) ?? CORPORA[0];
-}
+const armLabel = (arm, family) => `${familyLabel(family)} + ${arm.tools}`;
 
 /** The arms a corpus runs. A corpus whose hosted table is incomplete runs the
  * grep arm only: the index arms would answer from a fraction of it and look
@@ -280,7 +136,7 @@ const MAX_QUESTION_CHARS = 500;
 
 const PORT = Number(process.env.PORT ?? 7777);
 const HOST = process.env.DEMO_HOST ?? "127.0.0.1";
-const REPO_DIR = resolve(process.env.CX_BENCH_REPO ?? "/home/ubuntu/infino-ai/workspace/bench-repos/infino-ed4e020");
+const REPO_DIR = resolve(process.env.CX_BENCH_REPO ?? DEFAULT_INFINO_REPO);
 const INDEX_DIR = resolve(process.env.CX_INDEX_DIR ?? join(REPO_DIR, ".infino-hosted"));
 
 // A demo run must never build an index. The client's first `find`/`sql`/`ask`
@@ -389,7 +245,7 @@ function callerTokens(row) {
  * `open` tracks the calls in flight so the bar knows what colour its growing
  * edge is right now - which is the whole difference between a bar that fills
  * live and one that appears at the end. */
-async function runArm(arm, corpus, question, emit, runId, model) {
+async function runArm(arm, corpus, question, emit, runId, model, family) {
   // The fixture path answers nothing and spends nothing; it exists so the page
   // can be worked on without a model. It returns a row of the same shape, and
   // the split below is computed by the same code, so what it exercises is the
@@ -426,6 +282,7 @@ async function runArm(arm, corpus, question, emit, runId, model) {
   const row = await runLane({
     lane: arm.lane,
     model,
+    family,
     prompt: question,
     // A data corpus carries its own prompt (records, not a checkout); a code
     // corpus gets the bench's, so its runs stay comparable with the runner's.
@@ -521,6 +378,7 @@ async function handleRun(req, res, url) {
   const corpus = corpusFor(url.searchParams.get("corpus"));
   const family = familyFor(url.searchParams.get("model"));
   const model = callerModel(family);
+  if (!model) return refuse(res, `unknown caller model family: ${family}`);
   const arms = armsFor(corpus, family);
 
   res.writeHead(200, {
@@ -570,7 +428,7 @@ async function handleRun(req, res, url) {
     // which makes the fast arm look exactly as slow as the slow one.
     results = await Promise.all(
       arms.map(async (arm) => {
-        const { result, row } = await runArm(arm, corpus, question, guarded, runId, model);
+        const { result, row } = await runArm(arm, corpus, question, guarded, runId, model, family);
         rows.set(arm.id, row);
         guarded({ ...result, kind: "arm_done" });
         return result;
@@ -806,6 +664,7 @@ const server = createServer(async (req, res) => {
         // The caller models on offer, so the page's selector is this server's
         // list rather than a second copy of it that can drift.
         families: FAMILIES,
+        familyLabels: CALLER_LABELS,
         family: DEFAULT_FAMILY,
         // The starters belong to the corpus: infino's name its subsystems,
         // OpenSearch's name its own, and neither set means anything against
@@ -826,25 +685,44 @@ const server = createServer(async (req, res) => {
   return plain(res, 404, "not found");
 });
 
+const EMBEDDER_HEALTH_URL = process.env.DEMO_EMBEDDER_HEALTH_URL ?? "http://10.10.0.18:8089/health";
+
 // Fail before the page loads, not on the first click, if the hosted arm has no
 // database or key - the same discipline `checkLaneEnv` gives the bench. The
 // fixture reaches neither the platform nor a model, so it needs neither.
-if (!isFixture()) {
-  for (const arm of ARMS) checkLaneEnv(arm.lane);
-  for (const c of CORPORA) for (const lane of Object.values(c.lanes ?? {})) checkLaneEnv(lane);
+async function boot() {
+  if (!isFixture()) {
+    assertCallerModelsConfigured();
+    for (const arm of ARMS) checkLaneEnv(arm.lane);
+    for (const c of CORPORA) for (const lane of Object.values(c.lanes ?? {})) checkLaneEnv(lane);
+    if (HOSTED) {
+      await assertDemoPlatformReady({
+        hosted: HOSTED,
+        corpora: CORPORA,
+        embedderHealthUrl: EMBEDDER_HEALTH_URL,
+      });
+    }
+  }
+
+  server.listen(PORT, HOST, () => {
+    const rates = resolveRates();
+    console.log(`demo on http://${HOST}:${PORT}`);
+    console.log(`  repo   ${REPO_DIR}`);
+    console.log(`  index  ${INDEX_DIR}`);
+    console.log(`  arms   ${ARMS.map((a) => `${a.id} (${a.lane})`).join("  vs  ")}`);
+    if (HOSTED) console.log(`  hosted ${HOSTED.base}/${HOSTED.database} (Infino arms use CX_BENCH via platform)`);
+    else console.log("  hosted none — set CX_BENCH_DB_URL and CX_BENCH_KEY_FILE for Infino arms");
+    console.log("  runs   unlimited, one at a time - every click spends");
+    if (isFixture()) console.log("  FIXTURE MODE - invented data, no model runs, nothing here is a result");
+    console.log(
+      rates.readTokenUsdPerMillion === null || rates.modelTokenUsdPerMillion === null
+        ? "  rates  unset - our charge shows metered tokens, no dollars"
+        : `  rates  read $${rates.readTokenUsdPerMillion}/M, inference $${rates.modelTokenUsdPerMillion}/M +${Math.round(rates.markup * 100)}%`,
+    );
+  });
 }
 
-server.listen(PORT, HOST, () => {
-  const rates = resolveRates();
-  console.log(`demo on http://${HOST}:${PORT}`);
-  console.log(`  repo   ${REPO_DIR}`);
-  console.log(`  index  ${INDEX_DIR}`);
-  console.log(`  arms   ${ARMS.map((a) => `${a.id} (${a.lane})`).join("  vs  ")}`);
-  console.log("  runs   unlimited, one at a time - every click spends");
-  if (isFixture()) console.log("  FIXTURE MODE - invented data, no model runs, nothing here is a result");
-  console.log(
-    rates.readTokenUsdPerMillion === null || rates.modelTokenUsdPerMillion === null
-      ? "  rates  unset - our charge shows metered tokens, no dollars"
-      : `  rates  read $${rates.readTokenUsdPerMillion}/M, inference $${rates.modelTokenUsdPerMillion}/M +${Math.round(rates.markup * 100)}%`,
-  );
+boot().catch((err) => {
+  console.error(`demo startup failed: ${err.message}`);
+  process.exit(1);
 });
