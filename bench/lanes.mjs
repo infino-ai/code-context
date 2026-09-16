@@ -8,6 +8,14 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 
+import { publicGuard } from "./public-guard.mjs";
+
+/** Whether this process serves a demo reachable from outside the tailnet, in
+ * which case the lanes run under the guard in `public-guard.mjs` rather than
+ * under `bypassPermissions`. Read per call rather than captured at import, so a
+ * test can set it and the demo server can set it before it spawns a run. */
+const publicDemo = () => process.env.DEMO_PUBLIC === "1";
+
 export const BENCH = dirname(fileURLToPath(import.meta.url));
 export const WORK = join(BENCH, ".work");
 export const RESULTS = join(WORK, "results");
@@ -1011,7 +1019,25 @@ export async function runLane({
         // Project instructions and skills reach both kinds alike; see
         // `laneOptions`.
         systemPrompt: laneDef(lane).mcp ? system : { type: "preset", preset: "claude_code", append: system },
-        permissionMode: "bypassPermissions",
+        // On the tailnet every visitor already holds a key to it, so the arms
+        // run under `bypassPermissions` and hold the tools a real developer
+        // session holds — which is the comparison. Reachable from the internet
+        // the same text box runs tool calls on this host, and the corpora being
+        // public data does not make the HOST public: the platform key and the
+        // model key are on it.
+        //
+        // `DEMO_PUBLIC=1` swaps the bypass for a guard that asks two questions
+        // of every call — is the path inside the corpus, is the command one the
+        // file-tools arm actually runs — and denies the rest with a reason the
+        // model can act on. `bypassPermissions` would skip `canUseTool`
+        // entirely, so the mode has to move with it.
+        //
+        // Off by default because the recorded figures were measured without it:
+        // a guard that quietly changed what an arm could do would make every
+        // number after it incomparable with every number before.
+        ...(publicDemo()
+          ? { permissionMode: "default", canUseTool: publicGuard(repoDir) }
+          : { permissionMode: "bypassPermissions" }),
         env: { ...process.env, IS_SANDBOX: "1" },
         ...laneOptions(lane, repoDir, indexDir, serverEnv),
       },
