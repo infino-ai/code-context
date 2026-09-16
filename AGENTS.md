@@ -51,7 +51,7 @@ live in [README.md](README.md); the honest limits in
   (the `ask` loop) are the platform half; both exist only in the
   `--db` path.
 - `src/commands/`: CLI command implementations (`index-cmd`, `query-cmds`).
-- `test/`: vitest suites. `bench/`: the benchmark harness. `docs/`: docs.
+- `test/`: vitest suites. `docs/`: docs.
 
 ## Build, test, gates
 
@@ -83,8 +83,10 @@ before opening a PR.
   code; keep that contract when touching `searcher` or the tool descriptions.
 - Tool descriptions and server instructions are prompt text on every turn
   and were measured to steer tool selection sentence by sentence. Change
-  them with the bench (`bench/`, the four question sets and
-  `compare-builds.mjs`), not by taste.
+  them with a measurement, not by taste. The harness that produced these
+  numbers is not in this repository: it lives beside the demo it also
+  drives, because its lanes name our own hosted arms. A wording change here
+  that has not been run through it is a guess, however well it reads.
 
 ## Boundaries
 

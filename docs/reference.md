@@ -162,4 +162,3 @@ stack.
 
 - [Code search for coding agents](concepts/code-search-for-coding-agents.md) - the crawl-vs-retrieve model and when an index saves tokens.
 - [FAQ](faq.md), [Tradeoffs](tradeoffs.md) - the honest limits.
-- [`bench/`](../bench/) - the lanes, the questions, the judge, and the chart script behind the README's numbers.

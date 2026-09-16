@@ -59,7 +59,6 @@ logs, docs, and agent memory.
   and known-file questions, and loses aggregation, comprehension and
   by-meaning to a model reading the files itself - stated in the README as
   a loss, not glossed over.
-- [Harness](bench/): reproduce every number on your own repo.
 - [Embedder eval](docs/embedder-eval.md): how the local embedding model
   was chosen.
 

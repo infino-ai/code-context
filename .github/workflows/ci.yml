@@ -26,20 +26,7 @@ jobs:
       - name: Test
         run: npm test
 
-  recall:
-    name: Recall (report-only)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          node-version: "22"
-      - name: Install dependencies
-        run: npm ci
-      - name: Build
-        run: npm run build
-      # Retrieval-quality signal over the code-context corpus itself. Local
-      # embedder, no API key. Report-only: prints hit@5 / MRR@5 to the log and
-      # never fails the build (a soft floor can come later once stable).
-      - name: Recall report
-        run: node bench/recall.mjs
+# The recall report ran here until the benchmark harness left this repository
+# for the one that owns the demo. It was report-only — hit@5 / MRR@5 printed to
+# the log, never failing the build — so what is lost is a log line rather than a
+# gate. The measurement still runs where `bench/` now lives.

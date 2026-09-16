@@ -22,7 +22,7 @@ name: Release prep
 #             README.md, LICENSE, server.json
 #   skip  — nothing a release consumer receives changes (no PR at all):
 #             everything else (docs/**, llms.txt, context7.json, skills/**,
-#             test/**, bench/**, .github/**, …)
+#             test/**, .github/**, …)
 #
 # Highest bucket wins across the diff. Major is never automatic — dispatch
 # with bump=major when a breaking release is intended. The classification

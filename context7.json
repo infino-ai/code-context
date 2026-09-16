@@ -8,7 +8,6 @@
     "**/node_modules",
     "**/dist",
     "test",
-    "bench/.work",
     ".github"
   ],
   "rules": [

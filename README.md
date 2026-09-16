@@ -70,8 +70,7 @@ Real agent runs through the Claude Agent SDK: `claude-sonnet-4-6`, the same mini
 engine repository (about 256,000 lines of Rust the model has not memorized - which is what makes it a retrieval test at all: on a repository already in the
 model's weights there is nothing for retrieval to do). Thirty-six questions in five
 categories, one pass per arm, all three arms on one build, measured 2026-09-07 - so the cost below and the judging further down score the same
-answers. The harness, the questions, the judge and the chart script are in
-[`bench/`](bench/).
+answers.
 
 | arm | what Sonnet has |
 |---|---|
@@ -286,7 +285,6 @@ The table is then searchable like any other. `ask` runs over it, and one questio
 
 - [Reference](docs/reference.md) - tools, flags, configuration, CLI, architecture.
 - [FAQ](docs/faq.md), [Tradeoffs](docs/tradeoffs.md) - the honest limits.
-- [`bench/`](bench/) - the harness, the questions and the judge behind the numbers above.
 
 ## License
 
