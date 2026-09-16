@@ -324,6 +324,9 @@ export async function runOpenRouterLane({
   let error = null;
   let totalIn = 0;
   let totalOut = 0;
+  // Stays null until a response actually reports a cost, so an arm whose
+  // provider reports none shows no bill rather than a fabricated zero.
+  let totalCostUsd = null;
 
   try {
     mcpClients = await connectMcpServers(options.mcpServers);
@@ -339,9 +342,18 @@ export async function runOpenRouterLane({
         messages,
         tools: tools.length ? tools : undefined,
         max_tokens: 8192,
+        // OpenRouter's own accounting. With this asked for, each response
+        // carries `usage.cost`: the credits that call actually charged, in
+        // USD. Taken from the provider rather than derived from a rate card
+        // here, for the reason charge.mjs gives for keeping prices out of the
+        // code — a rate written down beside the arithmetic goes stale in
+        // silence and gets quoted back as though it were measured. A provider
+        // that returns no cost leaves the bill absent, never guessed.
+        usage: { include: true },
       });
       totalIn += body.usage?.prompt_tokens ?? 0;
       totalOut += body.usage?.completion_tokens ?? 0;
+      if (Number.isFinite(body.usage?.cost)) totalCostUsd = (totalCostUsd ?? 0) + body.usage.cost;
       const msg = body.choices?.[0]?.message;
       if (!msg) throw new Error("OpenRouter returned no message");
 
@@ -405,7 +417,7 @@ export async function runOpenRouterLane({
     cli: CX,
     tokens,
     usage,
-    costUsd: null,
+    costUsd: totalCostUsd,
     modelUsage: null,
     durationApiMs: null,
     wallMs: Math.round(performance.now() - t0),
