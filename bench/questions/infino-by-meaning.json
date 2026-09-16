@@ -1,0 +1,8 @@
+[
+  { "cat": "by-meaning", "q": "Where is the decision made that a set of small files in a table should be merged into a larger one?" },
+  { "cat": "by-meaning", "q": "Where does an append become durable, and what is the last step before other readers can see the new rows?" },
+  { "cat": "by-meaning", "q": "What stops two writers from committing to the same table at the same time?" },
+  { "cat": "by-meaning", "q": "Where are rows that have been deleted filtered out of search results?" },
+  { "cat": "by-meaning", "q": "How does a vector search decide how many partitions of the index to visit for a query?" },
+  { "cat": "by-meaning", "q": "Where does the code decide whether to read a file from the local disk cache or fetch it from object storage?" }
+]

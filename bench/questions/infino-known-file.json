@@ -1,0 +1,8 @@
+[
+  { "cat": "known-file", "q": "Which Rust toolchain channel does rust-toolchain.toml pin?" },
+  { "cat": "known-file", "q": "What are the crate's name, version, and edition in Cargo.toml?" },
+  { "cat": "known-file", "q": "Which [[test]] binaries does Cargo.toml declare, and what path does each point at?" },
+  { "cat": "known-file", "q": "What does the Makefile's ci target run, step by step?" },
+  { "cat": "known-file", "q": "According to docs/architecture/supertable.md, what is the manifest pointer and how does a commit become visible to readers?" },
+  { "cat": "known-file", "q": "What commands does CONTRIBUTING.md give for running a single integration test crate?" }
+]

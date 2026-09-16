@@ -1,0 +1,10 @@
+[
+  { "cat": "pinpoint", "q": "Where is the constant RRF_K defined, and what is its value?" },
+  { "cat": "pinpoint", "q": "List every call site of reconcile_tombstone_seqs, with file and line." },
+  { "cat": "pinpoint", "q": "Which file defines InfinoError, and how many variants does the enum have?" },
+  { "cat": "pinpoint", "q": "List every place the code reads an environment variable through std::env::var, with the variable name and file:line for each." },
+  { "cat": "pinpoint", "q": "Where is pointer_refresh_due defined, and where is it called?" },
+  { "cat": "pinpoint", "q": "What are the crate version and the arrow and datafusion dependency versions in Cargo.toml?" },
+  { "cat": "pinpoint", "q": "For each file under src/supertable/, how many #[tokio::test] tests does it contain?" },
+  { "cat": "pinpoint", "q": "List the tracing call sites in src/compaction/ with the message each one logs." }
+]
