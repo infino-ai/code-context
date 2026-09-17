@@ -123,6 +123,7 @@ export function refusalHint(err: unknown): string {
 }
 import { hostedDbFor, localDb, newHostedMemo, platformLabel, platformTableReady, type IndexHandle } from "../core/context.js";
 import { devContext, devContextEnabled } from "../core/dev-context.js";
+import { foldValidationFacts } from "../core/facts.js";
 import { HostedError, type HostedOptions, type RowRecord } from "../core/hosted.js";
 import {
   find,
@@ -240,7 +241,14 @@ const VALIDATION_NOTE =
   "terms that occur nowhere in the index ('absent': no query will find them, so do not search for " +
   "them again) and the ones that do (query for those), and carries a 'suggestion' statement when " +
   "the one that ran should be rewritten. Query again on a refusal rather than answering from it. " +
-  "Valid means the result answers the question's terms, not that it is correct.";
+  "Valid means the result answers the question's terms, not that it is correct. " +
+  // The two columns the platform adds to a ranked aggregate's rows, named
+  // here so the model expects them and reads them as what they are. The
+  // measured failure they answer is in core/facts.ts.
+  "On a ranking grouped by path, every row also carries file_lines, the file's whole length, and " +
+  "term_lines, how many of its lines hold each search term: a ranked total is a share of file_lines, " +
+  "never the file's size, and a file whose term_lines are all zero was ranked by meaning alone, so " +
+  "say so or leave it out rather than renumber the rest.";
 
 /** What introduces the card in the `sql` description. Stated as the table's
  * own measured shape, because that is what it is: the optimizer computed it
@@ -814,7 +822,15 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
       // caller, and on a valid result the whole verdict is one word; the
       // reason is the part worth prompt space - with the terms the corpus
       // does not hold and the rewrite to run, when the platform found them.
-      if (verdict.valid === true) return { verdict: { valid: true, check: verdict.check }, telemetry };
+      // A ranked aggregate's verdict also carries the facts about its
+      // groups (each file's whole length, its lines holding each search
+      // term) and the note saying what they measure; the caller folds the
+      // facts into the rows (foldValidationFacts) and shows the note.
+      const facts =
+        typeof verdict.group_column === "string" && Array.isArray(verdict.groups) && verdict.groups.length > 0
+          ? { group_column: verdict.group_column, groups: verdict.groups, ...(typeof verdict.note === "string" ? { note: verdict.note } : {}) }
+          : {};
+      if (verdict.valid === true) return { verdict: { valid: true, check: verdict.check, ...facts }, telemetry };
       const absent = Array.isArray(verdict.absent) && verdict.absent.length > 0 ? { absent: verdict.absent } : {};
       const suggestion = typeof verdict.suggestion === "string" ? { suggestion: verdict.suggestion } : {};
       return {
@@ -1027,8 +1043,12 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
     try {
       const t0 = performance.now();
       const fromPlatform = await runSqlRows(ctx.hosted!, query, embeds);
-      const rowsOut = opts.numbered ? fromPlatform.map(numberRowLines) : fromPlatform;
-      const { verdict, telemetry } = await platformVerdict(ctx, query, rowsOut, question, opts.column);
+      const placed = opts.numbered ? fromPlatform.map(numberRowLines) : fromPlatform;
+      const { verdict: judged, telemetry } = await platformVerdict(ctx, query, placed, question, opts.column);
+      // A ranked aggregate's rows gain the platform's facts about their
+      // groups - `file_lines`, `term_lines` - so a top-k total sits beside
+      // the file's whole length in the row the model reads (core/facts.ts).
+      const { rows: rowsOut, verdict } = foldValidationFacts(placed, judged);
       let usage: string | undefined;
       if (receiptOn) {
         // The statement's own metered tokens, then the verdict's: two
