@@ -151,7 +151,7 @@ subagents.[^fifty]
 You need node 20 or newer, on macOS or Linux. Then clone this repo:
 
 ```bash
-git clone -b feat/platform-backend https://github.com/infino-ai/code-context
+git clone -b feat/side-by-side-demo https://github.com/infino-ai/code-context
 cd code-context && npm ci && npm run build
 ```
 
@@ -161,7 +161,7 @@ Now, in the repository you want to search, one command:
 node /path/to/code-context/dist/cli.js install --platform https://host
 ```
 
-That is the whole setup. It indexes the repository, gets you a free account, registers this repository's database, and writes the MCP entry. Open Claude Code there and ask a question - all five tools are live.
+That is the whole setup. It indexes the repository, gets you a free account, registers this repository's database, and writes the MCP entry. Open Claude Code there and ask a question - all four tools are live.
 
 **No signup.** There is no form, no email, no password and no card. SuperGrep asks you once - it tells you that the contents of the files are uploaded - and on yes it creates the account in the background and stores the key at `~/.infino/key`, mode 600, readable only by you. No config file ever holds a key or a path to one.
 
