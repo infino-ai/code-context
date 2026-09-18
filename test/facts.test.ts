@@ -5,7 +5,27 @@
 // reads, and leave the verdict carrying the note alone.
 
 import { describe, expect, it } from "vitest";
-import { foldValidationFacts } from "../src/core/facts.js";
+import { foldValidationFacts, ordersRows, rankRows } from "../src/core/facts.js";
+
+describe("rankRows", () => {
+  const rows = [{ path: "a", n: 3 }, { path: "b", n: 2 }, { path: "c", n: 1 }];
+
+  it("numbers an ordered result's rows with their place, rank first", () => {
+    const ranked = rankRows(rows, "SELECT path, COUNT(*) AS n FROM chunks GROUP BY path\n  ORDER BY n DESC LIMIT 3");
+    expect(ranked.map((r) => r.rank)).toEqual([1, 2, 3]);
+    expect(Object.keys(ranked[0])[0]).toBe("rank");
+    expect(rows[0]).not.toHaveProperty("rank");
+  });
+
+  it("leaves an unordered result, a single row, and rows that already carry a rank alone", () => {
+    expect(rankRows(rows, "SELECT path, COUNT(*) AS n FROM chunks GROUP BY path")).toEqual(rows);
+    expect(rankRows([rows[0]], "SELECT path FROM chunks ORDER BY path")).toEqual([rows[0]]);
+    const own = [{ rank: 7, path: "a" }, { rank: 9, path: "b" }];
+    expect(rankRows(own, "SELECT rank, path FROM t ORDER BY rank")).toEqual(own);
+    expect(ordersRows("select 1 order\n by 1")).toBe(true);
+    expect(ordersRows("select 1")).toBe(false);
+  });
+});
 
 describe("foldValidationFacts", () => {
   const rows = [

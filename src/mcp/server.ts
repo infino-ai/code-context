@@ -123,7 +123,7 @@ export function refusalHint(err: unknown): string {
 }
 import { hostedDbFor, localDb, newHostedMemo, platformLabel, platformTableReady, type IndexHandle } from "../core/context.js";
 import { devContext, devContextEnabled } from "../core/dev-context.js";
-import { foldValidationFacts } from "../core/facts.js";
+import { foldValidationFacts, rankRows } from "../core/facts.js";
 import { HostedError, type HostedOptions, type RowRecord } from "../core/hosted.js";
 import {
   find,
@@ -826,10 +826,14 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
       // groups (each file's whole length, its lines holding each search
       // term) and the note saying what they measure; the caller folds the
       // facts into the rows (foldValidationFacts) and shows the note.
-      const facts =
-        typeof verdict.group_column === "string" && Array.isArray(verdict.groups) && verdict.groups.length > 0
-          ? { group_column: verdict.group_column, groups: verdict.groups, ...(typeof verdict.note === "string" ? { note: verdict.note } : {}) }
-          : {};
+      const facts = {
+        ...(typeof verdict.group_column === "string" && Array.isArray(verdict.groups) && verdict.groups.length > 0
+          ? { group_column: verdict.group_column, groups: verdict.groups }
+          : {}),
+        // The note travels on its own: a ranking whose groups the table does
+        // not name still has totals that read as sizes.
+        ...(typeof verdict.note === "string" ? { note: verdict.note } : {}),
+      };
       if (verdict.valid === true) return { verdict: { valid: true, check: verdict.check, ...facts }, telemetry };
       const absent = Array.isArray(verdict.absent) && verdict.absent.length > 0 ? { absent: verdict.absent } : {};
       const suggestion = typeof verdict.suggestion === "string" ? { suggestion: verdict.suggestion } : {};
@@ -1047,8 +1051,10 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
       const { verdict: judged, telemetry } = await platformVerdict(ctx, query, placed, question, opts.column);
       // A ranked aggregate's rows gain the platform's facts about their
       // groups - `file_lines`, `term_lines` - so a top-k total sits beside
-      // the file's whole length in the row the model reads (core/facts.ts).
-      const { rows: rowsOut, verdict } = foldValidationFacts(placed, judged);
+      // the file's whole length in the row the model reads, and an ordered
+      // result's rows carry their place in its order (core/facts.ts).
+      const { rows: folded, verdict } = foldValidationFacts(placed, judged);
+      const rowsOut = rankRows(folded, query);
       let usage: string | undefined;
       if (receiptOn) {
         // The statement's own metered tokens, then the verdict's: two
@@ -1456,7 +1462,9 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
         // before the receipt, not after: a receipt is only worth having if it
         // is the thing that was returned, and these rows are what the caller
         // gets.
-        const rows = (await runSql(handle, getEmbedder(), query, embed as Record<string, string> | undefined)).map(numberRowLines);
+        // Ranked the same way the platform path's rows are: an ordered
+        // result carries each row's place in its order (core/facts.ts).
+        const rows = rankRows((await runSql(handle, getEmbedder(), query, embed as Record<string, string> | undefined)).map(numberRowLines), query);
         const partial = partialIndex(handle.manifest);
         // The platform's own retrieval contract, applied to these rows before
         // they go back. The answering loop gates every query it runs on this

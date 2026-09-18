@@ -38,6 +38,28 @@ export interface FactsVerdict {
 /** The columns a row gains, named as the platform names them. */
 export const FILE_LINES_FIELD = "file_lines";
 export const TERM_LINES_FIELD = "term_lines";
+/** What a ranked row is numbered under: its 1-based place in the order the
+ * statement asked for. Measured need (2026-09-18, the demo's after-run): the
+ * model dropped the rows it judged off-topic - benches, tests, a Python file
+ * - renumbered the rest and called them "the query's ranking", and the judge,
+ * rerunning the query, marked the omission. With the query's own numbers on
+ * the rows a row left out leaves a gap the reader can see. The platform's
+ * loop numbers the rows it retrieves the same way. */
+export const RANK_FIELD = "rank";
+
+/** Whether `statement` orders its rows, so their places are its own answer. */
+export function ordersRows(statement: string): boolean {
+  return /\border\s+by\b/i.test(statement);
+}
+
+/** `rows` numbered under `rank` with their 1-based place when `statement`
+ * orders them, there is more than one, and no row carries a rank already: a
+ * single row has no order to keep, and a statement that selected a `rank`
+ * column said what it meant. `rank` goes first so the row reads in order. */
+export function rankRows<R extends Record<string, unknown>>(rows: readonly R[], statement: string): R[] {
+  if (rows.length < 2 || !ordersRows(statement) || rows.some((row) => RANK_FIELD in row)) return [...rows];
+  return rows.map((row, i) => ({ [RANK_FIELD]: i + 1, ...row }) as R);
+}
 
 /** `rows` with the verdict's facts folded in, and the verdict without the
  * facts it no longer needs to carry. A row whose group value has facts gains
