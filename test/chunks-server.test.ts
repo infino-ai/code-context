@@ -85,7 +85,13 @@ async function expectChunksText(s: Started): Promise<void> {
   expect(byName.get("ask")).toContain("Ask the repository index");
   expect(byName.get("explore")).toContain("Try this first for an exploration question");
   expect(byName.get("explore")).toContain("Relay the answer with its citations");
-  expect(s.client.getInstructions()).toContain("code-context is a local index of this repository");
+  // The routing the model reads is the instructions list, so explore is
+  // named there too, ahead of ask, or it is never called (measured
+  // 2026-09-19: registered but unlisted, twelve runs called ask alone).
+  const instructions = s.client.getInstructions() ?? "";
+  expect(instructions).toContain("code-context is a local index of this repository");
+  expect(instructions).toContain("- explore - try this first for an exploration question");
+  expect(instructions.indexOf("- explore -")).toBeLessThan(instructions.indexOf("- ask -"));
 }
 
 /** No write reached the platform and no local index was built. */
@@ -205,6 +211,7 @@ describe("the chunks table with CX_AGENT_TOOLS=0: the lane that hides ask", () =
     const instructions = s.client.getInstructions() ?? "";
     expect(instructions).toContain("code-context is a local index of this repository");
     expect(instructions).not.toContain("- ask -");
+    expect(instructions).not.toContain("- explore -");
     // The database is still configured: the sql text's platform-side note
     // and the startup card read are about sql, not about the loop.
     expect(tools.find((t) => t.name === "sql")?.description).toContain("'validation'");

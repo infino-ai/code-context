@@ -369,7 +369,10 @@ export function rowsInstructions(shape: TableShape, platformTools: boolean): str
     `k, never the table - a complete count comes from token_match, a WHERE, or the ${table} table with no ` +
     "search function.\n" +
     (platformTools
-      ? "- ask - a question or task in plain language about the rows - which rows are about X, how many and " +
+      ? "- explore - try this first for a question about what the rows say - what the roles about X ask for, " +
+        "how a group of rows compares: one call runs the searches and returns the answer written from the rows " +
+        "it retrieved, citing the records, plus those rows; relay it as it stands, adding only what you verify.\n" +
+        "- ask - a question or task in plain language about the rows - which rows are about X, how many and " +
         "where, who has the most and where - it runs the searches and statements itself and returns the rows " +
         "it retrieved (facts as rows, with their columns and the text cut to snippets), not an answer: compose " +
         "from them. Spawn several in parallel for independent questions instead of writing the statements yourself.\n" +
@@ -1112,14 +1115,19 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
         "a total over a search relation is the top k's matched lines, never a file's length - sizes " +
         "and whole-repo counts come from the chunks table with no search function).\n" +
         (agentTools
-          ? "- ask - a question or task in plain language; returns the rows it retrieved (facts with path:line and the code), not an answer: compose from them. Spawn several in parallel for independent questions. How often a string occurs, per file, is find's byFile.\n" +
-            // ask owns the mechanism question too. There used to be a second
-            // tool for it that read each query's rows and followed them, and
-            // measured against several asks issued together it was slower and
-            // no more accurate - one exploration took longer than four asks
-            // running at once (2026-09-12). Fanning out beats a loop that
-            // waits on itself, so the line that used to route here says how.
-            "  A mechanism that spans files - how X works end to end, what calls what - is several asks in ONE reply, one per part, not one question that needs following: they run at the same time, and you do the following-up yourself from the rows they return.\n"
+          ? // The exploration question goes to explore first: the platform
+            // retrieves and writes the answer from the rows in one call, and
+            // the caller relays it. Without this line the model never reached
+            // for the tool - on the first judged pass with it registered, every
+            // Infino run called ask alone (2026-09-19), because the routing the
+            // model reads is this list, not a tool's own text.
+            "- explore - try this first for an exploration question: how does X work, what happens when Y, walk me through Z. One call retrieves and returns the answer written from the rows, with exact path:line citations, plus the rows; relay it as it stands, adding only what you verify.\n" +
+            "- ask - a lookup you will read yourself, or several independent questions at once; returns the rows it retrieved (facts with path:line and the code), not an answer: compose from them. Spawn several in parallel for independent questions. How often a string occurs, per file, is find's byFile.\n" +
+            // Several asks in one reply still beat a loop that waits on itself
+            // for a question that splits into independent parts (measured
+            // 2026-09-12: one exploration took longer than four asks running
+            // at once); the whole-mechanism question is explore's.
+            "  A question that splits into independent parts is several asks in ONE reply, one per part: they run at the same time, and you compose from the rows they return.\n"
           : "") +
         "Hits carry the code: when a hit answers the question, answer from it. A hit's content shows " +
         "each line with its own number in the file, so cite a place as path:line or path:start-end " +
@@ -1619,15 +1627,15 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
           "retrieved - the top rows with exact path, start_line, end_line and the code, in the shape of " +
           "search hits, plus aggregate rows (counts, rankings) and the SQL whose rows answer the " +
           "question - never a summary. Use it " +
-          "for how does X work, where is Y handled, which files or symbols; spawn " +
-          "several in parallel for independent questions instead of exploring the code yourself. " +
+          "for a lookup you will read yourself - where is Y handled, which files or symbols - and " +
+          "spawn several in parallel for independent questions instead of exploring the code yourself. " +
           "A single question over a large codebase splits the same way: one call per section with " +
           "`under` naming its subtree, all issued together. " +
-          // This tool owns the mechanism question, and its own text has to say
-          // so - the instructions alone did not move the model.
-          "A mechanism that spans files - how X works end to end, what calls what - is the same " +
-          "shape: several asks in ONE reply, one per part, and you follow up yourself from the " +
-          "rows they return. " +
+          // The whole-mechanism question is explore's, whose answer is written
+          // where the rows are; both texts say so, since the model reads both.
+          "An exploration question - how X works end to end, what calls what - goes to explore " +
+          "first; a question that splits into independent parts is several asks in ONE reply, one " +
+          "per part, and you compose from the rows they return. " +
           "For " +
           "every occurrence of an exact string, and for how many times it occurs per file, use find " +
           "(its byFile is the grep -c answer); for a file you already know, Read it. Answer " +
@@ -1650,7 +1658,16 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
       {
         title: "Explore the repository index: one retrieval, the answer written for you",
         annotations: READ_ONLY,
-        description: mode.kind === "unresolved"
+        description: rows
+          ? `Try this first for a question about what the ${rows.table} rows say - what the roles about X ask for, ` +
+            "how one group of rows compares with another. One call: a read-only retrieval subagent runs the " +
+            "searches and statements over the table, and the platform writes the answer from the rows it " +
+            "retrieved, citing the records, and returns those rows beside the answer. Relay the answer as it " +
+            "stands, adding only what you verify against the rows; ask again more narrowly when it leaves a " +
+            "gap. Use ask when you want the rows alone or have several independent questions to issue at once. " +
+            DEV_CONTEXT_NOTE +
+            "The result includes a 'usage' field, a one-line receipt of what the call cost."
+          : mode.kind === "unresolved"
           ? unresolvedDescription("An exploration question in plain language, answered in writing from the rows it retrieved,", TABLE)
           : "Try this first for an exploration question - how does X work, what happens when Y, walk " +
           "me through Z, where is W handled. One call: a read-only retrieval subagent searches and ranks " +
