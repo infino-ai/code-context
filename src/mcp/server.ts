@@ -1503,6 +1503,108 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
   );
 
   if (agentTools) {
+    /** The inputs `ask` and `explore` share: the two tools differ in one
+     * request flag and in what the outer model is told to do with the result,
+     * so their schema is one object. */
+    const retrievalInputs = {
+      question: z.string().min(1).describe("The question or task, in plain language, about the indexed code."),
+      under: z
+        .string()
+        .optional()
+        .describe(
+          "Repo-relative path prefix to scope to - one repository of a workspace, one subtree of a " +
+            "monorepo, one directory. Carried to the retrieval loop as a constraint on where to look, " +
+            "and echoed back on the result so a scoped answer's facts are not read as the whole " +
+            "repository's.",
+        ),
+      path: z
+        .string()
+        .optional()
+        .describe(
+          "Absolute path to the repository root to ask about. Defaults to the server's configured root; " +
+            "set it to target a specific repo when a session spans more than one.",
+        ),
+    };
+
+    /** One retrieval through the platform's loop, as `ask` (the facts) or
+     * `explore` (the facts and the platform's written answer, composed by
+     * the loop's own model under the platform's citation instruction, the
+     * same sentences the outer model writes its final answer under). */
+    const retrieve = async (tool: "ask" | "explore", { question, under, path }: { question: string; under?: string; path?: string }) => {
+      let ctx: RepoCtx;
+      try {
+        ctx = repoFor(path);
+      } catch (err) {
+        return fail((err as Error).message);
+      }
+      // A repo without the platform client is refused before any build.
+      // Then the same first-query build and auto-sync the other tools make
+      // (both write the platform table too), then the platform table's own
+      // readiness: without a chunks table the platform would spend the whole
+      // cold-start budget on "no table described yet" before saying
+      // anything useful.
+      const missing = noPlatform(tool, ctx);
+      if (missing) return missing;
+      // Over a hosted table of another shape there is no local index to
+      // build or sync - and a build would drop that table (see ownsTable)
+      // - and no readiness to probe: the startup decision saw the table.
+      // The facts are keyed by the table's own key column, not the chunks
+      // table's place columns (rowsProjection), and come back as rows of
+      // that shape, text cut to snippets as a search hit's is.
+      const over = rowsOver(tool, ctx);
+      if (over && "failed" in over) return over.failed;
+      if (!over) {
+        const ensured = await localIndex(ctx);
+        if ("failed" in ensured) return ensured.failed;
+        if (!ensured.autoIndexed) maybeAutoSync(ctx); // a fresh build is already current
+        const notReady = await platformNotReady(tool, ctx);
+        if (notReady) return notReady;
+      }
+      try {
+        const t0 = performance.now();
+        // The spend (turns, tokens) goes to the ledger and the receipt only;
+        // the result the model sees is the facts: sql, hits, rows, queries -
+        // and, for explore, the platform's answer in front of them.
+        // The repository's own instructions ride with the question only
+        // when asked for (CX_DEV_CONTEXT=1); off, the loop's model gets the
+        // question alone.
+        const context = devContextEnabled() ? devContext(ctx.root) : undefined;
+        const compose = tool === "explore";
+        // `under` names a subtree of a code index, and a row of a hosted
+        // table of another shape sits in no directory - so it is left out
+        // there, exactly as find leaves its own out.
+        const { result, spend } = await runRetrievalAgent(
+          ctx.hosted!,
+          {
+            question,
+            ...(context !== undefined ? { context } : {}),
+            ...(under !== undefined && !over ? { under } : {}),
+            ...(over ? { projection: rowsProjection(over.shape), shape: over.shape } : {}),
+            // The table this client reads, in either mode: the database can
+            // hold several and the loop, shown all of them, does not always
+            // pick this one (measured 2026-09-12: two code indexes, and every
+            // ask about the second was answered from the first).
+            table: TABLE,
+            ...(compose ? { answer: true } : {}),
+          },
+          { maxTurns: subagentMaxTurns(), maxWallSecs: subagentMaxWallSecs(), k: subagentK() },
+        );
+        let usage: string | undefined;
+        if (receiptOn) {
+          const entry = withPlatform(subagentEntry(result, spend, tool), ctx);
+          recordUsage(ctx.dir, entry);
+          usage = formatReceipt(entry, session);
+        }
+        return ok({
+          ...result,
+          took_ms: Math.round((performance.now() - t0) * 1000) / 1000,
+          ...(usage ? { usage } : {}),
+        });
+      } catch (err) {
+        return fail(`${tool} failed: ${(err as Error).message}${refusalHint(err)}`);
+      }
+    };
+
     server.registerTool(
       "ask",
       {
@@ -1532,99 +1634,38 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
           "from the rows and cite path:line. " +
           DEV_CONTEXT_NOTE +
           "The result includes a 'usage' field, a one-line receipt of what the call cost.",
-        inputSchema: {
-          question: z.string().min(1).describe("The question or task, in plain language, about the indexed code."),
-          under: z
-            .string()
-            .optional()
-            .describe(
-              "Repo-relative path prefix to scope to - one repository of a workspace, one subtree of a " +
-                "monorepo, one directory. Carried to the retrieval loop as a constraint on where to look, " +
-                "and echoed back on the result so a scoped answer's facts are not read as the whole " +
-                "repository's.",
-            ),
-          path: z
-            .string()
-            .optional()
-            .describe(
-              "Absolute path to the repository root to ask about. Defaults to the server's configured root; " +
-                "set it to target a specific repo when a session spans more than one.",
-            ),
-        },
+        inputSchema: retrievalInputs,
       },
-      async ({ question, under, path }) => {
-        let ctx: RepoCtx;
-        try {
-          ctx = repoFor(path);
-        } catch (err) {
-          return fail((err as Error).message);
-        }
-        // A repo without the platform client is refused before any build.
-        // Then the same first-query build and auto-sync the other tools make
-        // (both write the platform table too), then the platform table's own
-        // readiness: without a chunks table the platform would spend the whole
-        // cold-start budget on "no table described yet" before saying
-        // anything useful.
-        const missing = noPlatform("ask", ctx);
-        if (missing) return missing;
-        // Over a hosted table of another shape there is no local index to
-        // build or sync - and a build would drop that table (see ownsTable)
-        // - and no readiness to probe: the startup decision saw the table.
-        // The facts are keyed by the table's own key column, not the chunks
-        // table's place columns (rowsProjection), and come back as rows of
-        // that shape, text cut to snippets as a search hit's is.
-        const over = rowsOver("ask", ctx);
-        if (over && "failed" in over) return over.failed;
-        if (!over) {
-          const ensured = await localIndex(ctx);
-          if ("failed" in ensured) return ensured.failed;
-          if (!ensured.autoIndexed) maybeAutoSync(ctx); // a fresh build is already current
-          const notReady = await platformNotReady("ask", ctx);
-          if (notReady) return notReady;
-        }
-        try {
-          const t0 = performance.now();
-          // The spend (turns, tokens) goes to the ledger and the receipt only;
-          // the result the model sees is the facts: sql, hits, rows, queries.
-          // The repository's own instructions ride with the question only
-          // when asked for (CX_DEV_CONTEXT=1); off, the loop's model gets the
-          // question alone.
-          const context = devContextEnabled() ? devContext(ctx.root) : undefined;
-          // `under` names a subtree of a code index, and a row of a hosted
-          // table of another shape sits in no directory - so it is left out
-          // there, exactly as find leaves its own out.
-          const { result, spend } = await runRetrievalAgent(
-            ctx.hosted!,
-            {
-              question,
-              ...(context !== undefined ? { context } : {}),
-              ...(under !== undefined && !over ? { under } : {}),
-              ...(over ? { projection: rowsProjection(over.shape), shape: over.shape } : {}),
-              // The table this client reads, in either mode: the database can
-              // hold several and the loop, shown all of them, does not always
-              // pick this one (measured 2026-09-12: two code indexes, and every
-              // ask about the second was answered from the first).
-              table: TABLE,
-            },
-            { maxTurns: subagentMaxTurns(), maxWallSecs: subagentMaxWallSecs(), k: subagentK() },
-          );
-          let usage: string | undefined;
-          if (receiptOn) {
-            const entry = withPlatform(subagentEntry(result, spend), ctx);
-            recordUsage(ctx.dir, entry);
-            usage = formatReceipt(entry, session);
-          }
-          return ok({
-            ...result,
-            took_ms: Math.round((performance.now() - t0) * 1000) / 1000,
-            ...(usage ? { usage } : {}),
-          });
-        } catch (err) {
-          return fail(`ask failed: ${(err as Error).message}${refusalHint(err)}`);
-        }
-      },
+      (args) => retrieve("ask", args),
     );
 
+    // The same retrieval with the answer written on the platform by the
+    // loop's own model, under the same citation instruction the outer model
+    // has, so that what comes back is ready to relay.
+    // Registered beside `ask` rather than in its place: the facts alone are
+    // still the right result for a lookup the caller will read itself, and
+    // for several independent questions issued together.
+    server.registerTool(
+      "explore",
+      {
+        title: "Explore the repository index: one retrieval, the answer written for you",
+        annotations: READ_ONLY,
+        description: mode.kind === "unresolved"
+          ? unresolvedDescription("An exploration question in plain language, answered in writing from the rows it retrieved,", TABLE)
+          : "Try this first for an exploration question - how does X work, what happens when Y, walk " +
+          "me through Z, where is W handled. One call: a read-only retrieval subagent searches and ranks " +
+          "across the index, and the platform writes the answer from the rows it retrieved, citing each " +
+          "place as path:line or path:start-end exactly as the rows hold it, and returns those rows " +
+          "beside the answer. Relay the answer with its citations as it stands, adding only what you " +
+          "verify against the rows; ask again with a narrower question when it leaves a gap. Use ask " +
+          "when you want the facts alone or have several independent questions to issue at once, " +
+          "and find for every occurrence of an exact string. " +
+          DEV_CONTEXT_NOTE +
+          "The result includes a 'usage' field, a one-line receipt of what the call cost.",
+        inputSchema: retrievalInputs,
+      },
+      (args) => retrieve("explore", args),
+    );
   }
 
   const transport = serveOptions.transport ?? new StdioServerTransport();

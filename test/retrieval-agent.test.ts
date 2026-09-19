@@ -57,6 +57,32 @@ function answered(overrides: Record<string, unknown> = {}) {
 const unanswered = (terminate: string, extra: Record<string, unknown> = {}) =>
   answered({ facts: [], statement: null, coverage: { rows_total: 0, rows_returned: 0, truncated: false }, terminate, ...extra });
 
+describe("the platform's written answer (the explore tool)", () => {
+  it("is asked for by the flag, and only then", async () => {
+    const sent: Record<string, unknown>[] = [];
+    const hosted = {
+      subAgent: async (req: Record<string, unknown>) => {
+        sent.push(req);
+        return answered({ answer: "wide calls narrow (src/f1.ts:12)." });
+      },
+    };
+    await runRetrievalAgent(hosted, { question: "q", answer: true }, { maxWallSecs: 30 });
+    expect(sent[0].answer).toBe(true);
+    await runRetrievalAgent(hosted, { question: "q" }, { maxWallSecs: 30 });
+    expect(sent[1]).not.toHaveProperty("answer");
+  });
+
+  it("comes back first in the result, and a response without one has no answer field", () => {
+    const { result } = retrievalAgentRunFrom("q", answered({ answer: "wide calls narrow (src/f1.ts:12)." }));
+    expect(Object.keys(result)[1]).toBe("answer");
+    expect(result.answer).toBe("wide calls narrow (src/f1.ts:12).");
+    expect(result.sql).toBe(STATEMENT);
+    expect(retrievalAgentRunFrom("q", answered()).result).not.toHaveProperty("answer");
+    expect(retrievalAgentRunFrom("q", answered({ answer: "   " })).result).not.toHaveProperty("answer");
+    expect(retrievalAgentRunFrom("q", answered({ answer: null })).result).not.toHaveProperty("answer");
+  });
+});
+
 describe("an answer whose audit could not run", () => {
   it("carries the platform's reason as `unaudited`, and nothing when the audit ran", () => {
     const flagged = retrievalAgentRunFrom("q", answered({ unaudited: "the audit provider refused the call" })).result;
@@ -357,11 +383,11 @@ describe("the caller's context and the facts-only contract", () => {
     expect("context" in sent[1]).toBe(false);
   });
 
-  it("keeps the result facts-only: a stray answer or chain in a response never reaches the result", () => {
-    const { result } = retrievalAgentRunFrom(QUESTION, answered({ answer: "prose that should not pass", chain: ["x"] }));
-    expect(result).not.toHaveProperty("answer");
+  it("keeps a stray chain out of the result; the platform's answer is the one text that passes, as `answer`", () => {
+    const { result } = retrievalAgentRunFrom(QUESTION, answered({ answer: "the platform's written answer", chain: ["x"] }));
     expect(result).not.toHaveProperty("chain");
-    expect(JSON.stringify(result)).not.toContain("prose that should not pass");
+    expect(result.answer).toBe("the platform's written answer");
+    expect(JSON.stringify(result)).not.toContain('"chain"');
   });
 });
 

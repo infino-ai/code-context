@@ -107,6 +107,12 @@ export interface RetrievalAgentRequest {
    * question about the second index from the first until the loop was told
    * which table (2026-09-12). Absent, the loop sees every table's card. */
   table?: string;
+  /** Ask the platform to write the answer as well (the `explore` tool): the
+   * loop's own model, shown the final facts with their lines numbered, writes
+   * it under the platform's citation instruction - the same sentences the
+   * outer model writes under - and the result carries `answer` beside the
+   * facts. Absent, the facts alone come back (the `ask` tool). */
+  answer?: boolean;
 }
 
 /** The `projection` field of a sub_agent request for `request`: the caller's
@@ -185,9 +191,13 @@ export interface RetrievalAgentCoverage {
   ranked?: boolean;
 }
 
-/** What the `ask` tool returns to the outer agent: the facts. */
+/** What the `ask` tool returns to the outer agent: the facts. The `explore`
+ * tool returns the same, with the platform's written answer in front. */
 export interface RetrievalAgentResult {
   question: string;
+  /** The platform's written answer, when the request asked for one and the
+   * loop had facts to write from: what they show, citing their lines. */
+  answer?: string;
   /** The query whose rows are the facts, verbatim (SQL, or a `find(...)`), when one validated. */
   sql?: string;
   /** How much of the query's result the platform returned. */
@@ -259,6 +269,7 @@ export async function runRetrievalAgent(
     ...(budget.maxTurns !== undefined ? { max_turns: budget.maxTurns } : {}),
     max_wall_secs: budget.maxWallSecs,
     ...(request.table !== undefined ? { table: request.table } : {}),
+    ...(request.answer ? { answer: true } : {}),
   });
   const run = retrievalAgentRunFrom(request.question, response, k, request.shape);
   return { ...run, result: scoped(run.result, under) };
@@ -302,8 +313,12 @@ export function retrievalAgentRunFrom(question: string, response: unknown, maxHi
   const terminate = body.terminate;
   const statement = typeof body.statement === "string" && body.statement.length > 0 ? body.statement : undefined;
   const coverage = coverageOf(body);
+  // The platform's written answer, when the request asked for one; first in
+  // the result, since it is what the outer agent reads before the facts.
+  const answer = typeof body.answer === "string" && body.answer.trim().length > 0 ? body.answer : undefined;
   const result: RetrievalAgentResult = {
     question,
+    ...(answer ? { answer } : {}),
     ...(statement ? { sql: statement } : {}),
     ...(coverage ? { coverage } : {}),
     ...factsFrom(factRowsOf(body), maxHits, shape),

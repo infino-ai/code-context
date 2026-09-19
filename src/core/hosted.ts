@@ -581,6 +581,11 @@ export class HostedDb {
      * code indexes it picked the wrong one for every question about the
      * other (2026-09-12). Named, the loop sees that table's card alone. */
     table?: string;
+    /** Ask the platform for a written answer beside the facts: once they are
+     * final, the loop's own model is shown them with every line numbered and
+     * writes the answer, citing those lines. The response then carries
+     * `answer`. */
+    answer?: boolean;
   }): Promise<RowRecord> {
     // Only the fields given are sent: the request type rejects unknown keys and
     // defaults the rest itself.
@@ -592,6 +597,7 @@ export class HostedDb {
     if (req.max_wall_secs !== undefined) body.max_wall_secs = req.max_wall_secs;
     if (req.include_transcript !== undefined) body.include_transcript = req.include_transcript;
     if (req.table !== undefined) body.table = req.table;
+    if (req.answer !== undefined) body.answer = req.answer;
     const timeoutMs =
       req.max_wall_secs !== undefined ? (req.max_wall_secs + ASK_TIMEOUT_MARGIN_SECS) * MS_PER_SEC : this.timeoutMs;
     const exchange = await this.call({

@@ -211,15 +211,17 @@ export function cardEntry(card: Record<string, unknown>): UsageEntry {
 }
 
 /** An ask call returns facts - the statement, the hits and the aggregate
- * rows - so what it cost the outer agent is those serialized; the hits are
- * recorded as places like a search's, and the loop's own spend (turns,
- * tokens) is the platform's meter and rides beside them in the ledger. */
-export function subagentEntry(result: RetrievalAgentResult, spend: RetrievalAgentSpend): UsageEntry {
+ * rows - so what it cost the outer agent is those serialized (an explore
+ * call's written answer included); the hits are recorded as places like a
+ * search's, and the loop's own spend (turns, tokens) is the platform's meter
+ * and rides beside them in the ledger. `tool` names which of the two tools
+ * made the call. */
+export function subagentEntry(result: RetrievalAgentResult, spend: RetrievalAgentSpend, tool: "ask" | "explore" = "ask"): UsageEntry {
   return {
     ts: new Date().toISOString(),
-    tool: "ask",
+    tool,
     query: result.question,
-    returnedTokens: estTokens(jsonify({ sql: result.sql, hits: result.hits, rows: result.rows })),
+    returnedTokens: estTokens(jsonify({ answer: result.answer, sql: result.sql, hits: result.hits, rows: result.rows })),
     hits: result.hits.map((h) => ({ path: h.path, startLine: h.startLine, endLine: h.endLine })),
     rows: result.rows.length,
     agentTurns: result.turns,

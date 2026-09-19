@@ -83,6 +83,8 @@ async function expectChunksText(s: Started): Promise<void> {
   expect(byName.get("search")).toContain("Ranked code search fusing exact keyword matching with semantic similarity");
   expect(byName.get("find")).toContain("like grep -n");
   expect(byName.get("ask")).toContain("Ask the repository index");
+  expect(byName.get("explore")).toContain("Try this first for an exploration question");
+  expect(byName.get("explore")).toContain("Relay the answer with its citations");
   expect(s.client.getInstructions()).toContain("code-context is a local index of this repository");
 }
 
@@ -199,6 +201,7 @@ describe("the chunks table with CX_AGENT_TOOLS=0: the lane that hides ask", () =
     expect(names).toContain("search");
     expect(names).toContain("sql");
     expect(names).not.toContain("ask");
+    expect(names).not.toContain("explore");
     const instructions = s.client.getInstructions() ?? "";
     expect(instructions).toContain("code-context is a local index of this repository");
     expect(instructions).not.toContain("- ask -");
