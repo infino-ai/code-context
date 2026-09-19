@@ -84,7 +84,7 @@ async function expectChunksText(s: Started): Promise<void> {
   expect(byName.get("find")).toContain("like grep -n");
   expect(byName.get("ask")).toContain("Ask the repository index");
   expect(byName.get("explore")).toContain("Try this first for an exploration question");
-  expect(byName.get("explore")).toContain("Relay the answer with its citations");
+  expect(byName.get("explore")).toContain("Your reply to the user is the answer verbatim");
   // The routing the model reads is the instructions list, so explore is
   // named there too, ahead of ask, or it is never called (measured
   // 2026-09-19: registered but unlisted, twelve runs called ask alone).
