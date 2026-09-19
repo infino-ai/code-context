@@ -250,6 +250,20 @@ describe("factsFrom", () => {
     expect(hits).toEqual([{ path: "a.ts", startLine: 1, endLine: 2, content: "" }]);
   });
 
+  it("makes a find fact's matched line the hit's content, numbered where it sits in the file", () => {
+    // The loop's `find` places a row by the chunk's span and carries the
+    // line it matched with the line's own number; the line is what the fact
+    // says, and the hit carries it rather than an empty body.
+    const { hits } = factsFrom([
+      { path: "src/a.rs", start_line: 40, end_line: 60, symbol: "wide", file_line: 47, line_index: 7, line: "    narrow();" },
+      { path: "src/b.rs", start_line: 1, end_line: 3, line: "fn narrow() {}" },
+    ]);
+    expect(hits).toEqual([
+      { path: "src/a.rs", startLine: 40, endLine: 60, content: "47:     narrow();", symbol: "wide" },
+      { path: "src/b.rs", startLine: 1, endLine: 3, content: "1: fn narrow() {}" },
+    ]);
+  });
+
   it("keeps rows that name no place as aggregate rows, scalar cells only", () => {
     const facts = factsFrom([
       { path: "src/a.rs", n: 3, embedding: [0.1, 0.2], meta: { k: 1 } },
