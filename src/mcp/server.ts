@@ -371,7 +371,7 @@ export function rowsInstructions(shape: TableShape, platformTools: boolean): str
     (platformTools
       ? "- explore - try this first for a question about what the rows say - what the roles about X ask for, " +
         "how a group of rows compares: one call runs the searches and returns the answer written from the rows " +
-        "it retrieved, citing the records, and a receipt; your reply to the user is that answer verbatim, not a rewrite of it.\n" +
+        "it retrieved, citing the records, plus those rows; relay it as it stands, adding only what you verify.\n" +
         "- ask - a question or task in plain language about the rows - which rows are about X, how many and " +
         "where, who has the most and where - it runs the searches and statements itself and returns the rows " +
         "it retrieved (facts as rows, with their columns and the text cut to snippets), not an answer: compose " +
@@ -1121,7 +1121,7 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
             // for the tool - on the first judged pass with it registered, every
             // Infino run called ask alone (2026-09-19), because the routing the
             // model reads is this list, not a tool's own text.
-            "- explore - try this first for an exploration question: how does X work, what happens when Y, walk me through Z. One call retrieves and returns the answer written from the rows, with exact path:line citations, and a receipt; your reply to the user is that answer verbatim, not a rewrite of it.\n" +
+            "- explore - try this first for an exploration question: how does X work, what happens when Y, walk me through Z. One call retrieves and returns the answer written from the rows, with exact path:line citations, plus the rows; relay it as it stands, adding only what you verify.\n" +
             "- ask - a lookup you will read yourself, or several independent questions at once; returns the rows it retrieved (facts with path:line and the code), not an answer: compose from them. Spawn several in parallel for independent questions. How often a string occurs, per file, is find's byFile.\n" +
             // Several asks in one reply still beat a loop that waits on itself
             // for a question that splits into independent parts (measured
@@ -1603,26 +1603,9 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
           recordUsage(ctx.dir, entry);
           usage = formatReceipt(entry, session);
         }
-        const took_ms = Math.round((performance.now() - t0) * 1000) / 1000;
-        if (compose && result.answer) {
-          // The answer is the deliverable, so it is the result: plain text
-          // first, then a receipt of what ran, and none of the rows. Handed
-          // the rows beside the answer, the outer model rewrote the answer
-          // from them every time (measured 2026-09-19: twelve of twelve runs,
-          // sharing nothing with the platform's text and spending its usual
-          // writing time). The rows are one `ask` away for a caller that
-          // wants them.
-          const { answer, hits: _hits, rows: _rows, ...receipt } = result;
-          return {
-            content: [
-              { type: "text" as const, text: answer },
-              { type: "text" as const, text: jsonify({ ...receipt, took_ms, ...(usage ? { usage } : {}) }, true) },
-            ],
-          };
-        }
         return ok({
           ...result,
-          took_ms,
+          took_ms: Math.round((performance.now() - t0) * 1000) / 1000,
           ...(usage ? { usage } : {}),
         });
       } catch (err) {
@@ -1679,27 +1662,23 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
           ? `Try this first for a question about what the ${rows.table} rows say - what the roles about X ask for, ` +
             "how one group of rows compares with another. One call: a read-only retrieval subagent runs the " +
             "searches and statements over the table, and the platform writes the answer from the rows it " +
-            "retrieved, citing the records. The result is that answer, then a receipt of what ran, and " +
-            "nothing else. Your reply to the user is the answer verbatim: it is the deliverable, not a " +
-            "source - do not restructure it or add to it. If it leaves a gap, call explore again more " +
-            "narrowly and append what comes back. Use ask when you want the rows themselves or have several " +
-            "independent questions to issue at once. " +
+            "retrieved, citing the records, and returns those rows beside the answer. Relay the answer as it " +
+            "stands, adding only what you verify against the rows; ask again more narrowly when it leaves a " +
+            "gap. Use ask when you want the rows alone or have several independent questions to issue at once. " +
             DEV_CONTEXT_NOTE +
-            "The receipt includes a 'usage' field, a one-line account of what the call cost."
+            "The result includes a 'usage' field, a one-line receipt of what the call cost."
           : mode.kind === "unresolved"
           ? unresolvedDescription("An exploration question in plain language, answered in writing from the rows it retrieved,", TABLE)
           : "Try this first for an exploration question - how does X work, what happens when Y, walk " +
           "me through Z, where is W handled. One call: a read-only retrieval subagent searches and ranks " +
           "across the index, and the platform writes the answer from the rows it retrieved, citing each " +
-          "place as path:line or path:start-end exactly as the rows hold it. The result is that answer, " +
-          "then a receipt of what ran (the query, coverage, cost), and nothing else. Your reply to the " +
-          "user is the answer verbatim: it is the deliverable, not a source. Do not restructure it, add " +
-          "headings, or check it against files. If it leaves a gap, call explore again with a narrower " +
-          "question and append what comes back. Use ask when you want the rows themselves or have " +
-          "several independent questions to issue at once, and find for every occurrence of an exact " +
-          "string. " +
+          "place as path:line or path:start-end exactly as the rows hold it, and returns those rows " +
+          "beside the answer. Relay the answer with its citations as it stands, adding only what you " +
+          "verify against the rows; ask again with a narrower question when it leaves a gap. Use ask " +
+          "when you want the facts alone or have several independent questions to issue at once, " +
+          "and find for every occurrence of an exact string. " +
           DEV_CONTEXT_NOTE +
-          "The receipt includes a 'usage' field, a one-line account of what the call cost.",
+          "The result includes a 'usage' field, a one-line receipt of what the call cost.",
         inputSchema: retrievalInputs,
       },
       (args) => retrieve("explore", args),

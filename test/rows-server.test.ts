@@ -121,14 +121,8 @@ const describable = () =>
       return [200, [{ n: 42 }]];
     },
     validate: () => [200, { valid: true, check: "unchecked" }],
-    // The platform writes an answer only when asked for one (the explore
-    // tool's request); an ask gets the facts alone.
-    sub_agent: (body) => [200, body?.answer ? { ...ASKED, answer: WRITTEN } : ASKED],
+    sub_agent: () => [200, ASKED],
   });
-
-/** The platform's written answer, as the explore tool's request brings it
- * back beside the facts. */
-const WRITTEN = "The distributed systems roles ask for Rust and Kafka (id 1).";
 
 /** The platform with the table NOT there: not listed, and its schema a 404
  * (terminal - not the cold-start 503 the client would retry for its budget). */
@@ -289,30 +283,6 @@ describe("a table of another shape, described at startup", () => {
     expect(text.length).toBe(SNIPPET_CHARS + "...".length);
     expect(text.startsWith("Own the platform Own the platform")).toBe(true);
     expect(text).not.toContain("&lt;");
-  });
-
-  it("explore asks the platform for the written answer and returns it as the reply, then a receipt, and none of the rows", async () => {
-    const before = s.sent.length;
-    const result = (await s.client.callTool({ name: "explore", arguments: { question: "what do the distributed systems roles ask for?" } })) as {
-      content: Array<{ type: string; text: string }>;
-      isError?: boolean;
-    };
-    expect(result.isError).toBeFalsy();
-    const request = s.sent.slice(before).find((x) => x.op === "sub_agent")?.body as Record<string, unknown> | undefined;
-    expect(request?.answer).toBe(true);
-    expect(request?.question).toBe("what do the distributed systems roles ask for?");
-    // The answer is the deliverable: plain text first, so the outer model
-    // relays it; the receipt second; the rows nowhere, so there is nothing
-    // to rewrite the answer from.
-    expect(result.content).toHaveLength(2);
-    expect(result.content[0].text).toBe(WRITTEN);
-    const receipt = JSON.parse(result.content[1].text) as Record<string, unknown>;
-    expect(receipt.sql).toBe(ASKED.statement);
-    expect(receipt.turns).toBe(ASKED.turns);
-    expect(receipt).not.toHaveProperty("hits");
-    expect(receipt).not.toHaveProperty("rows");
-    expect(receipt).not.toHaveProperty("answer");
-    expect(typeof receipt.took_ms).toBe("number");
   });
 
   it("never reached the platform with a drop, create or append, and wrote no manifest", () => {
