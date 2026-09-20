@@ -61,8 +61,8 @@ npm run build     # tsc
 npm test          # vitest
 ```
 
-CI runs build + tests on Linux and macOS across Node 20/22. Keep it green
-before opening a PR.
+CI runs build + tests on Linux and macOS across Node 22/24 (Node 22.19 or
+newer is the floor: undici 8 requires it). Keep it green before opening a PR.
 
 ## Conventions
 

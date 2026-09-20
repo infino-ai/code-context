@@ -9,7 +9,7 @@ server are still named `code-context`.
 | tool | runs | what it does | when Claude uses it |
 |---|---|---|---|
 | `find` | local | every line containing an exact string, `path:line` like `grep -n`, with per-file counts like `grep -c`; complete and unranked, and every hit is a real occurrence | where it would grep: every use or definition of an identifier, an error message, a config key |
-| `search` | local | one ranked pass fusing exact keyword matching (BM25) with semantic similarity; hits carry the code | how a subsystem works, code by meaning or exact term, similar implementations |
+| `search` | local | one ranked pass fusing exact keyword matching (BM25) with semantic similarity; hits carry the code, or with `lines` only the lines of each chunk that carry the query's words, with two lines of context | how a subsystem works, code by meaning or exact term, similar implementations; `lines` over logs and other long records, where the matching lines are the answer |
 | `sql` | local | read-only SQL over the index, with `bm25_search` and `hybrid_search` as table functions | counts, rankings and aggregates over the whole repository in one query |
 | `ask` | platform | a question or task in plain language; returns the rows it retrieved - `path`, `start_line`, `end_line` and the code - never a summary | how does X work, where is X handled, when Claude wants facts to compose from rather than an answer |
 
@@ -101,7 +101,7 @@ the platform bills; the Sonnet side is on your Anthropic bill as usual.
 ```
 cx index [path]           sync the index (incremental; --full rebuilds, --watch follows edits)
 cx find <text>            every line containing the exact text, path:line  (-i, -c per-file counts, --limit)
-cx search <query>         exact terms + meaning, one ranked pass           (-k hits)
+cx search <query>         exact terms + meaning, one ranked pass           (-k hits, --lines for the matching lines only)
 cx sql <statement>        read-only SQL; --embed q="text" fills {{q}}
 cx status                 what the index holds, how fresh, vector readiness
 cx usage                  ledger of queries run and what each returned  (-n, --all, --clear, --json)

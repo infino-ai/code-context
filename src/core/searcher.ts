@@ -116,11 +116,29 @@ export interface SearchHit {
   symbol?: string;
   /** Set when content was capped - Read path:startLine-endLine for the rest. */
   truncated?: boolean;
+  /** With `lines`: how many lines of the chunk carry a term of the query.
+   * Zero means the chunk ranked on meaning alone and came back whole. Absent
+   * on a whole-chunk hit. */
+  matchedLines?: number;
+}
+
+/** What a search takes beyond its query and k. */
+export interface SearchOptions {
+  /** Return each hit as the lines of its chunk that carry a term of the
+   * query, with LINE_CONTEXT lines either side, in place of the whole chunk.
+   * See `focusLines` for why and for what a chunk with no such line does. */
+  lines?: boolean;
 }
 
 /** Per-hit content cap: enough to answer "how does X work" from the hit
  * itself (a whole ~60-line chunk fits; only pathological chunks truncate). */
 const HIT_CONTENT_CAP = 4000;
+
+/** Lines kept either side of a term-bearing line when a hit is cut to its
+ * matching lines: enough to show what the line sits in - the message above a
+ * stack frame, the assertion below a test name - without bringing back the
+ * chunk. Two is what the measurement below used; it was not swept. */
+const LINE_CONTEXT = 2;
 
 export interface SearchResult {
   query: string;
@@ -141,20 +159,106 @@ const PROJECTION = ["path", "start_line", "end_line", "lang", "symbol", "content
 // server). `sql` sends the statement the caller actually wrote, so nothing
 // renders one here any more.
 
+/** The query's terms and the analyzer that made them, for a search that
+ * returns its hits as matching lines (`SearchOptions.lines`). */
+interface LineFocus {
+  terms: readonly string[];
+  analyzer: Analyzer;
+}
+
+/** A chunk cut to the lines that carry a term of the query, each with
+ * LINE_CONTEXT lines either side, numbered with their own line in the file.
+ *
+ * A hit is a whole chunk, sixty lines or so, and the line that answers is
+ * often one of them: the FAIL line of a test run, the frame of a trace, the
+ * assignment a search for a name was after. Handing back the chunk spends the
+ * caller's context on the other fifty-nine, and a caller with a budget - a
+ * model reading a log, above all - gets fewer of the lines that matter for it.
+ * Measured on LogDx-CI, thirty-five CI failure logs with the evidence lines
+ * marked by hand, each log's chunks ranked against one fixed query, at a
+ * fixed budget of lines returned per log: at 200 lines whole chunks
+ * preserved 0.797 of the critical signals and these lines 0.853; at 300
+ * lines 0.889. The best published method scores 0.823 at two and a half
+ * times the context, and a grep over the whole log 0.841 at fourteen times.
+ * `find` returns a matched line rather than its chunk for the same reason;
+ * this is that idea inside a ranked result.
+ *
+ * Which lines match is decided by the index's own analyzer: a line carries a
+ * term when the analyzer's tokens of the line include one of the analyzer's
+ * tokens of the query, so `parse_config(` matches a query naming `config`
+ * under `ascii_lower` and does not under `standard`, exactly as the keyword
+ * half of the search itself would have matched it. No stopword list: the
+ * terms are the caller's, and a term on every line selects every line.
+ *
+ * A chunk none of whose lines carries a term ranked on meaning alone. It comes
+ * back whole, with `matchedLines` 0, because dropping it would hide the one
+ * hit the vector half found, and cutting it to nothing would return a
+ * citation with no text. The cap applies to the kept lines as it does to a
+ * chunk, by whole lines, so a line is never cut in half. */
+export function focusLines(
+  content: string,
+  startLine: number,
+  focus: LineFocus,
+): { content: string; matchedLines: number; truncated: boolean } {
+  // Empty stays empty, as numberLines keeps it: a hit with a place and no
+  // text has no line to number, and "1: " would invent one.
+  if (content === "") return { content: "", matchedLines: 0, truncated: false };
+  const lines = content.split("\n");
+  const wanted = new Set(focus.terms);
+  const keep = new Set<number>();
+  let matchedLines = 0;
+  for (let i = 0; i < lines.length; i++) {
+    if (!analyzerTokens(lines[i], focus.analyzer).some((t) => wanted.has(t))) continue;
+    matchedLines += 1;
+    for (let j = Math.max(0, i - LINE_CONTEXT); j <= Math.min(lines.length - 1, i + LINE_CONTEXT); j++) keep.add(j);
+  }
+  const chosen = matchedLines === 0 ? lines.map((_, i) => i) : [...keep].sort((a, b) => a - b);
+  // Cut first, then number, as a whole chunk is: the cap is on the code, so
+  // the prefixes never eat into how many lines a hit carries. By whole lines
+  // here, since the kept lines need not be consecutive and a half line has
+  // no number.
+  const out: string[] = [];
+  let chars = 0;
+  let truncated = false;
+  for (const i of chosen) {
+    const next = chars + lines[i].length + (out.length > 0 ? 1 : 0);
+    if (next > HIT_CONTENT_CAP && out.length > 0) {
+      truncated = true;
+      break;
+    }
+    out.push(`${startLine + i}${LINE_NUMBER_SEPARATOR}${lines[i]}`);
+    chars = next;
+  }
+  return { content: out.join("\n"), matchedLines, truncated };
+}
+
 /** One engine row as a hit. Shared by the local and the hosted search so the
  * two cannot drift: a caller must not be able to tell from the shape of a hit
  * which index answered, or a lane comparing them would be comparing the
- * mapping as well as the index. */
-function toHit(r: Record<string, unknown>): SearchHit {
+ * mapping as well as the index. With `focus`, the hit is the chunk's matching
+ * lines (focusLines) rather than the chunk. */
+function toHit(r: Record<string, unknown>, focus?: LineFocus): SearchHit {
   const full = String(r.content);
   const startLine = Number(r.start_line);
-  return {
+  const place = {
     path: String(r.path),
     startLine,
     endLine: Number(r.end_line),
     lang: String(r.lang ?? ""),
     score: Number(r.score),
     ...(r.symbol ? { symbol: String(r.symbol) } : {}),
+  };
+  if (focus) {
+    const focused = focusLines(full, startLine, focus);
+    return {
+      ...place,
+      content: focused.content,
+      matchedLines: focused.matchedLines,
+      ...(focused.truncated ? { truncated: true } : {}),
+    };
+  }
+  return {
+    ...place,
     // Cut first, then number: the cap is on the code, so the prefixes never
     // eat into how much of the chunk a hit carries, and a prefix can never
     // be cut in half. The kept text is a prefix of the chunk either way, so
@@ -162,6 +266,12 @@ function toHit(r: Record<string, unknown>): SearchHit {
     content: numberLines(full.slice(0, HIT_CONTENT_CAP), startLine),
     ...(full.length > HIT_CONTENT_CAP ? { truncated: true } : {}),
   };
+}
+
+/** The line focus for a query against a table of the given analyzer, or
+ * undefined when the search returns whole chunks. */
+function lineFocus(opts: SearchOptions, query: string, analyzer: Analyzer): LineFocus | undefined {
+  return opts.lines ? { terms: analyzerTokens(query, analyzer), analyzer } : undefined;
 }
 
 /** `search` against the HOSTED index: the platform fuses both legs and embeds
@@ -175,14 +285,21 @@ function toHit(r: Record<string, unknown>): SearchHit {
  * No `partial` either. That marker means the LOCAL index skipped files over
  * its size cap; what the hosted table holds was decided when it was loaded,
  * and this caller has no way to know it. Reporting the local index's
- * completeness beside hosted hits would be a claim about the wrong index. */
+ * completeness beside hosted hits would be a claim about the wrong index.
+ *
+ * `analyzer` is the hosted table's, for cutting hits to their matching lines
+ * (`lines`): this side has no manifest of that table in hand, so the caller
+ * names it, and a caller that cannot gets the platform's default for a bare
+ * column. */
 export async function searchHosted(
   hosted: { hybridSearch: (t: string, tf: string, vf: string, q: string, k: number, p: string[]) => Promise<Array<Record<string, unknown>>> },
   query: string,
   k = DEFAULT_SEARCH_K,
+  opts: SearchOptions & { analyzer?: Analyzer } = {},
 ): Promise<SearchResult> {
   const rows = await hosted.hybridSearch(TABLE, CONTENT_COLUMN, EMBEDDING_COLUMN, query, k, PROJECTION);
-  return { query, ranking: "hybrid", hits: rows.map(toHit) };
+  const focus = lineFocus(opts, query, opts.analyzer ?? PLATFORM_DEFAULT_ANALYZER);
+  return { query, ranking: "hybrid", hits: rows.map((r) => toHit(r, focus)) };
 }
 
 /** The vector leg of a search, or null for a keyword-only pass: the locally
@@ -201,6 +318,7 @@ export async function search(
   embedder: Embedder | null,
   query: string,
   k = DEFAULT_SEARCH_K,
+  opts: SearchOptions = {},
 ): Promise<SearchResult> {
   const leg = await vectorLeg(handle.manifest, embedder, query);
   const ranking: "hybrid" | "keyword" = leg ? "hybrid" : "keyword";
@@ -208,10 +326,11 @@ export async function search(
   const rows: Array<Record<string, unknown>> = leg
     ? table.hybridSearch(CONTENT_COLUMN, query, EMBEDDING_COLUMN, leg, k, { projection: PROJECTION })
     : table.bm25Search(CONTENT_COLUMN, query, k, { projection: PROJECTION });
+  const focus = lineFocus(opts, query, analyzerOf(handle.manifest));
   return {
     query,
     ranking,
-    hits: rows.map(toHit),
+    hits: rows.map((r) => toHit(r, focus)),
     ...(ranking === "keyword" && handle.manifest.vectors !== "ready"
       ? { note: "vectors not ready yet - keyword-ranked only (re-run `cx index` or wait for the vector stage to finish)" }
       : {}),

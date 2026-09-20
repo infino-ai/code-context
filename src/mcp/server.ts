@@ -75,7 +75,7 @@ import {
 } from "../core/config.js";
 import { keyFilePath, readStoredAccount } from "../core/keystore.js";
 import { runRetrievalAgent } from "../core/retrieval-agent.js";
-import { readManifest, type Manifest } from "../core/manifest.js";
+import { readManifest, readPlatformManifest, type Manifest } from "../core/manifest.js";
 
 /** The one refusal whose fix is a person rather than a retry: the account has
  * nothing left to spend. It names the account to add the card to - this same
@@ -126,6 +126,7 @@ import { devContext, devContextEnabled } from "../core/dev-context.js";
 import { foldValidationFacts, rankRows } from "../core/facts.js";
 import { HostedError, type HostedOptions, type RowRecord } from "../core/hosted.js";
 import {
+  analyzerOf,
   find,
   findRows,
   search,
@@ -1158,12 +1159,27 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
         "own number in the file, so cite from those numbers - the hit's line range spans the whole " +
         "chunk and is not the line a quoted or named thing sits on. Quote only text a hit shows, " +
         "from the lines you cite it to. When one " +
-        "search is not enough, refine the query and search again. For every occurrence of an exact " +
+        "search is not enough, refine the query and search again. " +
+        // Measured on LogDx-CI (35 CI failure logs, evidence lines marked):
+        // at 200 lines returned per log, whole chunks kept 0.797 of the
+        // critical signals and the matching lines 0.853; see focusLines.
+        "Set lines to get each hit as only the lines carrying your query's words, with two lines " +
+        "of context, in place of the whole chunk - for logs, test output and other long records, " +
+        "where the matching lines are the answer; put the words you expect on those lines in the " +
+        "query. For every occurrence of an exact " +
         "string use find; for counts and rankings use sql. The result includes a 'usage' field, a " +
         "one-line receipt of tokens returned, chunks and files.",
       inputSchema: {
         query: z.string().describe("What you're looking for - terms, a phrase, or a description."),
         k: z.number().int().positive().max(50).default(DEFAULT_SEARCH_K).describe("Maximum hits."),
+        lines: z
+          .boolean()
+          .optional()
+          .describe(
+            "Return each hit as only the lines of its chunk that carry one of the query's words, with " +
+              "two lines of context, each numbered with its line in the file - not the whole chunk. A " +
+              "hit reporting matchedLines 0 ranked on meaning alone and comes back whole.",
+          ),
         path: z
           .string()
           .optional()
@@ -1173,7 +1189,7 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
           ),
       },
     },
-    async ({ query, k, path }) => {
+    async ({ query, k, lines, path }) => {
       let ctx: RepoCtx;
       try {
         ctx = repoFor(path);
@@ -1183,7 +1199,8 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
       // Over the rows of a hosted table of another shape: the platform
       // fuses the table's own text and embedding columns. No local index, no
       // readiness probe - the startup decision already said the table is
-      // there and what it is (rowsOver).
+      // there and what it is (rowsOver). A row has no lines to cut to, so
+      // `lines` has no meaning here and is left out.
       const over = rowsOver("search", ctx);
       if (over && "failed" in over) return over.failed;
       if (over) {
@@ -1214,7 +1231,12 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
         if (notReady) return notReady;
         try {
           const t0 = performance.now();
-          const result = await searchHosted(ctx.hosted, query, k);
+          // The hosted table's analyzer decides which lines carry a term
+          // (`lines`): the platform manifest this machine wrote when it loaded
+          // the table records it; a table loaded some other way is read with
+          // the platform's default for a bare column, as analyzerOf says.
+          const hostedAnalyzer = analyzerOf(readPlatformManifest(ctx.dir) ?? { origin: "hosted" });
+          const result = await searchHosted(ctx.hosted, query, k, { lines, analyzer: hostedAnalyzer });
           let usage: string | undefined;
           if (receiptOn) {
             // withPlatform, as the ask path does: the platform
@@ -1243,7 +1265,7 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
       if (!autoIndexed) maybeAutoSync(ctx); // a fresh build is already current
       try {
         const t0 = performance.now();
-        const result = await search(handle, getEmbedder(), query, k);
+        const result = await search(handle, getEmbedder(), query, k, { lines });
         let usage: string | undefined;
         if (receiptOn) {
           const entry = searchEntry(result, ctx.root);

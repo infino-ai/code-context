@@ -79,6 +79,13 @@ server has `--db`. Never load them one call at a time.
 - If a hit is marked `truncated`, Read exactly its start-end range
   (offset/limit), not the whole file.
 - `k` (default 10, max 50) bounds hits; raise it for survey-style questions.
+- `lines: true` returns each hit as only the lines of its chunk that carry
+  one of your query's words, with two lines of context, each numbered with
+  its line in the file - in place of the whole chunk. Use it over logs, test
+  output and other long records, where the matching lines are the answer
+  and the rest of the chunk is padding; put the words you expect on those
+  lines into the query. A hit with `matchedLines: 0` ranked on meaning
+  alone and comes back whole.
 - Until the index's vector stage finishes, results say they are
   keyword-ranked; they are still real, cited hits.
 
