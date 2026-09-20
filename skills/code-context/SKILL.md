@@ -167,11 +167,11 @@ retrieval agent and returns the facts it retrieved, never a summary: `hits`
 (`path`, `startLine`-`endLine`, `content` - the shape of a `search` hit),
 `rows` (aggregates: a count or rank per path), and `sql` (the statement whose
 rows answer the question, when there is one). Use it for how does X work,
-where is Y handled, which files or symbols; spawn several in parallel for
-independent questions instead of exploring the code yourself. A mechanism
-that spans files is several asks issued together, one per part of it, not
-one long loop: they run at once, so the wait is the slowest of them rather
-than the sum. For every
+where is Y handled, which files or symbols. Prefer several asks in one
+reply, one per part of the question, over one broad ask or a chain of your
+own searches. A mechanism that spans files is one ask per part, issued
+together: they run at once, so the wait is the slowest of them rather than
+the sum. For every
 occurrence of an exact string, and for how many times it occurs per file,
 use `find` (`byFile` is the `grep -c` answer); for a file you already know,
 Read it. Answer from the rows and cite `path:line`. Like the other tools,

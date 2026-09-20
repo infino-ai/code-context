@@ -36,7 +36,7 @@ process.env.CX_AUTO_INDEX = "0";
 delete process.env.CX_NO_RECEIPT;
 delete process.env.CX_INDEX_DIR;
 
-const { SQL_DESCRIPTION } = await import("../src/mcp/server.js");
+const { SQL_DESCRIPTION, PREFER_SEVERAL_ASKS } = await import("../src/mcp/server.js");
 const { API_KEY_ENV, MANIFEST_NAME, TABLE, DEFAULT_TABLE, configureHosted, hostedSettingsFromFlags } = await import("../src/core/config.js");
 
 /** One chunk as the hosted search returns it. */
@@ -92,6 +92,11 @@ async function expectChunksText(s: Started): Promise<void> {
   expect(instructions).not.toContain("- explore -");
   expect(instructions).toContain("- ask - a question or task in plain language");
   expectSharedSentences(instructions);
+  // The fan-out is a preference, told once in the instructions and once in
+  // the tool's own text; "spawn several in parallel" only said it was allowed.
+  expect(instructions).toContain(PREFER_SEVERAL_ASKS);
+  expect(byName.get("ask")).toContain(PREFER_SEVERAL_ASKS);
+  expect(instructions).not.toContain("Spawn several in parallel");
 }
 
 /** The two sentences the hosted loop's answer writer is told, word for word,

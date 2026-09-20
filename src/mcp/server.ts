@@ -199,8 +199,8 @@ const CARD_TIER = "lean";
  * read-only - Claude Code does exactly that - otherwise runs them one at a
  * time. Without this, four `ask`s issued together were announced at once and
  * executed serially (measured 2026-09-12: 31s where the slowest alone was 15s),
- * so every "spawn several in parallel" in the descriptions below was a promise
- * the harness could not keep. */
+ * so every fan-out sentence in the descriptions below (`PREFER_SEVERAL_ASKS`)
+ * was a promise the harness could not keep. */
 const READ_ONLY = { readOnlyHint: true } as const;
 
 /** How long `sql` waits for the platform's verdict on its rows before
@@ -356,6 +356,18 @@ export const SWEEP_TO_A_TOOL =
   "Be efficient: prefer few, well-chosen tool calls, and hand a sweep across many files to a tool " +
   "built for it rather than searching by hand.";
 
+/** The fan-out as a preference, not a permission. "Spawn several in
+ * parallel for independent questions" said the parallel call was allowed;
+ * the outer model kept asking one broad question and waiting, or walking
+ * the files itself between asks. Several asks in one reply are the cheaper
+ * shape on every axis - the wait is the slowest of them, not the sum, and
+ * every ask replaces a turn of the outer model's own searching, which
+ * re-sends the whole transcript. One sentence, shared by the instructions
+ * and the ask tool's own text on both table shapes. */
+export const PREFER_SEVERAL_ASKS =
+  "Prefer several asks in one reply, one per part of the question, over one broad ask or a chain of " +
+  "your own searches.";
+
 /** How a hit names a row and where the rest of the row is: the sentence the
  * instructions and the search text share. */
 function citeRows(shape: TableShape): string {
@@ -388,10 +400,10 @@ export function rowsInstructions(shape: TableShape, platformTools: boolean): str
       ? "- ask - a question or task in plain language about the rows - which rows are about X, how many and " +
         "where, who has the most and where - it runs the searches and statements itself and returns the rows " +
         "it retrieved (facts as rows, with their columns and the text cut to snippets), not an answer: compose " +
-        "from them. Spawn several in parallel for independent questions instead of writing the statements yourself.\n" +
+        `from them. ${PREFER_SEVERAL_ASKS}\n` +
         "  A question that spans the table - who is hiring for X and what those roles ask for, how two groups " +
-        "of rows compare - is several asks in ONE reply, one per part: they run at the same time, and you " +
-        "compose from the rows they return.\n"
+        "of rows compare - is one ask per part: they run at the same time, and you compose from the rows " +
+        "they return.\n"
       : "") +
     `${SWEEP_TO_A_TOOL}\n` +
     `Hits are rows: a score, the row's ${key}, its scalar columns, and its text columns cut to a snippet of ` +
@@ -526,8 +538,8 @@ export function rowsAskDescription(shape: TableShape, devContextNote: string): s
     "searches and ranks across the table itself and returns the facts it retrieved as rows, never as hits - " +
     `each the row's ${key}, its scalar and list columns, and its text columns cut to a snippet of ` +
     `${SNIPPET_CHARS} characters - plus aggregate rows (counts, rankings) and the SQL whose rows answer the ` +
-    "question - never a summary. Use it for which rows are about X, how many and where, what the rows about X have in common; " +
-    "spawn several in parallel for independent questions instead of querying yourself. For every row holding " +
+    "question - never a summary. Use it for which rows are about X, how many and where, what the rows about X have in common. " +
+    `${PREFER_SEVERAL_ASKS} For every row holding ` +
     `an exact phrase use find; for a row you already know, sql by its ${key}. Answer from the rows and cite ` +
     `them by ${key}. ` +
     devContextNote +
@@ -1133,12 +1145,12 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
             // reply: a tool that had the platform write the answer in one long
             // call (`explore`) lost to this twice on the judged passes - see the
             // note on `retrieve` - and the routing the model reads is this list.
-            "- ask - a question or task in plain language; returns the rows it retrieved (facts with path:line and the code), not an answer: compose from them. Spawn several in parallel for independent questions. How often a string occurs, per file, is find's byFile.\n" +
+            `- ask - a question or task in plain language; returns the rows it retrieved (facts with path:line and the code), not an answer: compose from them. ${PREFER_SEVERAL_ASKS} How often a string occurs, per file, is find's byFile.\n` +
             // Several asks in one reply beat a loop that waits on itself for a
             // question that splits into independent parts (measured
             // 2026-09-12: one exploration took longer than four asks running
             // at once).
-            "  A mechanism that spans files - how X works end to end, what calls what - is several asks in ONE reply, one per part, not one question that needs following: they run at the same time, and you do the following-up yourself from the rows they return.\n"
+            "  A mechanism that spans files - how X works end to end, what calls what - is one ask per part: they run at the same time, and you do the following-up yourself from the rows they return.\n"
           : "") +
         SWEEP_TO_A_TOOL +
         "\n" +
@@ -1666,15 +1678,15 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
           "retrieved - the top rows with exact path, start_line, end_line and the code, in the shape of " +
           "search hits, plus aggregate rows (counts, rankings) and the SQL whose rows answer the " +
           "question - never a summary. Use it " +
-          "for a lookup you will read yourself - where is Y handled, which files or symbols - and " +
-          "spawn several in parallel for independent questions instead of exploring the code yourself. " +
+          "for a lookup you will read yourself - where is Y handled, which files or symbols. " +
+          `${PREFER_SEVERAL_ASKS} ` +
           "A single question over a large codebase splits the same way: one call per section with " +
           "`under` naming its subtree, all issued together. " +
           // The whole-mechanism question is ask's too, as several asks in one
           // reply (see the note on `retrieve`).
-          "A mechanism that spans files - how X works end to end, what calls what - is several asks " +
-          "in ONE reply, one per part, not one question that needs following: they run at the same " +
-          "time, and you do the following-up yourself from the rows they return. " +
+          "A mechanism that spans files - how X works end to end, what calls what - is one ask per " +
+          "part: they run at the same time, and you do the following-up yourself from the rows they " +
+          "return. " +
           "For " +
           "every occurrence of an exact string, and for how many times it occurs per file, use find " +
           "(its byFile is the grep -c answer); for a file you already know, Read it. Answer " +
