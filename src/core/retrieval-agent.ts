@@ -217,6 +217,11 @@ export interface RetrievalAgentResult {
   hitsTotal: number;
   rowsTotal: number;
   turns: number;
+  /** Where the platform's own time on the call went, in milliseconds: its
+   * model calls against its retrieval (the queries and their ranking), the
+   * same two things its charge lines are made of. Absent from a platform
+   * that predates the field. */
+  timing?: RetrievalAgentTiming;
   /** Present when the loop found no query that answers: why, in the platform's
    * words (on `escalated`, the model's own account of the problem). */
   error?: string;
@@ -293,6 +298,18 @@ export function factRowsOf(response: unknown): RowRecord[] {
   return rows;
 }
 
+export interface RetrievalAgentTiming {
+  modelMs: number;
+  retrievalMs: number;
+}
+
+/** The platform's split of its own time on the call, when it reports one. */
+function timingOf(response: unknown): RetrievalAgentTiming | undefined {
+  const t = asRecord(asRecord(response).timing);
+  if (typeof t.model_ms !== "number" || typeof t.retrieval_ms !== "number") return undefined;
+  return { modelMs: t.model_ms, retrievalMs: t.retrieval_ms };
+}
+
 /** The response's coverage of the statement's result, when it carries one. */
 function coverageOf(response: unknown): RetrievalAgentCoverage | undefined {
   const c = asRecord(asRecord(response).coverage);
@@ -317,6 +334,7 @@ export function retrievalAgentRunFrom(question: string, response: unknown, maxHi
   const terminate = body.terminate;
   const statement = typeof body.statement === "string" && body.statement.length > 0 ? body.statement : undefined;
   const coverage = coverageOf(body);
+  const timing = timingOf(body);
   // The platform's written answer, when the request asked for one; first in
   // the result, since it is what the outer agent reads before the facts.
   const answer = typeof body.answer === "string" && body.answer.trim().length > 0 ? body.answer : undefined;
@@ -327,6 +345,7 @@ export function retrievalAgentRunFrom(question: string, response: unknown, maxHi
     ...(coverage ? { coverage } : {}),
     ...factsFrom(factRowsOf(body), maxHits, shape),
     turns: numberField(body.turns),
+    ...(timing ? { timing } : {}),
   };
   if (terminate !== TERMINATE_ANSWERED) result.error = `${noAnswerMessage(terminate, body.error)} - ${NO_ANSWER_HINT}`;
   const unaudited = unauditedOf(body);

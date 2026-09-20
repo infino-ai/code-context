@@ -83,6 +83,15 @@ describe("the platform's written answer (`answer: true`, no tool asks for it now
   });
 });
 
+describe("the platform's split of its own time", () => {
+  it("is carried as timing when the response reports both halves, and left out otherwise", () => {
+    const timed = retrievalAgentRunFrom("q", answered({ timing: { model_ms: 1030, retrieval_ms: 1480 } })).result;
+    expect(timed.timing).toEqual({ modelMs: 1030, retrievalMs: 1480 });
+    expect(retrievalAgentRunFrom("q", answered()).result).not.toHaveProperty("timing");
+    expect(retrievalAgentRunFrom("q", answered({ timing: { model_ms: 5 } })).result).not.toHaveProperty("timing");
+  });
+});
+
 describe("an answer whose audit could not run", () => {
   it("carries the platform's reason as `unaudited`, and nothing when the audit ran", () => {
     const flagged = retrievalAgentRunFrom("q", answered({ unaudited: "the audit provider refused the call" })).result;

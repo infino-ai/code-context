@@ -72,6 +72,11 @@ export interface UsageEntry {
    * the tool result does not. */
   agentTurns?: number;
   agentModelTokens?: number;
+  /** Where the platform's own time on an ask went, as it reported it: its
+   * model calls and its retrieval, in milliseconds - the split its two
+   * charge lines are made of. Absent when the platform did not say. */
+  agentModelMs?: number;
+  agentRetrievalMs?: number;
   /** ask: whether the platform ranked the facts against the question. */
   agentRanked?: boolean;
   /** ask: the platform's account of an audit that could not run, when the
@@ -226,6 +231,7 @@ export function subagentEntry(result: RetrievalAgentResult, spend: RetrievalAgen
     rows: result.rows.length,
     agentTurns: result.turns,
     agentModelTokens: spend.modelTokens,
+    ...(result.timing ? { agentModelMs: result.timing.modelMs, agentRetrievalMs: result.timing.retrievalMs } : {}),
     ...(result.coverage?.ranked ? { agentRanked: true } : {}),
     ...(result.unaudited ? { agentUnaudited: result.unaudited } : {}),
   };
