@@ -83,12 +83,9 @@ async function expectChunksText(s: Started): Promise<void> {
   expect(byName.get("search")).toContain("Ranked code search fusing exact keyword matching with semantic similarity");
   expect(byName.get("find")).toContain("like grep -n");
   expect(byName.get("ask")).toContain("Ask the repository index");
-  // explore is out for a measurement (see its registration in
-  // src/mcp/server.ts): neither registered nor named in the instructions,
-  // since a line for a tool that is not there costs the caller a turn. The
-  // routing the model reads is the instructions list, so when the tool comes
-  // back its line comes back too, ahead of ask (measured 2026-09-19:
-  // registered but unlisted, twelve runs called ask alone).
+  // No explore: the tool that had the platform write the answer is gone (see
+  // the note on `retrieve` in src/mcp/server.ts), and a line in the
+  // instructions for a tool that is not there costs the caller a turn.
   expect(byName.has("explore")).toBe(false);
   const instructions = s.client.getInstructions() ?? "";
   expect(instructions).toContain("code-context is a local index of this repository");

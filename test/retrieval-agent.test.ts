@@ -57,7 +57,7 @@ function answered(overrides: Record<string, unknown> = {}) {
 const unanswered = (terminate: string, extra: Record<string, unknown> = {}) =>
   answered({ facts: [], statement: null, coverage: { rows_total: 0, rows_returned: 0, truncated: false }, terminate, ...extra });
 
-describe("the platform's written answer (the explore tool)", () => {
+describe("the platform's written answer (`answer: true`, no tool asks for it now)", () => {
   it("is asked for by the flag, and only then", async () => {
     const sent: Record<string, unknown>[] = [];
     const hosted = {

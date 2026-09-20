@@ -369,12 +369,7 @@ export function rowsInstructions(shape: TableShape, platformTools: boolean): str
     `k, never the table - a complete count comes from token_match, a WHERE, or the ${table} table with no ` +
     "search function.\n" +
     (platformTools
-      ? // The explore line is out with the tool's registration, for the
-        // measurement noted at the code index's instructions below.
-        // "- explore - try this first for a question about what the rows say - what the roles about X ask for, " +
-        // "how a group of rows compares: one call runs the searches and returns the answer written from the rows " +
-        // "it retrieved, citing the records, plus those rows; relay it as it stands, adding only what you verify.\n" +
-        "- ask - a question or task in plain language about the rows - which rows are about X, how many and " +
+      ? "- ask - a question or task in plain language about the rows - which rows are about X, how many and " +
         "where, who has the most and where - it runs the searches and statements itself and returns the rows " +
         "it retrieved (facts as rows, with their columns and the text cut to snippets), not an answer: compose " +
         "from them. Spawn several in parallel for independent questions instead of writing the statements yourself.\n" +
@@ -1117,14 +1112,10 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
         "a total over a search relation is the top k's matched lines, never a file's length - sizes " +
         "and whole-repo counts come from the chunks table with no search function).\n" +
         (agentTools
-          ? // The explore line is out for a measurement (2026-09-19, the owner:
-            // "just comment it out from the tools definition. and then run a
-            // test and see"): with the tool registered and named first here,
-            // an Opus run made one explore call of ~14 s and then wrote; the
-            // question is whether the same model fanning out asks in parallel
-            // (3-4 s each) reaches the same answer sooner. The line goes back
-            // with the registration below if it does not.
-            // "- explore - try this first for an exploration question: how does X work, what happens when Y, walk me through Z. One call retrieves and returns the answer written from the rows, with exact path:line citations, plus the rows; relay it as it stands, adding only what you verify.\n" +
+          ? // The whole-mechanism question is ask's too, as several asks in one
+            // reply: a tool that had the platform write the answer in one long
+            // call (`explore`) lost to this twice on the judged passes - see the
+            // note on `retrieve` - and the routing the model reads is this list.
             "- ask - a question or task in plain language; returns the rows it retrieved (facts with path:line and the code), not an answer: compose from them. Spawn several in parallel for independent questions. How often a string occurs, per file, is find's byFile.\n" +
             // Several asks in one reply beat a loop that waits on itself for a
             // question that splits into independent parts (measured
@@ -1514,9 +1505,7 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
   );
 
   if (agentTools) {
-    /** The inputs `ask` and `explore` share: the two tools differ in one
-     * request flag and in what the outer model is told to do with the result,
-     * so their schema is one object. */
+    /** The inputs of `ask`. */
     const retrievalInputs = {
       question: z.string().min(1).describe("The question or task, in plain language, about the indexed code."),
       under: z
@@ -1537,11 +1526,19 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
         ),
     };
 
-    /** One retrieval through the platform's loop, as `ask` (the facts) or
-     * `explore` (the facts and the platform's written answer, composed by
-     * the loop's own model under the platform's citation instruction, the
-     * same sentences the outer model writes its final answer under). */
-    const retrieve = async (tool: "ask" | "explore", { question, under, path }: { question: string; under?: string; path?: string }) => {
+    /** One retrieval through the platform's loop: the facts back.
+     *
+     * The platform can also write the answer from the rows (`answer: true`
+     * on `runRetrievalAgent`, kept for a caller that wants it). No tool here
+     * asks for it any more: an `explore` tool did, and was measured twice
+     * against the same model fanning out asks - once with Sonnet in early
+     * September, and on 2026-09-19/20 with Opus on both arms of the demo,
+     * twelve questions, the same judge: with explore 8 A / 1 B / 3 C and four
+     * contradicted claims at a median 52 s; without it 12 A, none
+     * contradicted, 47 s, at 1.9x the caller's tokens. The owner: "we have to
+     * go with faster even if a bit more expensive. quality is better and
+     * performance is better." */
+    const retrieve = async ({ question, under, path }: { question: string; under?: string; path?: string }) => {
       let ctx: RepoCtx;
       try {
         ctx = repoFor(path);
@@ -1554,7 +1551,7 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
       // readiness: without a chunks table the platform would spend the whole
       // cold-start budget on "no table described yet" before saying
       // anything useful.
-      const missing = noPlatform(tool, ctx);
+      const missing = noPlatform("ask", ctx);
       if (missing) return missing;
       // Over a hosted table of another shape there is no local index to
       // build or sync - and a build would drop that table (see ownsTable)
@@ -1562,25 +1559,23 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
       // The facts are keyed by the table's own key column, not the chunks
       // table's place columns (rowsProjection), and come back as rows of
       // that shape, text cut to snippets as a search hit's is.
-      const over = rowsOver(tool, ctx);
+      const over = rowsOver("ask", ctx);
       if (over && "failed" in over) return over.failed;
       if (!over) {
         const ensured = await localIndex(ctx);
         if ("failed" in ensured) return ensured.failed;
         if (!ensured.autoIndexed) maybeAutoSync(ctx); // a fresh build is already current
-        const notReady = await platformNotReady(tool, ctx);
+        const notReady = await platformNotReady("ask", ctx);
         if (notReady) return notReady;
       }
       try {
         const t0 = performance.now();
         // The spend (turns, tokens) goes to the ledger and the receipt only;
-        // the result the model sees is the facts: sql, hits, rows, queries -
-        // and, for explore, the platform's answer in front of them.
+        // the result the model sees is the facts: sql, hits, rows, queries.
         // The repository's own instructions ride with the question only
         // when asked for (CX_DEV_CONTEXT=1); off, the loop's model gets the
         // question alone.
         const context = devContextEnabled() ? devContext(ctx.root) : undefined;
-        const compose = tool === "explore";
         // `under` names a subtree of a code index, and a row of a hosted
         // table of another shape sits in no directory - so it is left out
         // there, exactly as find leaves its own out.
@@ -1596,13 +1591,12 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
             // pick this one (measured 2026-09-12: two code indexes, and every
             // ask about the second was answered from the first).
             table: TABLE,
-            ...(compose ? { answer: true } : {}),
           },
           { maxTurns: subagentMaxTurns(), maxWallSecs: subagentMaxWallSecs(), k: subagentK() },
         );
         let usage: string | undefined;
         if (receiptOn) {
-          const entry = withPlatform(subagentEntry(result, spend, tool), ctx);
+          const entry = withPlatform(subagentEntry(result, spend), ctx);
           recordUsage(ctx.dir, entry);
           usage = formatReceipt(entry, session);
         }
@@ -1612,7 +1606,7 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
           ...(usage ? { usage } : {}),
         });
       } catch (err) {
-        return fail(`${tool} failed: ${(err as Error).message}${refusalHint(err)}`);
+        return fail(`ask failed: ${(err as Error).message}${refusalHint(err)}`);
       }
     };
 
@@ -1634,8 +1628,8 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
           "spawn several in parallel for independent questions instead of exploring the code yourself. " +
           "A single question over a large codebase splits the same way: one call per section with " +
           "`under` naming its subtree, all issued together. " +
-          // With explore out (see its registration below), the whole-mechanism
-          // question is ask's too, as several asks in one reply.
+          // The whole-mechanism question is ask's too, as several asks in one
+          // reply (see the note on `retrieve`).
           "A mechanism that spans files - how X works end to end, what calls what - is several asks " +
           "in ONE reply, one per part, not one question that needs following: they run at the same " +
           "time, and you do the following-up yourself from the rows they return. " +
@@ -1647,56 +1641,9 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
           "The result includes a 'usage' field, a one-line receipt of what the call cost.",
         inputSchema: retrievalInputs,
       },
-      (args) => retrieve("ask", args),
+      retrieve,
     );
 
-    // The same retrieval with the answer written on the platform by the
-    // loop's own model, under the same citation instruction the outer model
-    // has, so that what comes back is ready to relay.
-    // Registered beside `ask` rather than in its place: the facts alone are
-    // still the right result for a lookup the caller will read itself, and
-    // for several independent questions issued together.
-    //
-    // OUT for a measurement (2026-09-19, the owner: "just comment it out from
-    // the tools definition. and then run a test and see"). On the live demo
-    // an Opus run made one explore call and then wrote; the call took ~14 s
-    // as the caller saw it (a 5-6 s loop, the rest the gateway's work before
-    // and after it), against 3-4 s for an ask, and asks run in parallel. The
-    // judged pass with this block out is compared with the same pass on the
-    // same build with it in; the block and its instruction lines go back if
-    // the answers are not as good or the runs not faster.
-    /*
-    server.registerTool(
-      "explore",
-      {
-        title: "Explore the repository index: one retrieval, the answer written for you",
-        annotations: READ_ONLY,
-        description: rows
-          ? `Try this first for a question about what the ${rows.table} rows say - what the roles about X ask for, ` +
-            "how one group of rows compares with another. One call: a read-only retrieval subagent runs the " +
-            "searches and statements over the table, and the platform writes the answer from the rows it " +
-            "retrieved, citing the records, and returns those rows beside the answer. Relay the answer as it " +
-            "stands, adding only what you verify against the rows; ask again more narrowly when it leaves a " +
-            "gap. Use ask when you want the rows alone or have several independent questions to issue at once. " +
-            DEV_CONTEXT_NOTE +
-            "The result includes a 'usage' field, a one-line receipt of what the call cost."
-          : mode.kind === "unresolved"
-          ? unresolvedDescription("An exploration question in plain language, answered in writing from the rows it retrieved,", TABLE)
-          : "Try this first for an exploration question - how does X work, what happens when Y, walk " +
-          "me through Z, where is W handled. One call: a read-only retrieval subagent searches and ranks " +
-          "across the index, and the platform writes the answer from the rows it retrieved, citing each " +
-          "place as path:line or path:start-end exactly as the rows hold it, and returns those rows " +
-          "beside the answer. Relay the answer with its citations as it stands, adding only what you " +
-          "verify against the rows; ask again with a narrower question when it leaves a gap. Use ask " +
-          "when you want the facts alone or have several independent questions to issue at once, " +
-          "and find for every occurrence of an exact string. " +
-          DEV_CONTEXT_NOTE +
-          "The result includes a 'usage' field, a one-line receipt of what the call cost.",
-        inputSchema: retrievalInputs,
-      },
-      (args) => retrieve("explore", args),
-    );
-    */
   }
 
   const transport = serveOptions.transport ?? new StdioServerTransport();
