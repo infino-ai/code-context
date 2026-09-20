@@ -177,7 +177,7 @@ describe("a table of another shape, described at startup", () => {
     expect(byName.get("find")).toContain(`Every row of ${JOBS_TABLE}`);
     expect(byName.get("ask")).toContain(`the ${JOBS_TABLE} table's index`);
     // The facts of ask are rows, cut to snippets, never hits.
-    expect(byName.get("ask")).toContain("as rows, never as hits");
+    expect(byName.get("ask")).toContain("returns the rows it found, never hits");
     expect(byName.get("ask")).toContain(`snippet`);
     expect(byName.get("ask")).toContain(`${SNIPPET_CHARS} characters`);
     expect(byName.get("ask")).not.toContain("from its hits");
