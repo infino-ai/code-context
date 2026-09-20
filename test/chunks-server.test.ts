@@ -83,6 +83,10 @@ async function expectChunksText(s: Started): Promise<void> {
   expect(byName.get("search")).toContain("Ranked code search fusing exact keyword matching with semantic similarity");
   expect(byName.get("find")).toContain("like grep -n");
   expect(byName.get("ask")).toContain("Ask the repository index");
+  // The opening says what one call does and covers, before what comes back.
+  expect(byName.get("ask")).toContain(
+    "a read-only retrieval subagent chooses and runs the searches itself - keyword, hybrid, vector and SQL, as the question needs - over the whole repository",
+  );
   // No explore: the tool that had the platform write the answer is gone (see
   // the note on `retrieve` in src/mcp/server.ts), and a line in the
   // instructions for a tool that is not there costs the caller a turn.

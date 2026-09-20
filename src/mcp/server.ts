@@ -535,7 +535,8 @@ export function rowsAskDescription(shape: TableShape, devContextNote: string): s
   const { table, keyColumn: key } = shape;
   return (
     `Ask the ${table} table's index a question or task in plain language: a read-only retrieval subagent ` +
-    "searches and ranks across the table itself and returns the facts it retrieved as rows, never as hits - " +
+    "chooses and runs the searches and statements itself over the whole table and returns the rows it " +
+    "found, never hits - " +
     `each the row's ${key}, its scalar and list columns, and its text columns cut to a snippet of ` +
     `${SNIPPET_CHARS} characters - plus aggregate rows (counts, rankings) and the SQL whose rows answer the ` +
     "question - never a summary. Use it for which rows are about X, how many and where, what the rows about X have in common. " +
@@ -1673,11 +1674,18 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
           ? rowsAskDescription(rows, DEV_CONTEXT_NOTE)
           : mode.kind === "unresolved"
           ? unresolvedDescription("A question or task in plain language, answered with the rows it retrieved,", TABLE)
-          : "Ask the repository index a question or task in plain language: a read-only retrieval " +
-          "subagent searches and ranks across the index itself and returns the facts it " +
-          "retrieved - the top rows with exact path, start_line, end_line and the code, in the shape of " +
-          "search hits, plus aggregate rows (counts, rankings) and the SQL whose rows answer the " +
-          "question - never a summary. Use it " +
+          : // The first sentence is what the choice between ask and the model's
+            // own file tools turns on, so it says what one call does and covers
+            // before it says what comes back. How the subagent works inside -
+            // which model, how many searches at once - stays out: the caller
+            // cannot act on it, and a call that advertises its own parallelism
+            // invites one broad question where several asks in one reply are
+            // the shape wanted (PREFER_SEVERAL_ASKS).
+            "Ask the repository index a question or task in plain language: a read-only retrieval " +
+          "subagent chooses and runs the searches itself - keyword, hybrid, vector and SQL, as the " +
+          "question needs - over the whole repository and returns the rows it found, with exact path, " +
+          "start_line, end_line and the code, in the shape of search hits, plus aggregate rows (counts, " +
+          "rankings) and the SQL whose rows answer the question - never a summary. Use it " +
           "for a lookup you will read yourself - where is Y handled, which files or symbols. " +
           `${PREFER_SEVERAL_ASKS} ` +
           "A single question over a large codebase splits the same way: one call per section with " +
