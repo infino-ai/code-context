@@ -368,6 +368,22 @@ export const PREFER_SEVERAL_ASKS =
   "Prefer several asks in one reply, one per part of the question, over one broad ask or a chain of " +
   "your own searches.";
 
+/** The order among the tools a model holds beside this server's: the index
+ * first. Claude Code's own prompt prefers dedicated file and search tools
+ * over shell commands, and Grep and Glob are as dedicated as ours, so
+ * nothing the model read ranked them - a code question still went to Bash
+ * again and again beside its asks. One sentence sets the order and names
+ * the tools this server actually registers; Read keeps its place, the tool
+ * for a hit marked truncated. A rows table has no files behind it and does
+ * not carry the sentence. */
+export function indexFirst(agentTools: boolean): string {
+  const tools = agentTools ? "find, search, sql and ask" : "find, search and sql";
+  return (
+    `Look with the index first: ${tools} cover every file in one call and return the lines themselves; ` +
+    "use Grep, Glob or Bash only for what the index could not give you."
+  );
+}
+
 /** How a hit names a row and where the rest of the row is: the sentence the
  * instructions and the search text share. */
 function citeRows(shape: TableShape): string {
@@ -1153,6 +1169,8 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
             // at once).
             "  A mechanism that spans files - how X works end to end, what calls what - is one ask per part: they run at the same time, and you do the following-up yourself from the rows they return.\n"
           : "") +
+        indexFirst(agentTools) +
+        "\n" +
         SWEEP_TO_A_TOOL +
         "\n" +
         "Hits carry the code: when a hit answers the question, answer from it. A hit's content shows " +

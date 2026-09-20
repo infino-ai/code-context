@@ -36,7 +36,7 @@ process.env.CX_AUTO_INDEX = "0";
 delete process.env.CX_NO_RECEIPT;
 delete process.env.CX_INDEX_DIR;
 
-const { SQL_DESCRIPTION, PREFER_SEVERAL_ASKS } = await import("../src/mcp/server.js");
+const { SQL_DESCRIPTION, PREFER_SEVERAL_ASKS, indexFirst } = await import("../src/mcp/server.js");
 const { API_KEY_ENV, MANIFEST_NAME, TABLE, DEFAULT_TABLE, configureHosted, hostedSettingsFromFlags } = await import("../src/core/config.js");
 
 /** One chunk as the hosted search returns it. */
@@ -101,6 +101,10 @@ async function expectChunksText(s: Started): Promise<void> {
   expect(instructions).toContain(PREFER_SEVERAL_ASKS);
   expect(byName.get("ask")).toContain(PREFER_SEVERAL_ASKS);
   expect(instructions).not.toContain("Spawn several in parallel");
+  // The index ranks ahead of the model's own file tools, and the sentence
+  // names the four tools this server registers.
+  expect(instructions).toContain(indexFirst(true));
+  expect(instructions).toContain("find, search, sql and ask cover every file in one call");
 }
 
 /** The two sentences the hosted loop's answer writer is told, word for word,
@@ -234,6 +238,10 @@ describe("the chunks table with CX_AGENT_TOOLS=0: the lane that hides ask", () =
     expect(instructions).not.toContain("- ask -");
     expect(instructions).not.toContain("- explore -");
     expectSharedSentences(instructions);
+    // The index-first sentence names the three tools this lane has, not ask.
+    expect(instructions).toContain(indexFirst(false));
+    expect(instructions).toContain("find, search and sql cover every file in one call");
+    expect(instructions).not.toContain("sql and ask cover");
     // The database is still configured: the sql text's platform-side note
     // and the startup card read are about sql, not about the loop.
     expect(tools.find((t) => t.name === "sql")?.description).toContain("'validation'");
