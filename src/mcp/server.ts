@@ -376,6 +376,36 @@ export const PREFER_SEVERAL_ASKS =
  * the tools this server actually registers; Read keeps its place, the tool
  * for a hit marked truncated. A rows table has no files behind it and does
  * not carry the sentence. */
+/** How a definition is found with an exact-text tool: by the bare name with
+ * `defines`, never by a signature the model has composed. Told in find's
+ * description, and again in the result when a find for a phrase or a
+ * signature comes back empty (`findHint`) - the moment the model would
+ * otherwise reach for a regex grep. */
+export const FIND_BY_BARE_NAME =
+  "Find a definition by its bare name with defines - `refresh(` lists every refresh declared - never by " +
+  "a signature you have composed: find matches characters, so a guessed line matches nothing.";
+
+/** The hint on an empty find, or null when the result needs none: a query
+ * with spaces is a phrase or a signature, which one exact line may never
+ * hold; with `defines` on and nothing found, the name itself is in doubt.
+ * A bare identifier that is simply absent gets no hint - zero is the answer. */
+export function findHint(query: string, total: number, defines: boolean): string | null {
+  if (total > 0) return null;
+  const words = query.trim().split(/\s+/);
+  if (words.length > 1) {
+    const name = /[A-Za-z_][A-Za-z0-9_]*\s*\(/.exec(query)?.[0].replace(/\s+/g, "") ?? null;
+    return (
+      "No line holds this exact text. " +
+      (name
+        ? `For the declaration, find the bare name with defines: query "${name}", defines: true. `
+        : "For a definition, find the bare name with defines. ") +
+      "For words that may not sit on one line, use search."
+    );
+  }
+  if (defines) return `Nothing declares "${query}". Check the name: find it without defines to see where it is used, or search for what it does.`;
+  return null;
+}
+
 export function indexFirst(agentTools: boolean): string {
   const tools = agentTools ? "find, search, sql and ask" : "find, search and sql";
   return (
@@ -1348,8 +1378,12 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
         "unranked, with the repo-wide total and per-file counts (byFile, the grep -c answer). " +
         "Literal text within one line, case-sensitive unless ignoreCase. Use it where you would " +
         "grep: every use or definition of an identifier, an error message, a config key. Set defines " +
-        "to get only where a name is defined rather than everywhere it appears. Not for a " +
-        "file you already know - Read that file. " +
+        "to get only where a name is defined rather than everywhere it appears. " +
+        // Measured 2026-09-20: three finds for guessed signatures returned
+        // nothing and the model fell back to a regex Grep; the bare name with
+        // defines would have listed the declarations on the first call.
+        FIND_BY_BARE_NAME +
+        " Not for a file you already know - Read that file. " +
         // find's hand-off must name the tool that owns the question on this
         // surface, or it sends a mechanism question to search.
         (agentTools
@@ -1361,7 +1395,10 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
         query: z
           .string()
           .min(1)
-          .describe("The exact text to find, as it appears in the code - an identifier, a string, a key."),
+          .describe(
+            "The exact text to find, as it appears in the code - an identifier, a string, a key. Never a " +
+              "signature or a line you have not read: one character off and nothing matches.",
+          ),
         ignoreCase: z
           .boolean()
           .optional()
@@ -1451,8 +1488,10 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
           recordUsage(ctx.dir, entry);
           usage = formatReceipt(entry, session);
         }
+        const hint = findHint(query, result.total, Boolean(defines));
         return ok({
           ...result,
+          ...(hint ? { hint } : {}),
           ...(autoIndexed ? { auto_indexed: autoIndexNote(autoIndexed) } : {}),
           took_ms: Math.round((performance.now() - t0) * 1000) / 1000,
           ...(usage ? { usage } : {}),

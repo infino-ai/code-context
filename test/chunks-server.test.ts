@@ -36,7 +36,7 @@ process.env.CX_AUTO_INDEX = "0";
 delete process.env.CX_NO_RECEIPT;
 delete process.env.CX_INDEX_DIR;
 
-const { SQL_DESCRIPTION, PREFER_SEVERAL_ASKS, indexFirst } = await import("../src/mcp/server.js");
+const { SQL_DESCRIPTION, PREFER_SEVERAL_ASKS, FIND_BY_BARE_NAME, indexFirst, findHint } = await import("../src/mcp/server.js");
 const { API_KEY_ENV, MANIFEST_NAME, TABLE, DEFAULT_TABLE, configureHosted, hostedSettingsFromFlags } = await import("../src/core/config.js");
 
 /** One chunk as the hosted search returns it. */
@@ -82,6 +82,10 @@ async function expectChunksText(s: Started): Promise<void> {
   expect(byName.get("sql")).toContain("'validation'");
   expect(byName.get("search")).toContain("Ranked code search fusing exact keyword matching with semantic similarity");
   expect(byName.get("find")).toContain("like grep -n");
+  // A definition is found by its bare name with defines, never by a composed
+  // signature (three such finds returned nothing on 2026-09-20 and the model
+  // fell back to a regex grep).
+  expect(byName.get("find")).toContain(FIND_BY_BARE_NAME);
   expect(byName.get("ask")).toContain("Ask the repository index");
   // The opening says what one call does and covers, before what comes back.
   expect(byName.get("ask")).toContain(
@@ -118,6 +122,25 @@ function expectSharedSentences(instructions: string): void {
     "Be efficient: prefer few, well-chosen tool calls, and hand a sweep across many files to a tool built for it rather than searching by hand.",
   );
 }
+
+describe("the hint on an empty find", () => {
+  it("names the bare name with defines when a signature or phrase found nothing", () => {
+    const hint = findHint("private void refresh(String source, SearcherScope scope, boolean block)", 0, false);
+    expect(hint).toContain("No line holds this exact text.");
+    expect(hint).toContain('query "refresh(", defines: true');
+    expect(hint).toContain("use search");
+    // A phrase with no call in it still points at defines and search.
+    expect(findHint("Refresh the engine's searcher", 0, false)).toContain("find the bare name with defines");
+  });
+  it("doubts the name itself when defines found nothing for a bare identifier", () => {
+    expect(findHint("maybeRefresh", 0, true)).toContain('Nothing declares "maybeRefresh"');
+  });
+  it("says nothing when a bare identifier is simply absent, or when anything matched", () => {
+    expect(findHint("refresh(", 0, false)).toBeNull();
+    expect(findHint("private void refresh(String source)", 3, false)).toBeNull();
+    expect(findHint("maybeRefresh", 2, true)).toBeNull();
+  });
+});
 
 /** No write reached the platform and no local index was built. */
 function expectNothingBuilt(s: Started): void {
