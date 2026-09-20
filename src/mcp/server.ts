@@ -341,6 +341,21 @@ function exampleScalar(shape: TableShape): string {
   return shape.scalarColumns.find((name) => name !== shape.keyColumn) ?? shape.keyColumn;
 }
 
+/** Two sentences every model that reads these instructions is told, word for
+ * word the ones the hosted retrieval loop's own answer writer is told, so the
+ * outer model and the loop cite under one instruction and reach for tools the
+ * same way. They ride in the server's instructions, which Claude Code adds to
+ * its own system prompt beside the user's; nothing of the user's prompt is
+ * replaced. The first is what a citation is: a place copied from a tool
+ * result, never remembered. The second is what a sweep is: one call to a
+ * tool built for it, not a walk through files by hand. */
+export const CITE_EXACTLY =
+  "Cite the places your tool results gave you exactly as they gave them - the path and line numbers " +
+  "copied, never recalled or adjusted.";
+export const SWEEP_TO_A_TOOL =
+  "Be efficient: prefer few, well-chosen tool calls, and hand a sweep across many files to a tool " +
+  "built for it rather than searching by hand.";
+
 /** How a hit names a row and where the rest of the row is: the sentence the
  * instructions and the search text share. */
 function citeRows(shape: TableShape): string {
@@ -378,6 +393,7 @@ export function rowsInstructions(shape: TableShape, platformTools: boolean): str
         "of rows compare - is several asks in ONE reply, one per part: they run at the same time, and you " +
         "compose from the rows they return.\n"
       : "") +
+    `${SWEEP_TO_A_TOOL}\n` +
     `Hits are rows: a score, the row's ${key}, its scalar columns, and its text columns cut to a snippet of ` +
     `${SNIPPET_CHARS} characters. ${citeRows(shape)} ` +
     "Every tool takes an optional 'path' (an absolute repo root) to target a repository instead, whose local " +
@@ -1124,10 +1140,14 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
             // at once).
             "  A mechanism that spans files - how X works end to end, what calls what - is several asks in ONE reply, one per part, not one question that needs following: they run at the same time, and you do the following-up yourself from the rows they return.\n"
           : "") +
+        SWEEP_TO_A_TOOL +
+        "\n" +
         "Hits carry the code: when a hit answers the question, answer from it. A hit's content shows " +
         "each line with its own number in the file, so cite a place as path:line or path:start-end " +
         "from those numbers and only where the thing you name sits - never the hit's whole line " +
-        "range, which spans the chunk. Read a file only for a hit marked truncated. " +
+        "range, which spans the chunk. " +
+        CITE_EXACTLY +
+        " Read a file only for a hit marked truncated. " +
         "Every tool takes an optional 'path' (an absolute repo root) to target another repository. " +
         "A 'partial' marker means files over the index cap were left out, so a missing match is not " +
         "proof of absence.",

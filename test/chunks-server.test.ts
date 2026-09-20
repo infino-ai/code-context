@@ -91,6 +91,19 @@ async function expectChunksText(s: Started): Promise<void> {
   expect(instructions).toContain("code-context is a local index of this repository");
   expect(instructions).not.toContain("- explore -");
   expect(instructions).toContain("- ask - a question or task in plain language");
+  expectSharedSentences(instructions);
+}
+
+/** The two sentences the hosted loop's answer writer is told, word for word,
+ * in whatever instructions a model reads: what a citation is, and what a sweep
+ * is. Pinned as text so a rewording here is a decision, not a drift. */
+function expectSharedSentences(instructions: string): void {
+  expect(instructions).toContain(
+    "Cite the places your tool results gave you exactly as they gave them - the path and line numbers copied, never recalled or adjusted.",
+  );
+  expect(instructions).toContain(
+    "Be efficient: prefer few, well-chosen tool calls, and hand a sweep across many files to a tool built for it rather than searching by hand.",
+  );
 }
 
 /** No write reached the platform and no local index was built. */
@@ -211,6 +224,7 @@ describe("the chunks table with CX_AGENT_TOOLS=0: the lane that hides ask", () =
     expect(instructions).toContain("code-context is a local index of this repository");
     expect(instructions).not.toContain("- ask -");
     expect(instructions).not.toContain("- explore -");
+    expectSharedSentences(instructions);
     // The database is still configured: the sql text's platform-side note
     // and the startup card read are about sql, not about the loop.
     expect(tools.find((t) => t.name === "sql")?.description).toContain("'validation'");
