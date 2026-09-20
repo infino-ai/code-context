@@ -132,6 +132,35 @@ describe("search", () => {
     expect(r.ranking).toBe("keyword");
     expect(r.note).toMatch(/vectors not ready/);
   });
+
+  it("with lines, a hit is the chunk's matching lines with two of context, numbered in the file", async () => {
+    // notes.txt line 55 carries OVERLAP_MARK inside a 60-line window; the hit
+    // comes back as lines 53-57 rather than the window, each numbered with its
+    // own line in the file, and says one line matched.
+    const r = await search(handle, fakeEmbedder, "OVERLAP_MARK", 5, { lines: true });
+    const hit = r.hits.find((h) => h.path === "notes.txt");
+    expect(hit).toBeDefined();
+    expect(hit!.matchedLines).toBe(1);
+    expect(hit!.content.split("\n")).toEqual([
+      "53: filler 53",
+      "54: filler 54",
+      "55: OVERLAP_MARK sits in two windows",
+      "56: filler 56",
+      "57: filler 57",
+    ]);
+    // The hit's span is still the chunk's: the citation range is unchanged,
+    // the content is what was cut.
+    expect(hit!.startLine).toBeLessThanOrEqual(53);
+    expect(hit!.endLine).toBeGreaterThanOrEqual(57);
+  });
+
+  it("without lines, the same search returns the whole chunk and no matchedLines", async () => {
+    const r = await search(handle, fakeEmbedder, "OVERLAP_MARK", 5);
+    const hit = r.hits.find((h) => h.path === "notes.txt");
+    expect(hit).toBeDefined();
+    expect(hit!.matchedLines).toBeUndefined();
+    expect(hit!.content.split("\n").length).toBeGreaterThan(5);
+  });
 });
 
 describe("find", () => {

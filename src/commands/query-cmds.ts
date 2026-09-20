@@ -103,14 +103,20 @@ export async function findCmd(text: string, opts: FindCmdOptions): Promise<void>
 
 export interface SearchCmdOptions {
   k: string;
+  /** Each hit as the lines carrying the query's words, with context, not the chunk. */
+  lines?: boolean;
   json?: boolean;
   path?: string;
 }
 
+/** How many lines of a whole-chunk hit the CLI prints; a hit already cut to
+ * its matching lines (`--lines`) prints whole, since those lines are the point. */
+const CLI_HIT_PREVIEW_LINES = 5;
+
 export async function searchCmd(query: string, opts: SearchCmdOptions): Promise<void> {
   try {
     const handle = openIndex(opts.path);
-    const result = await search(handle, createEmbedder(), query, Number(opts.k));
+    const result = await search(handle, createEmbedder(), query, Number(opts.k), { lines: opts.lines });
     if (receiptEnabled()) {
       const entry = searchEntry(result, handle.root);
       recordUsage(handle.dir, entry);
@@ -126,7 +132,8 @@ export async function searchCmd(query: string, opts: SearchCmdOptions): Promise<
       console.log(
         `${bold(String(i + 1) + ".")} ${cyan(h.path)}${dim(`:${h.startLine}-${h.endLine}`)} ${dim(`(${result.ranking} ${h.score.toFixed(3)})`)}`,
       );
-      console.log(`  ${h.content.split("\n").slice(0, 5).join("\n  ")}\n`);
+      const shown = opts.lines ? h.content.split("\n") : h.content.split("\n").slice(0, CLI_HIT_PREVIEW_LINES);
+      console.log(`  ${shown.join("\n  ")}\n`);
     });
     if (result.hits.length === 0) console.error(yellow("no hits"));
   } catch (err) {

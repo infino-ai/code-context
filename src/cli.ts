@@ -142,6 +142,7 @@ program
   .description("find code: exact terms and meaning in one ranked pass")
   .argument("<query>", "what you're looking for")
   .option("-k <n>", "maximum hits", String(DEFAULT_SEARCH_K))
+  .option("--lines", "each hit as only the lines carrying the query's words, with two lines of context, instead of the whole chunk")
   .option("--json", "machine-readable output")
   .option("-C, --path <dir>", "repo root (default: current directory)")
   .action(searchCmd);
