@@ -149,7 +149,7 @@ subagents.[^fifty]
 
 ## Install
 
-You need node 20 or newer, on macOS or Linux. Then clone this repo:
+You need node 22 or newer, on macOS or Linux. Then clone this repo:
 
 ```bash
 git clone -b feat/platform-backend https://github.com/infino-ai/code-context
