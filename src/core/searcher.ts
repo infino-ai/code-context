@@ -175,11 +175,13 @@ interface LineFocus {
  * caller's context on the other fifty-nine, and a caller with a budget - a
  * model reading a log, above all - gets fewer of the lines that matter for it.
  * Measured on LogDx-CI, thirty-five CI failure logs with the evidence lines
- * marked by hand, at a fixed budget of 200 lines returned per log: whole
- * chunks preserved 0.776 of the critical signals, these lines 0.817, and at
- * 300 lines 0.853 against the best published method's 0.823 at two and a
- * half times the context. `find` returns a matched line rather than its
- * chunk for the same reason; this is that idea inside a ranked result.
+ * marked by hand, each log's chunks ranked against one fixed query, at a
+ * fixed budget of lines returned per log: at 200 lines whole chunks
+ * preserved 0.797 of the critical signals and these lines 0.853; at 300
+ * lines 0.889. The best published method scores 0.823 at two and a half
+ * times the context, and a grep over the whole log 0.841 at fourteen times.
+ * `find` returns a matched line rather than its chunk for the same reason;
+ * this is that idea inside a ranked result.
  *
  * Which lines match is decided by the index's own analyzer: a line carries a
  * term when the analyzer's tokens of the line include one of the analyzer's

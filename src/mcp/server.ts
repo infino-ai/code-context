@@ -1133,8 +1133,8 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
         "from the lines you cite it to. When one " +
         "search is not enough, refine the query and search again. " +
         // Measured on LogDx-CI (35 CI failure logs, evidence lines marked):
-        // at 200 lines returned per log, whole chunks kept 0.776 of the
-        // critical signals and the matching lines 0.817; see focusLines.
+        // at 200 lines returned per log, whole chunks kept 0.797 of the
+        // critical signals and the matching lines 0.853; see focusLines.
         "Set lines to get each hit as only the lines carrying your query's words, with two lines " +
         "of context, in place of the whole chunk - for logs, test output and other long records, " +
         "where the matching lines are the answer; put the words you expect on those lines in the " +
