@@ -44,7 +44,7 @@ export interface UsageEntry {
    * and `explore` a second platform tool that was removed once measurement
    * showed several asks issued together beat its loop; both appear in older
    * ledgers only, and nothing writes either now. */
-  tool: "find" | "search" | "sql" | "card" | "ask" | "explore" | "subagent";
+  tool: "find" | "search" | "sql" | "card" | "ask" | "answer" | "explore" | "subagent";
   query: string;
   returnedTokens: number;
   /** search only: whole-file size of the distinct files the hits came from. */
@@ -221,7 +221,7 @@ export function cardEntry(card: Record<string, unknown>): UsageEntry {
  * search's, and the loop's own spend (turns, tokens) is the platform's meter
  * and rides beside them in the ledger. `tool` names which of the two tools
  * made the call. */
-export function subagentEntry(result: RetrievalAgentResult, spend: RetrievalAgentSpend, tool: "ask" | "explore" = "ask"): UsageEntry {
+export function subagentEntry(result: RetrievalAgentResult, spend: RetrievalAgentSpend, tool: "ask" | "explore" | "answer" = "ask"): UsageEntry {
   return {
     ts: new Date().toISOString(),
     tool,
@@ -279,7 +279,7 @@ export function formatReceipt(entry: UsageEntry, session?: SessionUsage): string
     // The repo-wide count, not just the lines returned: a cut result still
     // tells the reader how many matches exist.
     parts.push(`returned ~${fmtTokens(entry.returnedTokens)} tokens | ${plural(entry.matches ?? hits.length, "match", "matches")} / ${plural(files, "file", "files")}`);
-  } else if (entry.tool === "ask" || entry.tool === "subagent" || entry.tool === "explore") {
+  } else if (entry.tool === "ask" || entry.tool === "answer" || entry.tool === "subagent" || entry.tool === "explore") {
     // What came back, then the inner agent's spend beside it: the platform
     // bills the model tokens, so the caller sees what one question cost there.
     const hits = entry.hits ?? [];

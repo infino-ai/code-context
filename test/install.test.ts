@@ -17,7 +17,7 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, statSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { InstallError, installCmd, platformArgs, serverEntry } from "../src/commands/install-cmd.js";
+import { InstallError, answerHookEntries, answerHookMatcher, installCmd, platformArgs, serverEntry } from "../src/commands/install-cmd.js";
 
 const VERSION = "9.9.9";
 
@@ -634,6 +634,72 @@ describe("cx install: the first install on a machine with no account", () => {
     expect(calls).toEqual([]);
     expect(existsSync(configIn(root))).toBe(false);
     expect(existsSync(join(accountDir, "key"))).toBe(false);
+  });
+});
+
+describe("cx install: the answer-display hooks", () => {
+  const settingsIn = (dir: string) => join(dir, ".claude", "settings.json");
+  const matcher = answerHookMatcher("code-context");
+
+  it("writes one PostToolUse hook per chunk beside a platform entry, and tells the server so", async () => {
+    await installCmd({ path: root, db: "https://host/db" }, VERSION);
+    const entry = read(configIn(root)).mcpServers["code-context"];
+    expect(entry.env).toEqual({ CX_ANSWER_DISPLAY: "hook" });
+    const hooks = read(settingsIn(root)).hooks.PostToolUse as Array<{ matcher: string; hooks: Array<{ type: string; command: string }> }>;
+    expect(hooks.map((h) => h.matcher)).toEqual([matcher, matcher, matcher]);
+    hooks.forEach((h, i) => {
+      expect(h.hooks).toHaveLength(1);
+      expect(h.hooks[0].type).toBe("command");
+      expect(h.hooks[0].command).toContain(` hook answer --chunk ${i + 1} --chunks 3`);
+      // The same build the server entry runs, so the hook and the server
+      // cannot disagree about which cx they are.
+      expect(h.hooks[0].command.startsWith(entry.command)).toBe(true);
+    });
+  });
+
+  it("writes no hooks and no env for a local-only entry", async () => {
+    await installCmd({ path: root }, VERSION);
+    expect(read(configIn(root)).mcpServers["code-context"].env).toBeUndefined();
+    expect(existsSync(settingsIn(root))).toBe(false);
+  });
+
+  it("writes no hooks when --config names another client's file", async () => {
+    const other = join(root, "cursor.json");
+    await installCmd({ path: root, config: other, db: "https://host/db" }, VERSION);
+    expect(read(other).mcpServers["code-context"].env).toBeUndefined();
+    expect(existsSync(settingsIn(root))).toBe(false);
+  });
+
+  it("leaves other hooks alone, replaces ours on a re-run, and removes ours on uninstall", async () => {
+    mkdirSync(join(root, ".claude"), { recursive: true });
+    writeFileSync(
+      settingsIn(root),
+      JSON.stringify({ permissions: { allow: ["Read"] }, hooks: { PostToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: "echo theirs" }] }], Stop: [{ hooks: [{ type: "command", command: "echo stop" }] }] } }),
+    );
+    await installCmd({ path: root, db: "https://host/db" }, VERSION);
+    await installCmd({ path: root, db: "https://host/db" }, VERSION);
+    const after = read(settingsIn(root));
+    expect(after.permissions).toEqual({ allow: ["Read"] });
+    expect(after.hooks.Stop).toEqual([{ hooks: [{ type: "command", command: "echo stop" }] }]);
+    expect(after.hooks.PostToolUse.filter((h: { matcher: string }) => h.matcher === "Bash")).toHaveLength(1);
+    expect(after.hooks.PostToolUse.filter((h: { matcher: string }) => h.matcher === matcher)).toHaveLength(3);
+    await installCmd({ path: root, uninstall: true }, VERSION);
+    const removed = read(settingsIn(root));
+    expect(removed.hooks.PostToolUse).toEqual([{ matcher: "Bash", hooks: [{ type: "command", command: "echo theirs" }] }]);
+    expect(removed.hooks.Stop).toBeDefined();
+    expect(read(configIn(root)).mcpServers["code-context"]).toBeUndefined();
+  });
+
+  it("names the pinned package in the hook command when the entry is npx", () => {
+    const entries = answerHookEntries({ npx: true }, VERSION, "code-context");
+    expect(entries).toHaveLength(3);
+    expect(entries[0].hooks[0].command).toBe(`npx -y @infino-ai/code-context@${VERSION} hook answer --chunk 1 --chunks 3`);
+  });
+
+  it("--dry-run writes neither file", async () => {
+    await installCmd({ path: root, db: "https://host/db", dryRun: true }, VERSION);
+    expect(existsSync(configIn(root))).toBe(false);
+    expect(existsSync(settingsIn(root))).toBe(false);
   });
 });
 

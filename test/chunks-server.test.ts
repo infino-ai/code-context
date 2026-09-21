@@ -99,6 +99,11 @@ async function expectChunksText(s: Started): Promise<void> {
   expect(instructions).toContain("code-context is a local index of this repository");
   expect(instructions).not.toContain("- explore -");
   expect(instructions).toContain("- ask - a question or task in plain language");
+  // The written answer's tool, and its routing line: without the install's
+  // hook the model is told to relay the text exactly.
+  expect(byName.get("answer")).toContain("Reply with that text exactly as returned, in full, and nothing else");
+  expect(instructions).toContain("- answer - when you have what the question needs, call it with the question and your notes: it writes the answer from the rows; reply with its text exactly as returned");
+  expect(instructions).not.toContain("shows it to the user itself");
   expectSharedSentences(instructions);
   // The fan-out is a preference, told once in the instructions and once in
   // the tool's own text; "spawn several in parallel" only said it was allowed.
@@ -255,10 +260,12 @@ describe("the chunks table with CX_AGENT_TOOLS=0: the lane that hides ask", () =
     expect(names).toContain("search");
     expect(names).toContain("sql");
     expect(names).not.toContain("ask");
+    expect(names).not.toContain("answer");
     expect(names).not.toContain("explore");
     const instructions = s.client.getInstructions() ?? "";
     expect(instructions).toContain("code-context is a local index of this repository");
     expect(instructions).not.toContain("- ask -");
+    expect(instructions).not.toContain("- answer -");
     expect(instructions).not.toContain("- explore -");
     expectSharedSentences(instructions);
     // The index-first sentence names the three tools this lane has, not ask.
@@ -269,6 +276,29 @@ describe("the chunks table with CX_AGENT_TOOLS=0: the lane that hides ask", () =
     // and the startup card read are about sql, not about the loop.
     expect(tools.find((t) => t.name === "sql")?.description).toContain("'validation'");
     expect(s.startup).toEqual(["table_card"]);
+  });
+});
+
+describe("the chunks table with CX_ANSWER_DISPLAY=hook: the install wrote the hook", () => {
+  let s: Started;
+  beforeAll(async () => {
+    process.env.CX_ANSWER_DISPLAY = "hook";
+    s = await start(up(), "cx-chunks-hook-");
+  });
+  afterAll(async () => {
+    delete process.env.CX_ANSWER_DISPLAY;
+    await stop(s);
+  });
+
+  it("tells the model the answer is shown to the user by the tool, and to say one sentence", async () => {
+    const { tools } = await s.client.listTools();
+    const answer = tools.find((t) => t.name === "answer")?.description ?? "";
+    expect(answer).toContain("shown to the user directly by this tool");
+    expect(answer).toContain("one short sentence");
+    expect(answer).not.toContain("exactly as returned");
+    const instructions = s.client.getInstructions() ?? "";
+    expect(instructions).toContain("it writes the answer from the rows and shows it to the user itself; then reply with one short sentence and nothing else.");
+    expect(instructions).not.toContain("exactly as returned");
   });
 });
 

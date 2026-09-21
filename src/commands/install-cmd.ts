@@ -52,6 +52,7 @@ import { HostedError } from "../core/hosted.js";
 import { createDatabase, databaseNameFor, requestTrial, type Trial } from "../core/account-api.js";
 import { readStoredAccount, readStoredKey, writeStoredAccount, writeStoredKey } from "../core/keystore.js";
 import { askUploadConsent, hasUploadConsent, recordUploadConsent, type ConsentDeps, type ConsentOutcome } from "../core/consent.js";
+import { ANSWER_DISPLAY_CHUNKS, ANSWER_DISPLAY_ENV, ANSWER_DISPLAY_HOOK } from "../core/answer-display.js";
 import { signInHint } from "./login-cmd.js";
 
 /** Package this command installs, and the pinned spelling `npx` resolves. */
@@ -63,6 +64,14 @@ const DEFAULT_SERVER_NAME = "code-context";
 /** Default config file, relative to the repo root: Claude Code's
  * project-scoped MCP config, which is also what this repo itself ships. */
 const PROJECT_CONFIG = ".mcp.json";
+
+/** Claude Code's project-scoped settings, where hooks live. Written only
+ * when the server entry goes to the default config above: hooks are Claude
+ * Code's, and another client's `--config` has no use for them. */
+const PROJECT_SETTINGS = join(".claude", "settings.json");
+
+/** The hook event that shows the `answer` tool's result to the person. */
+const ANSWER_HOOK_EVENT = "PostToolUse";
 
 /** Indent for the config we write back, matching the shipped `.mcp.json`. */
 const CONFIG_INDENT = 2;
@@ -137,6 +146,10 @@ export interface InstallCmdOptions {
   /** The platform a first install asks for a free account, when this machine
    * has none. Overrides CX_PLATFORM_URL. */
   platform?: string;
+  /** Internal: the entry is written beside the answer-display hooks, so it
+   * tells the server to deliver answers through them. Decided by `installCmd`
+   * from the target config and the platform half, never a flag. */
+  answerHook?: boolean;
 }
 
 /** Injected for tests: the platform, and the person at the terminal. */
@@ -157,9 +170,19 @@ interface ServerEntry {
   command: string;
   args: string[];
   alwaysLoad?: boolean;
+  /** Set when the answer-display hooks are written too: the server then
+   * delivers a written answer through them (core/answer-display.ts). */
+  env?: Record<string, string>;
 }
 
-type Config = Record<string, unknown> & { mcpServers?: unknown };
+/** One PostToolUse entry in Claude Code's settings: a matcher and the
+ * commands run when a tool of that name returns. */
+interface HookEntry {
+  matcher: string;
+  hooks: Array<{ type: "command"; command: string }>;
+}
+
+type Config = Record<string, unknown> & { mcpServers?: unknown; hooks?: unknown };
 
 /** A failure the user can act on. The CLI layer prints `error: <message>` and
  * sets the exit code; nothing here calls `process.exit`, so every branch stays
@@ -365,11 +388,77 @@ function runningFromPackage(): boolean {
  * fetched, or an installed copy being used to write an entry for a checkout. */
 export function serverEntry(opts: InstallCmdOptions, version: string): ServerEntry {
   const tail = ["mcp", ...platformArgs(opts)];
+  const env = opts.answerHook ? { env: { [ANSWER_DISPLAY_ENV]: ANSWER_DISPLAY_HOOK } } : {};
+  const [command, head] = commandFor(opts, version);
+  return { command, args: [...head, ...tail], alwaysLoad: true, ...env };
+}
+
+/** The command and leading arguments that run this package, by the same
+ * rule `serverEntry` documents: `npx` pinned to this version from an
+ * installed copy, this build's own `cli.js` under the running node from a
+ * source build, either forced by `--npx` / `--local`. */
+function commandFor(opts: InstallCmdOptions, version: string): [string, string[]] {
   const npx = opts.npx ?? (opts.local ? false : runningFromPackage());
-  if (npx) {
-    return { command: "npx", args: ["-y", `${PACKAGE_NAME}@${version}`, ...tail], alwaysLoad: true };
+  return npx ? ["npx", ["-y", `${PACKAGE_NAME}@${version}`]] : [process.execPath, [ownCliPath()]];
+}
+
+/** The matcher of our hook entries: the tool's name as Claude Code spells an
+ * MCP tool, `mcp__<server>__answer`. Ownership is decided by it, as the
+ * server entry's is by the server name. */
+export function answerHookMatcher(name: string): string {
+  return `mcp__${name}__answer`;
+}
+
+/** The hook entries that show a written answer to the person: one per
+ * chunk, each running `cx hook answer --chunk i --chunks n` on the tool's
+ * result (see core/answer-display.ts for why chunks, and commands/hook-cmd.ts
+ * for what each prints). Written to Claude Code's project settings beside
+ * the server entry when the platform half enabled `ask`. */
+export function answerHookEntries(opts: InstallCmdOptions, version: string, name: string): HookEntry[] {
+  const [command, head] = commandFor(opts, version);
+  const quote = (s: string) => (/[\s"'\\$`]/.test(s) ? `'${s.replace(/'/g, `'\\''`)}'` : s);
+  const entries: HookEntry[] = [];
+  for (let chunk = 1; chunk <= ANSWER_DISPLAY_CHUNKS; chunk++) {
+    const line = [command, ...head, "hook", "answer", "--chunk", String(chunk), "--chunks", String(ANSWER_DISPLAY_CHUNKS)].map(quote).join(" ");
+    entries.push({ matcher: answerHookMatcher(name), hooks: [{ type: "command", command: line }] });
   }
-  return { command: process.execPath, args: [ownCliPath(), ...tail], alwaysLoad: true };
+  return entries;
+}
+
+/** The settings' PostToolUse list with our entries replaced by `ours` (or
+ * removed, when `ours` is empty), every other entry passing through unread.
+ * Refuses a settings file whose hooks block is not the shape Claude Code
+ * writes, rather than rewriting it. */
+function withAnswerHooks(config: Config, name: string, ours: HookEntry[], settingsPath: string): Config {
+  const hooks = config.hooks ?? {};
+  if (hooks === null || typeof hooks !== "object" || Array.isArray(hooks)) {
+    throw new InstallError(`"hooks" in ${settingsPath} is ${describeJson(hooks)}, not an object. Fix the file and re-run.`);
+  }
+  const events = hooks as Record<string, unknown>;
+  const list = events[ANSWER_HOOK_EVENT] ?? [];
+  if (!Array.isArray(list)) {
+    throw new InstallError(`"hooks.${ANSWER_HOOK_EVENT}" in ${settingsPath} is ${describeJson(list)}, not an array. Fix the file and re-run.`);
+  }
+  const matcher = answerHookMatcher(name);
+  const kept = list.filter((e) => !(e && typeof e === "object" && (e as { matcher?: unknown }).matcher === matcher));
+  const next = [...kept, ...ours];
+  const nextEvents: Record<string, unknown> = { ...events };
+  if (next.length) nextEvents[ANSWER_HOOK_EVENT] = next;
+  else delete nextEvents[ANSWER_HOOK_EVENT];
+  const out: Config = { ...config };
+  if (Object.keys(nextEvents).length) out.hooks = nextEvents;
+  else delete out.hooks;
+  return out;
+}
+
+/** Whether the settings file carries any of our hook entries. */
+function hasAnswerHooks(config: Config, name: string): boolean {
+  const hooks = config.hooks;
+  if (!hooks || typeof hooks !== "object" || Array.isArray(hooks)) return false;
+  const list = (hooks as Record<string, unknown>)[ANSWER_HOOK_EVENT];
+  if (!Array.isArray(list)) return false;
+  const matcher = answerHookMatcher(name);
+  return list.some((e) => e && typeof e === "object" && (e as { matcher?: unknown }).matcher === matcher);
 }
 
 /** Refuse a key that was handed over as a value. Catching it here keeps the
@@ -630,39 +719,62 @@ export async function installCmd(
 
   const config = readConfig(configPath);
   const servers = readServers(config, configPath);
+  // The hooks that show a written answer go with the default, Claude Code
+  // config only; `--config` names another client, or a user-scoped file
+  // whose hooks would apply to every project.
+  const settingsPath = join(root, PROJECT_SETTINGS);
+  const hooksHere = !opts.config;
 
   if (opts.uninstall) {
-    if (!(name in servers)) {
+    const settings = hooksHere ? readConfig(settingsPath) : {};
+    const hadHooks = hooksHere && hasAnswerHooks(settings, name);
+    if (!(name in servers) && !hadHooks) {
       console.log(`${yellow("nothing to remove")} - no ${bold(name)} server in ${configPath}`);
       return;
     }
     const { [name]: _removed, ...rest } = servers;
     const next: Config = { ...config, mcpServers: rest };
     if (opts.dryRun) {
-      console.log(`${dim("would remove")} ${bold(name)} from ${configPath}`);
+      console.log(`${dim("would remove")} ${bold(name)} from ${configPath}${hadHooks ? ` and its answer hooks from ${settingsPath}` : ""}`);
       return;
     }
-    writeConfig(configPath, next);
-    console.log(`${green("removed")} ${bold(name)} from ${configPath}`);
+    if (name in servers) writeConfig(configPath, next);
+    if (hadHooks) writeConfig(settingsPath, withAnswerHooks(settings, name, [], settingsPath));
+    console.log(`${green("removed")} ${bold(name)} from ${configPath}${hadHooks ? ` and its answer hooks from ${settingsPath}` : ""}`);
     console.log(dim("Restart the client to drop the server."));
     return;
   }
 
   const setup = await resolvePlatform(opts, root, deps);
-  const entry = serverEntry({ ...opts, db: setup.db }, version);
+  // With `ask` enabled, the `answer` tool is too, and its result reaches the
+  // person through a hook rather than the model's retyping; the entry tells
+  // the server so, and the hooks are written beside it.
+  const answerHook = hooksHere && Boolean(setup.db);
+  const entry = serverEntry({ ...opts, db: setup.db, answerHook }, version);
   const existed = name in servers;
   const next: Config = { ...config, mcpServers: { ...servers, [name]: entry } };
+  const hookEntries = answerHook ? answerHookEntries(opts, version, name) : [];
+  const settings = hooksHere ? readConfig(settingsPath) : {};
+  const nextSettings = hooksHere ? withAnswerHooks(settings, name, hookEntries, settingsPath) : null;
+  const settingsChange = hooksHere && JSON.stringify(nextSettings) !== JSON.stringify(settings);
 
   if (opts.dryRun) {
     console.log(`${dim(existed ? "would replace" : "would write")} ${bold(name)} in ${configPath}:`);
     console.log(JSON.stringify(entry, null, CONFIG_INDENT));
+    if (hookEntries.length) {
+      console.log(`${dim("would write")} ${hookEntries.length} ${bold(ANSWER_HOOK_EVENT)} hook(s) for ${bold(answerHookMatcher(name))} in ${settingsPath}`);
+    }
     for (const note of setup.notes) console.log(dim(note));
     return;
   }
 
   writeConfig(configPath, next);
+  if (settingsChange && nextSettings) writeConfig(settingsPath, nextSettings);
   console.log(`${green(existed ? "updated" : "installed")} ${bold(name)} in ${configPath}`);
   console.log(`  ${dim(entry.command)} ${dim(entry.args.join(" "))}`);
+  if (hookEntries.length) {
+    console.log(`  ${dim(`${hookEntries.length} ${ANSWER_HOOK_EVENT} hooks in ${settingsPath}: the answer tool's result is shown to you directly`)}`);
+  }
   for (const note of setup.notes) console.log(dim(note));
   console.log(dim("Restart the client to pick the server up."));
 }

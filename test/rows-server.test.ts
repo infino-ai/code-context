@@ -27,7 +27,7 @@
 // manifest appears and no drop_table / create_table / append ever reaches the
 // platform.
 
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { call, scriptPlatform, start, stop, type Started } from "./mcp-harness.js";
@@ -121,8 +121,13 @@ const describable = () =>
       return [200, [{ n: 42 }]];
     },
     validate: () => [200, { valid: true, check: "unchecked" }],
-    sub_agent: () => [200, ASKED],
+    // A request that asks for the written answer gets one; the loop's facts
+    // either way.
+    sub_agent: (body) => [200, body?.answer ? { ...ASKED, answer: WRITTEN_ANSWER } : ASKED],
   });
+
+/** The platform's written answer, as `answer` asks for it. */
+const WRITTEN_ANSWER = "Two distributed-systems roles are open: Own the platform (id 7), in Paris.";
 
 /** The platform with the table NOT there: not listed, and its schema a 404
  * (terminal - not the cold-start 503 the client would retry for its budget). */
@@ -283,6 +288,30 @@ describe("a table of another shape, described at startup", () => {
     expect(text.length).toBe(SNIPPET_CHARS + "...".length);
     expect(text.startsWith("Own the platform Own the platform")).toBe(true);
     expect(text).not.toContain("&lt;");
+  });
+
+  it("answer asks the loop for the written answer with the notes as context, keeps a copy under the index dir, and hands the model the text to relay", async () => {
+    const before = s.sent.length;
+    const result = (await s.client.callTool({ name: "answer", arguments: { question: "which distributed systems roles are there?", notes: "id 7 is the one in Paris" } })) as {
+      content: Array<{ type: string; text: string }>;
+      isError?: boolean;
+    };
+    expect(result.isError ?? false, result.content[0].text).toBe(false);
+    expect(s.sent.slice(before).map((x) => x.op)).toEqual(["sub_agent"]);
+    const request = s.sent.slice(before).find((x) => x.op === "sub_agent")?.body;
+    expect(request?.answer).toBe(true);
+    expect(String(request?.context)).toContain("id 7 is the one in Paris");
+    expect(request?.question).toBe("which distributed systems roles are there?");
+    // Without the install's hook the model is told to relay the text, and
+    // the text is the whole result: no rows, no coverage, no receipt to
+    // rewrite from.
+    const text = result.content[0].text;
+    expect(text).toBe(`Reply with the following answer exactly as written, in full, and nothing else:\n\n${WRITTEN_ANSWER}`);
+    // The file the hook would have read.
+    const answers = join(s.root, ".infino", "answers");
+    const files = readdirSync(answers);
+    expect(files).toHaveLength(1);
+    expect(readFileSync(join(answers, files[0]), "utf8")).toBe(WRITTEN_ANSWER);
   });
 
   it("never reached the platform with a drop, create or append, and wrote no manifest", () => {

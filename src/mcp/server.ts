@@ -47,7 +47,8 @@
 // client builds - so its startup is what it always was, and the chunks
 // table keeps every path and every word of tool text it had.
 
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
@@ -75,6 +76,7 @@ import {
 } from "../core/config.js";
 import { keyFilePath, readStoredAccount } from "../core/keystore.js";
 import { runRetrievalAgent } from "../core/retrieval-agent.js";
+import { answerDisplayMode, hookDeliveryText, relayDeliveryText, type AnswerDisplay } from "../core/answer-display.js";
 import { readManifest, readPlatformManifest, type Manifest } from "../core/manifest.js";
 
 /** The one refusal whose fix is a person rather than a retry: the account has
@@ -404,6 +406,32 @@ export function findHint(query: string, total: number, defines: boolean): string
   }
   if (defines) return `Nothing declares "${query}". Check the name: find it without defines to see where it is used, or search for what it does.`;
   return null;
+}
+
+/** Where an `answer` call's text is kept, under the index directory. */
+const ANSWERS_DIR = "answers";
+
+/** The routing line for `answer`, by how the answer reaches the person. */
+export function answerInstruction(display: AnswerDisplay): string {
+  const tail =
+    display === "hook"
+      ? "it writes the answer from the rows and shows it to the user itself; then reply with one short sentence and nothing else."
+      : "it writes the answer from the rows; reply with its text exactly as returned, in full, and nothing else.";
+  return `- answer - when you have what the question needs, call it with the question and your notes: ${tail}\n`;
+}
+
+/** The `answer` tool's description, by display mode and table shape. */
+export function answerDescription(display: AnswerDisplay, rows: boolean): string {
+  const from = rows ? "the rows it retrieves for the question" : "the rows it retrieves for the question, each with its path and lines";
+  const delivery =
+    display === "hook"
+      ? "The finished answer is shown to the user directly by this tool. After it returns, reply with one short sentence such as 'The answer is shown above.' and nothing else - do not repeat, summarize or rewrite the answer."
+      : "It returns the finished answer. Reply with that text exactly as returned, in full, and nothing else - do not summarize or rewrite it.";
+  return (
+    `Write the final answer to the question from ${from}, with checked citations, written by the platform's own writer. ` +
+    "Call it once you have gathered what the question needs, with the question and your notes on what you found and where; " +
+    `the writer reads the notes beside the rows. ${delivery}`
+  );
 }
 
 export function indexFirst(agentTools: boolean): string {
@@ -1013,6 +1041,10 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
   // text's card and validation note.
   const platformTools = hosted !== null;
   const agentTools = platformTools && agentToolsEnabled();
+  // How the `answer` tool delivers the written answer: through the hook `cx
+  // install` wrote (the entry sets CX_ANSWER_DISPLAY), or as text the model
+  // relays. Read once; the instructions and the tool text say the same thing.
+  const answerDisplay = answerDisplayMode();
 
   // What the default root's doors run against (TableMode), decided here and
   // once. With CX_REMOTE_SEARCH, a platform database and a CX_TABLE that is
@@ -1197,7 +1229,12 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
             // question that splits into independent parts (measured
             // 2026-09-12: one exploration took longer than four asks running
             // at once).
-            "  A mechanism that spans files - how X works end to end, what calls what - is one ask per part: they run at the same time, and you do the following-up yourself from the rows they return.\n"
+            "  A mechanism that spans files - how X works end to end, what calls what - is one ask per part: they run at the same time, and you do the following-up yourself from the rows they return.\n" +
+            // The written answer is the platform's, not the caller's, and it
+            // must reach the person without the caller's model retyping it -
+            // see core/answer-display.ts for the two deliveries and what
+            // each was measured to do.
+            answerInstruction(answerDisplay)
           : "") +
         indexFirst(agentTools) +
         "\n" +
@@ -1650,36 +1687,43 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
      * contradicted, 47 s, at 1.9x the caller's tokens. The owner: "we have to
      * go with faster even if a bit more expensive. quality is better and
      * performance is better." */
-    const retrieve = async ({ question, under, path }: { question: string; under?: string; path?: string }) => {
+    /** What every call into the platform's loop settles first, for `ask` and
+     * `answer` alike. A repo without the platform client is refused before
+     * any build. Then the same first-query build and auto-sync the other
+     * tools make (both write the platform table too), then the platform
+     * table's own readiness: without a chunks table the platform would spend
+     * the whole cold-start budget on "no table described yet" before saying
+     * anything useful. Over a hosted table of another shape there is no
+     * local index to build or sync - and a build would drop that table (see
+     * ownsTable) - and no readiness to probe: the startup decision saw the
+     * table. The facts are then keyed by the table's own key column, not the
+     * chunks table's place columns (rowsProjection), and come back as rows of
+     * that shape, text cut to snippets as a search hit's is. */
+    const loopContext = async (tool: string, path: string | undefined): Promise<{ ctx: RepoCtx; over: { shape: TableShape } | null } | { failed: ReturnType<typeof fail> }> => {
       let ctx: RepoCtx;
       try {
         ctx = repoFor(path);
       } catch (err) {
-        return fail((err as Error).message);
+        return { failed: fail((err as Error).message) };
       }
-      // A repo without the platform client is refused before any build.
-      // Then the same first-query build and auto-sync the other tools make
-      // (both write the platform table too), then the platform table's own
-      // readiness: without a chunks table the platform would spend the whole
-      // cold-start budget on "no table described yet" before saying
-      // anything useful.
-      const missing = noPlatform("ask", ctx);
-      if (missing) return missing;
-      // Over a hosted table of another shape there is no local index to
-      // build or sync - and a build would drop that table (see ownsTable)
-      // - and no readiness to probe: the startup decision saw the table.
-      // The facts are keyed by the table's own key column, not the chunks
-      // table's place columns (rowsProjection), and come back as rows of
-      // that shape, text cut to snippets as a search hit's is.
-      const over = rowsOver("ask", ctx);
-      if (over && "failed" in over) return over.failed;
+      const missing = noPlatform(tool, ctx);
+      if (missing) return { failed: missing };
+      const over = rowsOver(tool, ctx);
+      if (over && "failed" in over) return { failed: over.failed };
       if (!over) {
         const ensured = await localIndex(ctx);
-        if ("failed" in ensured) return ensured.failed;
+        if ("failed" in ensured) return { failed: ensured.failed };
         if (!ensured.autoIndexed) maybeAutoSync(ctx); // a fresh build is already current
-        const notReady = await platformNotReady("ask", ctx);
-        if (notReady) return notReady;
+        const notReady = await platformNotReady(tool, ctx);
+        if (notReady) return { failed: notReady };
       }
+      return { ctx, over };
+    };
+
+    const retrieve = async ({ question, under, path }: { question: string; under?: string; path?: string }) => {
+      const settled = await loopContext("ask", path);
+      if ("failed" in settled) return settled.failed;
+      const { ctx, over } = settled;
       try {
         const t0 = performance.now();
         // The spend (turns, tokens) goes to the ledger and the receipt only;
@@ -1763,6 +1807,67 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
       retrieve,
     );
 
+    /** The written answer: the platform's loop retrieves for the question
+     * once more with the caller's notes as its context, its writer composes
+     * from the rows under the same citation instruction the caller has, the
+     * cite pass checks the places, and the text comes back. How it reaches
+     * the person is the display mode's business (core/answer-display.ts):
+     * under the hook it goes to a file the hook shows and the model is told
+     * to say one sentence; without one the model is told to relay it
+     * exactly. Either way nothing in the result invites a rewrite: no rows,
+     * no coverage, no receipt beside the text. */
+    const writeAnswer = async ({ question, notes, under, path }: { question: string; notes?: string; under?: string; path?: string }) => {
+      const settled = await loopContext("answer", path);
+      if ("failed" in settled) return settled.failed;
+      const { ctx, over } = settled;
+      try {
+        const dev = devContextEnabled() ? devContext(ctx.root) : undefined;
+        const context = [dev, notes?.trim() ? `Notes from the model that gathered the evidence so far:\n${notes.trim()}` : undefined].filter(Boolean).join("\n\n");
+        const { result, spend } = await runRetrievalAgent(
+          ctx.hosted!,
+          {
+            question,
+            answer: true,
+            ...(context ? { context } : {}),
+            ...(under !== undefined && !over ? { under } : {}),
+            ...(over ? { projection: rowsProjection(over.shape), shape: over.shape } : {}),
+            table: TABLE,
+          },
+          { maxTurns: subagentMaxTurns(), maxWallSecs: subagentMaxWallSecs(), k: subagentK() },
+        );
+        if (receiptOn) recordUsage(ctx.dir, withPlatform(subagentEntry(result, spend, "answer"), ctx));
+        if (!result.answer) return fail(`answer: ${result.error ?? "the platform wrote no answer from the rows it retrieved"} - answer the question yourself from what you have gathered.`);
+        // The file the hook reads, kept under the index directory beside the
+        // ledger; written in both modes so a run's answers can be read back.
+        const dir = join(ctx.dir, ANSWERS_DIR);
+        mkdirSync(dir, { recursive: true });
+        const file = join(dir, `${new Date().toISOString().replace(/[:.]/g, "-")}.md`);
+        writeFileSync(file, result.answer);
+        const text = answerDisplay === "hook" ? hookDeliveryText(file) : relayDeliveryText(result.answer);
+        return { content: [{ type: "text" as const, text }] };
+      } catch (err) {
+        return fail(`answer failed: ${(err as Error).message}${refusalHint(err)}`);
+      }
+    };
+
+    server.registerTool(
+      "answer",
+      {
+        title: "Write the answer from what was retrieved, and deliver it",
+        annotations: READ_ONLY,
+        description: answerDescription(answerDisplay, Boolean(rows)),
+        inputSchema: {
+          question: z.string().min(1).describe("The question as the user asked it."),
+          notes: z
+            .string()
+            .optional()
+            .describe("What you found and where, in your own words: the places (path:line) and what each settles. The writer reads them beside the rows it retrieves."),
+          under: retrievalInputs.under,
+          path: retrievalInputs.path,
+        },
+      },
+      writeAnswer,
+    );
   }
 
   const transport = serveOptions.transport ?? new StdioServerTransport();
