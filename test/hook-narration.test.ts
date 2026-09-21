@@ -31,10 +31,9 @@ const TRANSCRIPT = [
 ].join("\n");
 
 describe("the narration read from a transcript", () => {
-  it("takes the thinking and text after the last question, in order, and leaves out tool calls, tool results, earlier turns and subagents", () => {
-    expect(transcriptNarration(TRANSCRIPT)).toBe(
-      "Two asks: one for refresh, one for flush.\n\nLet me look at both paths.\n\nRefresh makes documents visible; flush makes them durable.",
-    );
+  it("takes the text after the last question, in order, and leaves out thinking, tool calls, tool results, earlier turns and subagents", () => {
+    // The thinking block is the model's own and is never lifted out.
+    expect(transcriptNarration(TRANSCRIPT)).toBe("Let me look at both paths.\n\nRefresh makes documents visible; flush makes them durable.");
   });
 
   it("is null without a question, without any narration after it, or for a file that is not a transcript", () => {
@@ -83,7 +82,7 @@ describe("the hook's output", () => {
     expect(out.hookSpecificOutput.updatedInput).toEqual({
       question: "How does a refresh differ from a flush?",
       under: "server/",
-      [NARRATION_INPUT]: "Two asks: one for refresh, one for flush.\n\nLet me look at both paths.\n\nRefresh makes documents visible; flush makes them durable.",
+      [NARRATION_INPUT]: "Let me look at both paths.\n\nRefresh makes documents visible; flush makes them durable.",
     });
   });
 

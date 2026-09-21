@@ -413,7 +413,7 @@ export function findHint(query: string, total: number, defines: boolean): string
 const ANSWERS_DIR = "answers";
 /** Heads the model's narration in the writer's context, when the installed
  * hook supplied it. */
-const NARRATION_HEADING = "What the model said and thought while it gathered the rows:";
+const NARRATION_HEADING = "What the model said while it gathered the rows:";
 
 /** The routing line for `answer`, by how the answer reaches the person. */
 export function answerInstruction(display: AnswerDisplay): string {
@@ -426,10 +426,16 @@ export function answerInstruction(display: AnswerDisplay): string {
 
 /** The `answer` tool's description, by display mode and table shape. The
  * model is asked for the question and nothing else: the rows it was shown
- * are on this server's record, and its own account of them reaches the
+ * are on this server's record, and what it said as it worked reaches the
  * writer through the installed hook (commands/hook-cmd.ts). A model asked to
  * restate what it found typed 4,000 characters of notes, 26 s of a 45 s run
- * (measured 2026-09-21), for the writer to read what the server already had. */
+ * (measured 2026-09-21), for the writer to read what the server already had.
+ *
+ * Nothing here, or in the tool's inputs, says how the hook works or names
+ * the model's thinking: Opus 5's safeguards refused a whole session at its
+ * first request, before any tool call, over an input described as "what you
+ * said and thought while gathering" (`reasoning_extraction`, 2026-09-21).
+ * The hook is the installer's business; the model is told what to do. */
 export function answerDescription(display: AnswerDisplay, rows: boolean): string {
   const from = rows
     ? "the rows this server returned to you in this session"
@@ -440,8 +446,7 @@ export function answerDescription(display: AnswerDisplay, rows: boolean): string
       : "It returns the finished answer. Reply with that text exactly as returned, in full, and nothing else - do not summarize or rewrite it.";
   return (
     `Write the final answer to the question, by the platform's own writer, from ${from} - every ask, search, find and sql - with checked citations. ` +
-    "Call it with the question once you have what the question needs. Do not restate what you found: the writer has the rows, " +
-    `and the installed hook hands it what you said while you worked. ${delivery}`
+    `Call it with the question once you have what the question needs. Do not restate what you found: the writer has the rows. ${delivery}`
   );
 }
 
@@ -1861,8 +1866,9 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
       const { ctx, over } = settled;
       try {
         const dev = devContextEnabled() ? devContext(ctx.root) : undefined;
-        // What the model said while it worked, as the installed hook read it
-        // from the session transcript; the model itself types nothing here.
+        // What the model said while it worked - its text between tool calls,
+        // as the installed hook read it from the session transcript; the
+        // model itself types nothing here.
         const said = narration?.trim();
         const context = [dev, said ? `${NARRATION_HEADING}\n${said}` : undefined].filter(Boolean).join("\n\n");
         // The rows this server returned to the model in the session: the
@@ -1909,10 +1915,7 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
         description: answerDescription(answerDisplay, Boolean(rows)),
         inputSchema: {
           question: z.string().min(1).describe("The question as the user asked it."),
-          narration: z
-            .string()
-            .optional()
-            .describe("Filled by the installed hook from the session transcript: what you said and thought while gathering. Leave it out; the hook supplies it."),
+          narration: z.string().optional().describe("Set by the installed hook. Leave it out."),
           under: retrievalInputs.under,
           path: retrievalInputs.path,
         },

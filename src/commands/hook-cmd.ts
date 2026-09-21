@@ -13,12 +13,18 @@
 //
 // `cx hook answer-input` - PreToolUse. Runs before the tool; reads the
 // session transcript Claude Code names in the event and fills the call's
-// `narration` with what the model said and thought since the person's
-// question, through the hook's `updatedInput`. The writer then reads the
-// model's own account of the evidence beside the rows, and the model typed
-// none of it for the purpose: measured 2026-09-21, a model asked to write
-// notes for the writer spent 26 s of a 45 s run on them, while its
-// narration was already in the transcript.
+// `narration` with what the model said since the person's question - its
+// text between tool calls - through the hook's `updatedInput`. The writer
+// then reads the model's own account of the evidence beside the rows, and
+// the model typed none of it for the purpose: measured 2026-09-21, a model
+// asked to write notes for the writer spent 26 s of a 45 s run on them,
+// while its narration was already in the transcript.
+//
+// The model's thinking blocks are not read. They are the model's own, and
+// a product that lifts them out of the transcript for another model is what
+// Opus 5's safeguards call reasoning extraction (a description that merely
+// mentioned "what you thought" refused a whole session on 2026-09-21). What
+// the model says is what it chose to put on the record.
 //
 // Neither ever fails the tool call: no marker, no file, no transcript, or a
 // chunk past the end of the answer prints nothing and exits 0.
@@ -44,13 +50,13 @@ export const NARRATION_CHARS = 12_000;
 /** What replaces the narration cut from the front when it is over the cap. */
 const NARRATION_CUT_NOTE = "[earlier narration left out]";
 
-/** What the model said and thought since the person's last question, from a
- * Claude Code session transcript (JSON lines): the `thinking` and `text`
- * blocks of its messages after the last user prompt, in order, joined by
- * blank lines; null when there is none. Tool calls and tool results are
- * not narration, and a subagent's lines (`isSidechain`) are not the
- * model's. Over `cap` characters the front is cut at a paragraph and a note
- * says so. */
+/** What the model said since the person's last question, from a Claude
+ * Code session transcript (JSON lines): the `text` blocks of its messages
+ * after the last user prompt, in order, joined by blank lines; null when
+ * there is none. Thinking blocks, tool calls and tool results are not
+ * narration, and a subagent's lines (`isSidechain`) are not the model's.
+ * Over `cap` characters the front is cut at a paragraph and a note says
+ * so. */
 export function transcriptNarration(jsonl: string, cap: number = NARRATION_CHARS): string | null {
   const entries: Array<{ type?: string; isSidechain?: boolean; message?: { content?: unknown } }> = [];
   for (const line of jsonl.split("\n")) {
@@ -78,9 +84,8 @@ export function transcriptNarration(jsonl: string, cap: number = NARRATION_CHARS
     if (e.type !== "assistant" || e.isSidechain) continue;
     const content = e.message?.content;
     if (!Array.isArray(content)) continue;
-    for (const block of content as Array<{ type?: string; text?: string; thinking?: string }>) {
-      const text = block.type === "thinking" ? block.thinking : block.type === "text" ? block.text : undefined;
-      if (typeof text === "string" && text.trim()) pieces.push(text.trim());
+    for (const block of content as Array<{ type?: string; text?: string }>) {
+      if (block.type === "text" && typeof block.text === "string" && block.text.trim()) pieces.push(block.text.trim());
     }
   }
   if (!pieces.length) return null;

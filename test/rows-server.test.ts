@@ -302,7 +302,7 @@ describe("a table of another shape, described at startup", () => {
     expect(s.sent.slice(before).map((x) => x.op)).toEqual(["sub_agent"]);
     const request = s.sent.slice(before).find((x) => x.op === "sub_agent")?.body;
     expect(request?.answer).toBe(true);
-    expect(String(request?.context)).toContain("What the model said and thought while it gathered the rows:\nid 7 is the one in Paris");
+    expect(String(request?.context)).toContain("What the model said while it gathered the rows:\nid 7 is the one in Paris");
     expect(request?.question).toBe("which distributed systems roles are there?");
     // The rows the tests above had this server return - the ask's fact by
     // the table's key among them - go to the platform as the facts to write
