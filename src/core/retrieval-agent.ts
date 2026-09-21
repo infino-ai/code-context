@@ -201,6 +201,11 @@ export interface RetrievalAgentCoverage {
   /** True when the platform ranked the facts against the question before
    * returning the first k; absent when the query's own order stands. */
   ranked?: boolean;
+  /** The written answer's coverage, when one was asked for and composed:
+   * the model that wrote it and how long the writing took. Kept for the
+   * ledger, so a run's record says who wrote each answer; never part of the
+   * tool result the outer model reads. */
+  answer?: { model: string; ms: number };
 }
 
 /** What the `ask` tool returns to the outer agent: the facts. The `explore`
@@ -327,6 +332,11 @@ function coverageOf(response: unknown): RetrievalAgentCoverage | undefined {
   // The platform names what ranked the facts when it did; the client keeps
   // only that it happened.
   if (typeof c.ranker === "string" && c.ranker.length > 0) coverage.ranked = true;
+  // The writer, when the platform wrote: its model and its time.
+  const written = asRecord(c.answer);
+  if (typeof written.model === "string" && written.model.length > 0 && isFiniteNumber(written.ms)) {
+    coverage.answer = { model: written.model, ms: written.ms };
+  }
   return coverage;
 }
 
@@ -359,7 +369,13 @@ export function retrievalAgentRunFrom(question: string, response: unknown, maxHi
   if (terminate !== TERMINATE_ANSWERED) result.error = `${noAnswerMessage(terminate, body.error)} - ${NO_ANSWER_HINT}`;
   const unaudited = unauditedOf(body);
   if (unaudited) result.unaudited = unaudited;
-  const spend: RetrievalAgentSpend = { modelTokens: numberField(body.model_tokens) };
+  // The platform renamed the billed count from `model_tokens` to
+  // `inference_tokens` on 2026-09-20; a platform from before the rename
+  // still sends the old name. Reading only the old one billed every ask and
+  // answer at zero inference on the demo for a day.
+  const spend: RetrievalAgentSpend = {
+    modelTokens: numberField(body.inference_tokens !== undefined ? body.inference_tokens : body.model_tokens),
+  };
   return { result, spend };
 }
 

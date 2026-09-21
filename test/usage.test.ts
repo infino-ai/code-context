@@ -179,14 +179,14 @@ describe("ask receipt", () => {
     expect(entry.hits).toEqual([{ path: "src/a.ts", startLine: 10, endLine: 30 }]);
     expect(entry.rows).toBe(1);
     expect(entry.agentTurns).toBe(4);
-    expect(entry.agentModelTokens).toBe(12_555);
+    expect(entry.agentInferenceTokens).toBe(12_555);
     // The ledger points at places; the code does not leak into it.
     expect(JSON.stringify(entry)).not.toContain("export function a");
   });
 
-  it("prints the returned tokens, the hits and rows, the turns, and the model tokens the platform metered", () => {
+  it("prints the returned tokens, the hits and rows, the turns, and the inference tokens the platform metered", () => {
     const line = formatReceipt(subagentEntry(answered, spend));
-    expect(line).toMatch(/^returned ~\d+ tokens \| 1 hit \/ 1 row \| 4 turns \| 12\.6k model tokens$/);
+    expect(line).toMatch(/^returned ~\d+ tokens \| 1 hit \/ 1 row \| 4 turns \| 12\.6k inference tokens$/);
   });
 
   it("singularizes one turn and accumulates into the session", () => {
@@ -210,7 +210,7 @@ describe("ask receipt", () => {
       const [entry] = readUsage(dir);
       expect(entry.tool).toBe("ask");
       expect(entry.agentTurns).toBe(4);
-      expect(entry.agentModelTokens).toBe(12_555);
+      expect(entry.agentInferenceTokens).toBe(12_555);
       expect(entry.hits).toEqual([{ path: "src/a.ts", startLine: 10, endLine: 30 }]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -221,6 +221,17 @@ describe("ask receipt", () => {
     expect(subagentEntry(answered, spend)).not.toHaveProperty("agentRanked");
     const ranked = subagentEntry({ ...answered, coverage: { rowsTotal: 20, rowsReturned: 1, truncated: true, ranked: true } }, spend);
     expect(ranked.agentRanked).toBe(true);
+  });
+
+  it("records who wrote an answer on the platform and how long it took, and only when one was written", () => {
+    expect(subagentEntry(answered, spend, "answer")).not.toHaveProperty("agentWriter");
+    const written = subagentEntry(
+      { ...answered, answer: "the text", coverage: { rowsTotal: 2, rowsReturned: 2, truncated: false, answer: { model: "qwen-3.8-27b", ms: 1068 } } },
+      spend,
+      "answer",
+    );
+    expect(written.agentWriter).toBe("qwen-3.8-27b");
+    expect(written.agentWriteMs).toBe(1068);
   });
 
   it("records nothing about the platform's costs beyond the one metered number", () => {

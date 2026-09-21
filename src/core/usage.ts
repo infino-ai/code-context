@@ -71,7 +71,7 @@ export interface UsageEntry {
    * this number and reports no more of its costs). The receipt shows them,
    * the tool result does not. */
   agentTurns?: number;
-  agentModelTokens?: number;
+  agentInferenceTokens?: number;
   /** Where the platform's own time on an ask went, as it reported it: its
    * model calls and its retrieval, in milliseconds - the split its two
    * charge lines are made of. Absent when the platform did not say. */
@@ -79,6 +79,11 @@ export interface UsageEntry {
   agentRetrievalMs?: number;
   /** ask: whether the platform ranked the facts against the question. */
   agentRanked?: boolean;
+  /** answer: the model that wrote the answer on the platform, as its
+   * coverage named it, and how long the writing took - so a run's ledger
+   * says who wrote each answer rather than leaving it to the config. */
+  agentWriter?: string;
+  agentWriteMs?: number;
   /** ask: the platform's account of an audit that could not run, when the
    * answer stands unaudited; absent when the audit ran. */
   agentUnaudited?: string;
@@ -230,9 +235,12 @@ export function subagentEntry(result: RetrievalAgentResult, spend: RetrievalAgen
     hits: result.hits.map((h) => ({ path: h.path, startLine: h.startLine, endLine: h.endLine })),
     rows: result.rows.length,
     agentTurns: result.turns,
-    agentModelTokens: spend.modelTokens,
+    // The count the platform bills inference on, under the platform's own
+    // name for it; the demo's charge reads this field first.
+    agentInferenceTokens: spend.modelTokens,
     ...(result.timing ? { agentModelMs: result.timing.modelMs, agentRetrievalMs: result.timing.retrievalMs } : {}),
     ...(result.coverage?.ranked ? { agentRanked: true } : {}),
+    ...(result.coverage?.answer ? { agentWriter: result.coverage.answer.model, agentWriteMs: result.coverage.answer.ms } : {}),
     ...(result.unaudited ? { agentUnaudited: result.unaudited } : {}),
   };
 }
@@ -285,7 +293,7 @@ export function formatReceipt(entry: UsageEntry, session?: SessionUsage): string
     const hits = entry.hits ?? [];
     parts.push(
       `returned ~${fmtTokens(entry.returnedTokens)} tokens | ${plural(hits.length, "hit", "hits")} / ${plural(entry.rows ?? 0, "row", "rows")} | ` +
-        `${plural(entry.agentTurns ?? 0, "turn", "turns")} | ${fmtTokens(entry.agentModelTokens ?? 0)} model tokens`,
+        `${plural(entry.agentTurns ?? 0, "turn", "turns")} | ${fmtTokens(entry.agentInferenceTokens ?? 0)} inference tokens`,
     );
   } else {
     parts.push(`returned ~${fmtTokens(entry.returnedTokens)} tokens | ${plural(entry.rows ?? 0, "row", "rows")}`);

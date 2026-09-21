@@ -459,6 +459,27 @@ describe("runRetrievalAgent", () => {
     expect(JSON.stringify(ranked)).not.toContain("some-ranker");
   });
 
+  it("reads the billed count under the platform's current name, and under the old one from an older platform", () => {
+    // 2026-09-20: the platform renamed `model_tokens` to `inference_tokens`;
+    // reading only the old name billed a day of asks at zero inference.
+    const { model_tokens: _old, ...rest } = answered();
+    expect(retrievalAgentRunFrom(QUESTION, { ...rest, inference_tokens: 900 }).spend).toEqual({ modelTokens: 900 });
+    expect(retrievalAgentRunFrom(QUESTION, answered()).spend).toEqual({ modelTokens: 1280 });
+    expect(retrievalAgentRunFrom(QUESTION, { ...rest, inference_tokens: 900, model_tokens: 1 }).spend).toEqual({ modelTokens: 900 });
+  });
+
+  it("keeps the writer's model and time from the answer coverage, for the ledger", () => {
+    const written = retrievalAgentRunFrom(
+      QUESTION,
+      answered({ answer: "the text", coverage: { ...COVERAGE, answer: { model: "qwen-3.8-27b", ms: 1068, citations: 7, held: 7 } } }),
+    ).result;
+    expect(written.coverage?.answer).toEqual({ model: "qwen-3.8-27b", ms: 1068 });
+    // A coverage without a written answer, or with one that failed (no
+    // model named), carries none.
+    expect(retrievalAgentRunFrom(QUESTION, answered()).result.coverage).not.toHaveProperty("answer");
+    expect(retrievalAgentRunFrom(QUESTION, answered({ coverage: { ...COVERAGE, answer: { error: "no writer" } } })).result.coverage).not.toHaveProperty("answer");
+  });
+
   it("sends the caller's projection in place of the chunks table's, and no projection at all for an empty one", async () => {
     // A table of another shape has no path or start_line: the platform
     // refuses a projection naming no column of any table, so the caller
