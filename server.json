@@ -1,7 +1,7 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.infino-ai/code-context",
-  "description": "Local code search for AI coding agents: hybrid keyword + semantic search and SQL relevance-ranked aggregation over an index that lives in plain files. No accounts, no keys, no server.",
+  "description": "Local code search for AI coding agents: hybrid keyword + semantic + SQL over an index in your repo.",
   "repository": {
     "url": "https://github.com/infino-ai/code-context",
     "source": "github"
@@ -15,6 +15,14 @@
       "transport": {
         "type": "stdio"
       },
+      "packageArguments": [
+        {
+          "type": "positional",
+          "value": "mcp",
+          "valueHint": "subcommand",
+          "description": "Run the MCP server (stdio). Without it the package runs its CLI, not the server."
+        }
+      ],
       "environmentVariables": [
         {
           "name": "CX_ROOT",
