@@ -9,13 +9,17 @@
 // is shown to the person directly, never to the model. So the `answer` tool
 // has two ways to deliver, chosen at server start by CX_ANSWER_DISPLAY:
 //
-//   hook  - the answer is written to a file under the index directory, the
-//           tool tells the model the person has it and to reply in one
-//           sentence, and a PostToolUse hook on the tool (written by `cx
-//           install`) reads the file and shows it. Measured 2026-09-21 with
-//           Opus and Haiku: the model's reply was one line, the answer
-//           appeared unchanged, and the wait after the tool returned was
-//           nothing - against 48 s of retyping for a 16k-character answer.
+//   hook  - the answer is written to a file under the index directory, a
+//           PostToolUse hook on the tool (written by `cx install`) reads the
+//           file and shows it, and the tool tells the model the person has
+//           it and to reply in one sentence. The result carries the answer's
+//           text as well, so the model holds it for whatever the person asks
+//           next: reading it in costs almost nothing, typing it out is what
+//           costs (the owner, 2026-09-21: "intake doesn't take time nor cost
+//           a lot"). Measured 2026-09-21 with Opus and Haiku: the model's
+//           reply was one line, the answer appeared unchanged, and the wait
+//           after the tool returned was nothing - against 48 s of retyping
+//           for a 16k-character answer.
 //   relay - no hook: the tool returns the answer itself with the instruction
 //           to reply with it exactly. Opus relayed 15,889 characters
 //           unchanged that way (2026-09-21); the wait is its typing speed.
@@ -65,9 +69,15 @@ export function answerFileFrom(text: string): string | null {
 }
 
 /** What the tool tells the model under hook delivery: the person has the
- * answer; say one sentence. */
-export function hookDeliveryText(path: string): string {
-  return `The answer has been shown to the user. ${answerFileMarker(path)}\nReply with one short sentence and nothing else - do not repeat or summarize the answer.`;
+ * answer; say one sentence; here is the text, for what comes next. The
+ * marker sits before the answer so the hook finds the file first. */
+export function hookDeliveryText(path: string, answer: string): string {
+  return (
+    `The answer below has already been shown to the user in full. ${answerFileMarker(path)}\n` +
+    "Reply with one short sentence and nothing else - do not repeat, summarize or rewrite the answer; the user has it in front of them. " +
+    "It is given here so you have it for the user's next request.\n\n" +
+    answer
+  );
 }
 
 /** What the tool tells the model under relay delivery: the answer, to be

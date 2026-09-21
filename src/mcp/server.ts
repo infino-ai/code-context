@@ -425,7 +425,7 @@ export function answerDescription(display: AnswerDisplay, rows: boolean): string
   const from = rows ? "the rows it retrieves for the question" : "the rows it retrieves for the question, each with its path and lines";
   const delivery =
     display === "hook"
-      ? "The finished answer is shown to the user directly by this tool. After it returns, reply with one short sentence such as 'The answer is shown above.' and nothing else - do not repeat, summarize or rewrite the answer."
+      ? "The finished answer is shown to the user directly by this tool, and returned to you so you have it for what the user asks next. After it returns, reply with one short sentence such as 'The answer is shown above.' and nothing else - do not repeat, summarize or rewrite the answer."
       : "It returns the finished answer. Reply with that text exactly as returned, in full, and nothing else - do not summarize or rewrite it.";
   return (
     `Write the final answer to the question from ${from}, with checked citations, written by the platform's own writer. ` +
@@ -1813,9 +1813,10 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
      * cite pass checks the places, and the text comes back. How it reaches
      * the person is the display mode's business (core/answer-display.ts):
      * under the hook it goes to a file the hook shows and the model is told
-     * to say one sentence; without one the model is told to relay it
-     * exactly. Either way nothing in the result invites a rewrite: no rows,
-     * no coverage, no receipt beside the text. */
+     * to say one sentence, with the text beside the instruction so the
+     * model holds it for the next request; without a hook the model is told
+     * to relay it exactly. Either way nothing in the result invites a
+     * rewrite: no rows, no coverage, no receipt beside the text. */
     const writeAnswer = async ({ question, notes, under, path }: { question: string; notes?: string; under?: string; path?: string }) => {
       const settled = await loopContext("answer", path);
       if ("failed" in settled) return settled.failed;
@@ -1843,7 +1844,7 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
         mkdirSync(dir, { recursive: true });
         const file = join(dir, `${new Date().toISOString().replace(/[:.]/g, "-")}.md`);
         writeFileSync(file, result.answer);
-        const text = answerDisplay === "hook" ? hookDeliveryText(file) : relayDeliveryText(result.answer);
+        const text = answerDisplay === "hook" ? hookDeliveryText(file, result.answer) : relayDeliveryText(result.answer);
         return { content: [{ type: "text" as const, text }] };
       } catch (err) {
         return fail(`answer failed: ${(err as Error).message}${refusalHint(err)}`);

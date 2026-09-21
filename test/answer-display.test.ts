@@ -29,17 +29,27 @@ describe("the display mode", () => {
 describe("the marker", () => {
   it("names the file and is read back from plain text and from JSON-escaped text", () => {
     const path = "/repo/.infino/answers/2026-09-21T01-00-00-000Z.md";
-    expect(answerFileFrom(hookDeliveryText(path))).toBe(path);
-    expect(answerFileFrom(JSON.stringify({ content: [{ type: "text", text: hookDeliveryText(path) }] }))).toBe(path);
+    expect(answerFileFrom(hookDeliveryText(path, "the answer"))).toBe(path);
+    expect(answerFileFrom(JSON.stringify({ content: [{ type: "text", text: hookDeliveryText(path, "the answer") }] }))).toBe(path);
     expect(answerFileFrom("no marker here")).toBeNull();
     expect(answerFileMarker(path)).toBe(`[[answer-file:${path}]]`);
   });
 
   it("tells the model one thing under each delivery, and never both", () => {
-    expect(hookDeliveryText("/f")).toMatch(/one short sentence/);
-    expect(hookDeliveryText("/f")).not.toMatch(/exactly as written/);
+    expect(hookDeliveryText("/f", "the answer")).toMatch(/one short sentence/);
+    expect(hookDeliveryText("/f", "the answer")).not.toMatch(/exactly as written/);
     expect(relayDeliveryText("the answer")).toMatch(/^Reply with the following answer exactly as written/);
     expect(relayDeliveryText("the answer")).toMatch(/\n\nthe answer$/);
+  });
+
+  it("carries the answer under the hook too, after the marker and the instruction, so the model holds it for the next request", () => {
+    // An answer that mentions the marker's own spelling does not confuse the
+    // hook: the file marker comes first in the text.
+    const answer = "The merge picks files by size.\n\nSee [[answer-file:/nowhere]] for nothing.";
+    const text = hookDeliveryText("/f", answer);
+    expect(text.endsWith(`\n\n${answer}`)).toBe(true);
+    expect(text.indexOf("[[answer-file:/f]]")).toBeLessThan(text.indexOf("Reply with one short sentence"));
+    expect(answerFileFrom(text)).toBe("/f");
   });
 });
 
