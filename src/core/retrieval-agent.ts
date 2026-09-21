@@ -77,6 +77,8 @@ const NO_ANSWER_REASONS: Record<string, string> = {
 /** What the outer agent is told when there are no facts. */
 const NO_ANSWER_HINT = "ask again more narrowly, or use find or search";
 
+import type { PlatformFact } from "./retrieval-record.js";
+
 export interface RetrievalAgentRequest {
   question: string;
   /** Repo-relative path prefix the question is about, read the way `find`
@@ -117,6 +119,12 @@ export interface RetrievalAgentRequest {
    * outer model writes under - and the result carries `answer` beside the
    * facts. Absent, the facts alone come back (the `ask` tool). */
   answer?: boolean;
+  /** The rows the answer is written from, when the caller already holds
+   * them - the places this server returned to the model in the session
+   * (core/retrieval-record.ts). Sent as the platform's `facts`: the loop
+   * does not run, the platform reads each place back from the table and
+   * the writer is shown those rows. Only with `answer`. */
+  facts?: readonly PlatformFact[];
 }
 
 /** The `projection` field of a sub_agent request for `request`: the caller's
@@ -279,6 +287,7 @@ export async function runRetrievalAgent(
     max_wall_secs: budget.maxWallSecs,
     ...(request.table !== undefined ? { table: request.table } : {}),
     ...(request.answer ? { answer: true } : {}),
+    ...(request.answer && request.facts?.length ? { facts: request.facts } : {}),
   });
   const run = retrievalAgentRunFrom(request.question, response, k, request.shape);
   return { ...run, result: scoped(run.result, under) };

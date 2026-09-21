@@ -249,8 +249,11 @@ hostedOptions(
 
 program
   .command("hook")
-  .description("(run by Claude Code) a hook `cx install` wrote: `hook answer` shows the answer tool's result to you directly")
-  .argument("<event>", "which hook: answer")
+  .description(
+    "(run by Claude Code) a hook `cx install` wrote: `hook answer` shows the answer tool's result to you directly; " +
+      "`hook answer-input` hands the tool what the model said while it worked, from the session transcript",
+  )
+  .argument("<event>", "which hook: answer | answer-input")
   .option("--chunk <i>", "which chunk of the answer this entry shows (from 1)")
   .option("--chunks <n>", "how many chunks the answer is shown in")
   .action((event: string, opts: HookCmdOptions) => {

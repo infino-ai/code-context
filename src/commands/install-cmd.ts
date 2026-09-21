@@ -72,6 +72,11 @@ const PROJECT_SETTINGS = join(".claude", "settings.json");
 
 /** The hook event that shows the `answer` tool's result to the person. */
 const ANSWER_HOOK_EVENT = "PostToolUse";
+/** The event of the hook that fills the `answer` call's narration from the
+ * session transcript before the tool runs (`cx hook answer-input`). */
+const ANSWER_INPUT_HOOK_EVENT = "PreToolUse";
+/** Every event our hook entries live under. */
+const ANSWER_HOOK_EVENTS = [ANSWER_HOOK_EVENT, ANSWER_INPUT_HOOK_EVENT];
 
 /** Indent for the config we write back, matching the shipped `.mcp.json`. */
 const CONFIG_INDENT = 2;
@@ -415,50 +420,86 @@ export function answerHookMatcher(name: string): string {
  * for what each prints). Written to Claude Code's project settings beside
  * the server entry when the platform half enabled `ask`. */
 export function answerHookEntries(opts: InstallCmdOptions, version: string, name: string): HookEntry[] {
-  const [command, head] = commandFor(opts, version);
-  const quote = (s: string) => (/[\s"'\\$`]/.test(s) ? `'${s.replace(/'/g, `'\\''`)}'` : s);
   const entries: HookEntry[] = [];
   for (let chunk = 1; chunk <= ANSWER_DISPLAY_CHUNKS; chunk++) {
-    const line = [command, ...head, "hook", "answer", "--chunk", String(chunk), "--chunks", String(ANSWER_DISPLAY_CHUNKS)].map(quote).join(" ");
-    entries.push({ matcher: answerHookMatcher(name), hooks: [{ type: "command", command: line }] });
+    entries.push(hookEntry(opts, version, name, ["answer", "--chunk", String(chunk), "--chunks", String(ANSWER_DISPLAY_CHUNKS)]));
   }
   return entries;
 }
 
-/** The settings' PostToolUse list with our entries replaced by `ours` (or
- * removed, when `ours` is empty), every other entry passing through unread.
- * Refuses a settings file whose hooks block is not the shape Claude Code
- * writes, rather than rewriting it. */
-function withAnswerHooks(config: Config, name: string, ours: HookEntry[], settingsPath: string): Config {
+/** The hook entry that hands the `answer` tool what the model said while it
+ * worked: `cx hook answer-input`, run before the tool with the session's
+ * transcript path in its event, filling the call's narration through the
+ * hook's `updatedInput` (commands/hook-cmd.ts). The model itself types
+ * nothing for the writer. */
+export function answerInputHookEntry(opts: InstallCmdOptions, version: string, name: string): HookEntry {
+  return hookEntry(opts, version, name, ["answer-input"]);
+}
+
+/** One hook entry running this package's `hook` command with `args`. */
+function hookEntry(opts: InstallCmdOptions, version: string, name: string, args: string[]): HookEntry {
+  const [command, head] = commandFor(opts, version);
+  const quote = (s: string) => (/[\s"'\\$`]/.test(s) ? `'${s.replace(/'/g, `'\\''`)}'` : s);
+  const line = [command, ...head, "hook", ...args].map(quote).join(" ");
+  return { matcher: answerHookMatcher(name), hooks: [{ type: "command", command: line }] };
+}
+
+/** Our hook entries by event, as the install writes them; empty when the
+ * install writes none. */
+export type AnswerHooks = Record<string, HookEntry[]>;
+
+/** The hook entries the install writes beside a platform entry: the chunk
+ * hooks that show the answer, and the one that fills its narration. */
+export function answerHooks(opts: InstallCmdOptions, version: string, name: string): AnswerHooks {
+  return {
+    [ANSWER_HOOK_EVENT]: answerHookEntries(opts, version, name),
+    [ANSWER_INPUT_HOOK_EVENT]: [answerInputHookEntry(opts, version, name)],
+  };
+}
+
+/** How many entries a set of hooks holds, for the install's report. */
+export function answerHookCount(hooks: AnswerHooks): number {
+  return Object.values(hooks).reduce((n, list) => n + list.length, 0);
+}
+
+/** The settings' hook lists with our entries replaced by `ours` under every
+ * event we use (or removed, when `ours` has none for it), every other entry
+ * passing through unread. Refuses a settings file whose hooks block is not
+ * the shape Claude Code writes, rather than rewriting it. */
+function withAnswerHooks(config: Config, name: string, ours: AnswerHooks, settingsPath: string): Config {
   const hooks = config.hooks ?? {};
   if (hooks === null || typeof hooks !== "object" || Array.isArray(hooks)) {
     throw new InstallError(`"hooks" in ${settingsPath} is ${describeJson(hooks)}, not an object. Fix the file and re-run.`);
   }
   const events = hooks as Record<string, unknown>;
-  const list = events[ANSWER_HOOK_EVENT] ?? [];
-  if (!Array.isArray(list)) {
-    throw new InstallError(`"hooks.${ANSWER_HOOK_EVENT}" in ${settingsPath} is ${describeJson(list)}, not an array. Fix the file and re-run.`);
-  }
   const matcher = answerHookMatcher(name);
-  const kept = list.filter((e) => !(e && typeof e === "object" && (e as { matcher?: unknown }).matcher === matcher));
-  const next = [...kept, ...ours];
   const nextEvents: Record<string, unknown> = { ...events };
-  if (next.length) nextEvents[ANSWER_HOOK_EVENT] = next;
-  else delete nextEvents[ANSWER_HOOK_EVENT];
+  for (const event of ANSWER_HOOK_EVENTS) {
+    const list = events[event] ?? [];
+    if (!Array.isArray(list)) {
+      throw new InstallError(`"hooks.${event}" in ${settingsPath} is ${describeJson(list)}, not an array. Fix the file and re-run.`);
+    }
+    const kept = list.filter((e) => !(e && typeof e === "object" && (e as { matcher?: unknown }).matcher === matcher));
+    const next = [...kept, ...(ours[event] ?? [])];
+    if (next.length) nextEvents[event] = next;
+    else delete nextEvents[event];
+  }
   const out: Config = { ...config };
   if (Object.keys(nextEvents).length) out.hooks = nextEvents;
   else delete out.hooks;
   return out;
 }
 
-/** Whether the settings file carries any of our hook entries. */
+/** Whether the settings file carries any of our hook entries, under any
+ * event we use. */
 function hasAnswerHooks(config: Config, name: string): boolean {
   const hooks = config.hooks;
   if (!hooks || typeof hooks !== "object" || Array.isArray(hooks)) return false;
-  const list = (hooks as Record<string, unknown>)[ANSWER_HOOK_EVENT];
-  if (!Array.isArray(list)) return false;
   const matcher = answerHookMatcher(name);
-  return list.some((e) => e && typeof e === "object" && (e as { matcher?: unknown }).matcher === matcher);
+  return ANSWER_HOOK_EVENTS.some((event) => {
+    const list = (hooks as Record<string, unknown>)[event];
+    return Array.isArray(list) && list.some((e) => e && typeof e === "object" && (e as { matcher?: unknown }).matcher === matcher);
+  });
 }
 
 /** Refuse a key that was handed over as a value. Catching it here keeps the
@@ -739,7 +780,7 @@ export async function installCmd(
       return;
     }
     if (name in servers) writeConfig(configPath, next);
-    if (hadHooks) writeConfig(settingsPath, withAnswerHooks(settings, name, [], settingsPath));
+    if (hadHooks) writeConfig(settingsPath, withAnswerHooks(settings, name, {}, settingsPath));
     console.log(`${green("removed")} ${bold(name)} from ${configPath}${hadHooks ? ` and its answer hooks from ${settingsPath}` : ""}`);
     console.log(dim("Restart the client to drop the server."));
     return;
@@ -753,7 +794,8 @@ export async function installCmd(
   const entry = serverEntry({ ...opts, db: setup.db, answerHook }, version);
   const existed = name in servers;
   const next: Config = { ...config, mcpServers: { ...servers, [name]: entry } };
-  const hookEntries = answerHook ? answerHookEntries(opts, version, name) : [];
+  const hookEntries = answerHook ? answerHooks(opts, version, name) : {};
+  const hookCount = answerHookCount(hookEntries);
   const settings = hooksHere ? readConfig(settingsPath) : {};
   const nextSettings = hooksHere ? withAnswerHooks(settings, name, hookEntries, settingsPath) : null;
   const settingsChange = hooksHere && JSON.stringify(nextSettings) !== JSON.stringify(settings);
@@ -761,8 +803,8 @@ export async function installCmd(
   if (opts.dryRun) {
     console.log(`${dim(existed ? "would replace" : "would write")} ${bold(name)} in ${configPath}:`);
     console.log(JSON.stringify(entry, null, CONFIG_INDENT));
-    if (hookEntries.length) {
-      console.log(`${dim("would write")} ${hookEntries.length} ${bold(ANSWER_HOOK_EVENT)} hook(s) for ${bold(answerHookMatcher(name))} in ${settingsPath}`);
+    if (hookCount) {
+      console.log(`${dim("would write")} ${hookCount} hook(s) (${ANSWER_HOOK_EVENTS.map((e) => bold(e)).join(", ")}) for ${bold(answerHookMatcher(name))} in ${settingsPath}`);
     }
     for (const note of setup.notes) console.log(dim(note));
     return;
@@ -772,8 +814,10 @@ export async function installCmd(
   if (settingsChange && nextSettings) writeConfig(settingsPath, nextSettings);
   console.log(`${green(existed ? "updated" : "installed")} ${bold(name)} in ${configPath}`);
   console.log(`  ${dim(entry.command)} ${dim(entry.args.join(" "))}`);
-  if (hookEntries.length) {
-    console.log(`  ${dim(`${hookEntries.length} ${ANSWER_HOOK_EVENT} hooks in ${settingsPath}: the answer tool's result is shown to you directly`)}`);
+  if (hookCount) {
+    console.log(
+      `  ${dim(`${hookCount} hooks in ${settingsPath}: the answer tool's result is shown to you directly, and what the model said while it worked reaches the writer`)}`,
+    );
   }
   for (const note of setup.notes) console.log(dim(note));
   console.log(dim("Restart the client to pick the server up."));

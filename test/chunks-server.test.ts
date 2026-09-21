@@ -102,7 +102,9 @@ async function expectChunksText(s: Started): Promise<void> {
   // The written answer's tool, and its routing line: without the install's
   // hook the model is told to relay the text exactly.
   expect(byName.get("answer")).toContain("Reply with that text exactly as returned, in full, and nothing else");
-  expect(instructions).toContain("- answer - when you have what the question needs, call it with the question and your notes: it writes the answer from the rows; reply with its text exactly as returned");
+  expect(instructions).toContain(
+    "- answer - when you have what the question needs, call it with the question alone - the writer already has every row this server returned to you: it writes the answer from the rows; reply with its text exactly as returned",
+  );
   expect(instructions).not.toContain("shows it to the user itself");
   expectSharedSentences(instructions);
   // The fan-out is a preference, told once in the instructions and once in

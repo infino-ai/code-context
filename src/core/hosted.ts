@@ -15,6 +15,7 @@ import * as arrow from "apache-arrow";
 import { Agent, fetch as undiciFetch } from "undici";
 
 import { jsonify } from "./json.js";
+import type { PlatformFact } from "./retrieval-record.js";
 
 // --- constants ------------------------------------------------------------------
 
@@ -586,10 +587,16 @@ export class HostedDb {
      * writes the answer, citing those lines. The response then carries
      * `answer`. */
     answer?: boolean;
+    /** With `answer`: the rows to write from, when the caller already holds
+     * them - each its table and the cells that name it. The platform runs no
+     * loop, reads a row given by its place back from the table, and shows
+     * the writer those rows. */
+    facts?: readonly PlatformFact[];
   }): Promise<RowRecord> {
     // Only the fields given are sent: the request type rejects unknown keys and
     // defaults the rest itself.
     const body: RowRecord = { question: req.question };
+    if (req.facts !== undefined) body.facts = req.facts;
     if (req.context !== undefined) body.context = req.context;
     if (req.k !== undefined) body.k = req.k;
     if (req.projection !== undefined) body.projection = req.projection;

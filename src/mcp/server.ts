@@ -127,6 +127,7 @@ import { hostedDbFor, localDb, newHostedMemo, platformLabel, platformTableReady,
 import { devContext, devContextEnabled } from "../core/dev-context.js";
 import { foldValidationFacts, rankRows } from "../core/facts.js";
 import { HostedError, type HostedOptions, type RowRecord } from "../core/hosted.js";
+import { RetrievalRecord } from "../core/retrieval-record.js";
 import {
   analyzerOf,
   find,
@@ -410,6 +411,9 @@ export function findHint(query: string, total: number, defines: boolean): string
 
 /** Where an `answer` call's text is kept, under the index directory. */
 const ANSWERS_DIR = "answers";
+/** Heads the model's narration in the writer's context, when the installed
+ * hook supplied it. */
+const NARRATION_HEADING = "What the model said and thought while it gathered the rows:";
 
 /** The routing line for `answer`, by how the answer reaches the person. */
 export function answerInstruction(display: AnswerDisplay): string {
@@ -417,20 +421,27 @@ export function answerInstruction(display: AnswerDisplay): string {
     display === "hook"
       ? "it writes the answer from the rows and shows it to the user itself; then reply with one short sentence and nothing else."
       : "it writes the answer from the rows; reply with its text exactly as returned, in full, and nothing else.";
-  return `- answer - when you have what the question needs, call it with the question and your notes: ${tail}\n`;
+  return `- answer - when you have what the question needs, call it with the question alone - the writer already has every row this server returned to you: ${tail}\n`;
 }
 
-/** The `answer` tool's description, by display mode and table shape. */
+/** The `answer` tool's description, by display mode and table shape. The
+ * model is asked for the question and nothing else: the rows it was shown
+ * are on this server's record, and its own account of them reaches the
+ * writer through the installed hook (commands/hook-cmd.ts). A model asked to
+ * restate what it found typed 4,000 characters of notes, 26 s of a 45 s run
+ * (measured 2026-09-21), for the writer to read what the server already had. */
 export function answerDescription(display: AnswerDisplay, rows: boolean): string {
-  const from = rows ? "the rows it retrieves for the question" : "the rows it retrieves for the question, each with its path and lines";
+  const from = rows
+    ? "the rows this server returned to you in this session"
+    : "the rows this server returned to you in this session, read back from the index with their lines";
   const delivery =
     display === "hook"
       ? "The finished answer is shown to the user directly by this tool, and returned to you so you have it for what the user asks next. After it returns, reply with one short sentence such as 'The answer is shown above.' and nothing else - do not repeat, summarize or rewrite the answer."
       : "It returns the finished answer. Reply with that text exactly as returned, in full, and nothing else - do not summarize or rewrite it.";
   return (
-    `Write the final answer to the question from ${from}, with checked citations, written by the platform's own writer. ` +
-    "Call it once you have gathered what the question needs, with the question and your notes on what you found and where; " +
-    `the writer reads the notes beside the rows. ${delivery}`
+    `Write the final answer to the question, by the platform's own writer, from ${from} - every ask, search, find and sql - with checked citations. ` +
+    "Call it with the question once you have what the question needs. Do not restate what you found: the writer has the rows, " +
+    `and the installed hook hands it what you said while you worked. ${delivery}`
   );
 }
 
@@ -767,6 +778,19 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
   // it with CX_NO_RECEIPT. One accumulator per session (this long-lived process).
   const receiptOn = receiptEnabled();
   const session = newSession();
+  // What this server returned to the model, per repository, for the `answer`
+  // tool to hand the platform's writer as the rows to write from
+  // (core/retrieval-record.ts). Cleared once an answer is written from it,
+  // so the next question starts its own.
+  const records = new Map<string, RetrievalRecord>();
+  const recordOf = (ctx: RepoCtx): RetrievalRecord => {
+    let record = records.get(ctx.root);
+    if (!record) {
+      record = new RetrievalRecord();
+      records.set(ctx.root, record);
+    }
+    return record;
+  };
   // Said in the ask tool text only when it is true: with the dev
   // context off (the default) the loop's model sees the question alone, and
   // telling the caller otherwise would have it leave out what the loop needs.
@@ -1150,11 +1174,12 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
     query: string,
     embeds: Record<string, string> | undefined,
     question: string | undefined,
-    opts: { column?: string; numbered: boolean },
+    opts: { column?: string; numbered: boolean; key?: string },
   ) => {
     try {
       const t0 = performance.now();
       const fromPlatform = await runSqlRows(ctx.hosted!, query, embeds);
+      recordOf(ctx).addRows(TABLE, fromPlatform, opts.key);
       const placed = opts.numbered ? fromPlatform.map(numberRowLines) : fromPlatform;
       const { verdict: judged, telemetry } = await platformVerdict(ctx, query, placed, question, opts.column);
       // A ranked aggregate's rows gain the platform's facts about their
@@ -1325,6 +1350,7 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
         try {
           const t0 = performance.now();
           const result = await searchRows(ctx.hosted!, over.shape, query, k);
+          recordOf(ctx).addKeys(TABLE, over.shape.keyColumn, result.hits);
           let usage: string | undefined;
           if (receiptOn) {
             const entry = withPlatform(rowSearchEntry(result), ctx);
@@ -1355,6 +1381,7 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
           // the platform's default for a bare column, as analyzerOf says.
           const hostedAnalyzer = analyzerOf(readPlatformManifest(ctx.dir) ?? { origin: "hosted" });
           const result = await searchHosted(ctx.hosted, query, k, { lines, analyzer: hostedAnalyzer });
+          recordOf(ctx).addPlaces(TABLE, result.hits);
           let usage: string | undefined;
           if (receiptOn) {
             // withPlatform, as the ask path does: the platform
@@ -1384,6 +1411,7 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
       try {
         const t0 = performance.now();
         const result = await search(handle, getEmbedder(), query, k, { lines });
+        recordOf(ctx).addPlaces(TABLE, result.hits);
         let usage: string | undefined;
         if (receiptOn) {
           const entry = searchEntry(result, ctx.root);
@@ -1496,6 +1524,7 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
         try {
           const t0 = performance.now();
           const result = await findRows(ctx.hosted!, over.shape, query, { limit });
+          recordOf(ctx).addKeys(TABLE, over.shape.keyColumn, result.matches);
           let usage: string | undefined;
           if (receiptOn) {
             const entry = withPlatform(rowFindEntry(result), ctx);
@@ -1519,6 +1548,7 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
       try {
         const t0 = performance.now();
         const result = await find(handle, query, { ignoreCase, defines, under, limit });
+        recordOf(ctx).addLines(TABLE, result.matches);
         let usage: string | undefined;
         if (receiptOn) {
           const entry = findEntry(result);
@@ -1585,7 +1615,7 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
       // against the table's own text column.
       const over = rowsOver("sql", ctx);
       if (over && "failed" in over) return over.failed;
-      if (over) return sqlOnPlatform(ctx, query, embeds, question, { column: over.shape.primaryText, numbered: false });
+      if (over) return sqlOnPlatform(ctx, query, embeds, question, { column: over.shape.primaryText, numbered: false, key: over.shape.keyColumn });
       // The chunks table's statement runs on the platform when it embeds a
       // query, whatever else is configured: a `{{q}}` is a vector function's,
       // the platform embeds it with the table's own model, and the local side
@@ -1615,7 +1645,9 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
         // gets.
         // Ranked the same way the platform path's rows are: an ordered
         // result carries each row's place in its order (core/facts.ts).
-        const rows = rankRows((await runSql(handle, getEmbedder(), query, embed as Record<string, string> | undefined)).map(numberRowLines), query);
+        const raw = await runSql(handle, getEmbedder(), query, embed as Record<string, string> | undefined);
+        recordOf(ctx).addRows(TABLE, raw);
+        const rows = rankRows(raw.map(numberRowLines), query);
         const partial = partialIndex(handle.manifest);
         // The platform's own retrieval contract, applied to these rows before
         // they go back. The answering loop gates every query it runs on this
@@ -1750,6 +1782,12 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
           },
           { maxTurns: subagentMaxTurns(), maxWallSecs: subagentMaxWallSecs(), k: subagentK() },
         );
+        // On the record for `answer`: the places the hits name, and the
+        // rows of a table of another shape by their key.
+        const record = recordOf(ctx);
+        record.addPlaces(TABLE, result.hits);
+        if (over) record.addKeys(TABLE, over.shape.keyColumn, result.rows);
+        else record.addRows(TABLE, result.rows);
         let usage: string | undefined;
         if (receiptOn) {
           const entry = withPlatform(subagentEntry(result, spend), ctx);
@@ -1817,18 +1855,28 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
      * model holds it for the next request; without a hook the model is told
      * to relay it exactly. Either way nothing in the result invites a
      * rewrite: no rows, no coverage, no receipt beside the text. */
-    const writeAnswer = async ({ question, notes, under, path }: { question: string; notes?: string; under?: string; path?: string }) => {
+    const writeAnswer = async ({ question, narration, under, path }: { question: string; narration?: string; under?: string; path?: string }) => {
       const settled = await loopContext("answer", path);
       if ("failed" in settled) return settled.failed;
       const { ctx, over } = settled;
       try {
         const dev = devContextEnabled() ? devContext(ctx.root) : undefined;
-        const context = [dev, notes?.trim() ? `Notes from the model that gathered the evidence so far:\n${notes.trim()}` : undefined].filter(Boolean).join("\n\n");
+        // What the model said while it worked, as the installed hook read it
+        // from the session transcript; the model itself types nothing here.
+        const said = narration?.trim();
+        const context = [dev, said ? `${NARRATION_HEADING}\n${said}` : undefined].filter(Boolean).join("\n\n");
+        // The rows this server returned to the model in the session: the
+        // platform writes from them and runs no loop. With none on record -
+        // a question answered without a retrieval through this server - the
+        // platform retrieves for the question itself.
+        const record = recordOf(ctx);
+        const facts = record.facts();
         const { result, spend } = await runRetrievalAgent(
           ctx.hosted!,
           {
             question,
             answer: true,
+            ...(facts.length ? { facts } : {}),
             ...(context ? { context } : {}),
             ...(under !== undefined && !over ? { under } : {}),
             ...(over ? { projection: rowsProjection(over.shape), shape: over.shape } : {}),
@@ -1838,6 +1886,8 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
         );
         if (receiptOn) recordUsage(ctx.dir, withPlatform(subagentEntry(result, spend, "answer"), ctx));
         if (!result.answer) return fail(`answer: ${result.error ?? "the platform wrote no answer from the rows it retrieved"} - answer the question yourself from what you have gathered.`);
+        // The answer consumed the record: the next question starts its own.
+        record.clear();
         // The file the hook reads, kept under the index directory beside the
         // ledger; written in both modes so a run's answers can be read back.
         const dir = join(ctx.dir, ANSWERS_DIR);
@@ -1859,10 +1909,10 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
         description: answerDescription(answerDisplay, Boolean(rows)),
         inputSchema: {
           question: z.string().min(1).describe("The question as the user asked it."),
-          notes: z
+          narration: z
             .string()
             .optional()
-            .describe("What you found and where, in your own words: the places (path:line) and what each settles. The writer reads them beside the rows it retrieves."),
+            .describe("Filled by the installed hook from the session transcript: what you said and thought while gathering. Leave it out; the hook supplies it."),
           under: retrievalInputs.under,
           path: retrievalInputs.path,
         },

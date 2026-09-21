@@ -290,9 +290,11 @@ describe("a table of another shape, described at startup", () => {
     expect(text).not.toContain("&lt;");
   });
 
-  it("answer asks the loop for the written answer with the notes as context, keeps a copy under the index dir, and hands the model the text to relay", async () => {
+  it("answer asks the loop for the written answer from the rows this server returned, with the hook's narration as context, keeps a copy under the index dir, and hands the model the text to relay", async () => {
     const before = s.sent.length;
-    const result = (await s.client.callTool({ name: "answer", arguments: { question: "which distributed systems roles are there?", notes: "id 7 is the one in Paris" } })) as {
+    // `narration` is what the installed PreToolUse hook fills from the
+    // session transcript; the model itself is asked for the question alone.
+    const result = (await s.client.callTool({ name: "answer", arguments: { question: "which distributed systems roles are there?", narration: "id 7 is the one in Paris" } })) as {
       content: Array<{ type: string; text: string }>;
       isError?: boolean;
     };
@@ -300,8 +302,15 @@ describe("a table of another shape, described at startup", () => {
     expect(s.sent.slice(before).map((x) => x.op)).toEqual(["sub_agent"]);
     const request = s.sent.slice(before).find((x) => x.op === "sub_agent")?.body;
     expect(request?.answer).toBe(true);
-    expect(String(request?.context)).toContain("id 7 is the one in Paris");
+    expect(String(request?.context)).toContain("What the model said and thought while it gathered the rows:\nid 7 is the one in Paris");
     expect(request?.question).toBe("which distributed systems roles are there?");
+    // The rows the tests above had this server return - the ask's fact by
+    // the table's key among them - go to the platform as the facts to write
+    // from, each named by its table, so no loop runs there.
+    const facts = request?.facts as Array<{ table: string; row: Record<string, unknown> }>;
+    expect(Array.isArray(facts) && facts.length > 0).toBe(true);
+    expect(facts.every((f) => f.table === JOBS_TABLE)).toBe(true);
+    expect(facts).toContainEqual({ table: JOBS_TABLE, row: { id: ROW.id } });
     // Without the install's hook the model is told to relay the text, and
     // the text is the whole result: no rows, no coverage, no receipt to
     // rewrite from.
@@ -312,6 +321,14 @@ describe("a table of another shape, described at startup", () => {
     const files = readdirSync(answers);
     expect(files).toHaveLength(1);
     expect(readFileSync(join(answers, files[0]), "utf8")).toBe(WRITTEN_ANSWER);
+    // The answer consumed the record: a second answer with nothing retrieved
+    // since sends no facts, and the platform retrieves for itself.
+    const again = s.sent.length;
+    await s.client.callTool({ name: "answer", arguments: { question: "and in Paris?" } });
+    const second = s.sent.slice(again).find((x) => x.op === "sub_agent")?.body;
+    expect(second?.answer).toBe(true);
+    expect(second?.facts).toBeUndefined();
+    expect(second?.context).toBeUndefined();
   });
 
   it("never reached the platform with a drop, create or append, and wrote no manifest", () => {

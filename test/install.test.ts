@@ -655,6 +655,12 @@ describe("cx install: the answer-display hooks", () => {
       // cannot disagree about which cx they are.
       expect(h.hooks[0].command.startsWith(entry.command)).toBe(true);
     });
+    // And one PreToolUse hook on the same tool, filling its narration from
+    // the session transcript before it runs.
+    const before = read(settingsIn(root)).hooks.PreToolUse as Array<{ matcher: string; hooks: Array<{ type: string; command: string }> }>;
+    expect(before.map((h) => h.matcher)).toEqual([matcher]);
+    expect(before[0].hooks[0].command).toContain(" hook answer-input");
+    expect(before[0].hooks[0].command.startsWith(entry.command)).toBe(true);
   });
 
   it("writes no hooks and no env for a local-only entry", async () => {
@@ -683,9 +689,11 @@ describe("cx install: the answer-display hooks", () => {
     expect(after.hooks.Stop).toEqual([{ hooks: [{ type: "command", command: "echo stop" }] }]);
     expect(after.hooks.PostToolUse.filter((h: { matcher: string }) => h.matcher === "Bash")).toHaveLength(1);
     expect(after.hooks.PostToolUse.filter((h: { matcher: string }) => h.matcher === matcher)).toHaveLength(3);
+    expect(after.hooks.PreToolUse.filter((h: { matcher: string }) => h.matcher === matcher)).toHaveLength(1);
     await installCmd({ path: root, uninstall: true }, VERSION);
     const removed = read(settingsIn(root));
     expect(removed.hooks.PostToolUse).toEqual([{ matcher: "Bash", hooks: [{ type: "command", command: "echo theirs" }] }]);
+    expect(removed.hooks.PreToolUse).toBeUndefined();
     expect(removed.hooks.Stop).toBeDefined();
     expect(read(configIn(root)).mcpServers["code-context"]).toBeUndefined();
   });
