@@ -33,13 +33,15 @@ files read one at a time.
   paraphrases, so "where is auth handled" works without knowing the exact
   identifier.
 
-## Where crawling still wins
+## Pinpoint lookups
 
 Jumping to one known symbol or literal string is a single grep's job, and
-there an index does not save tokens: the grep returns one line, while ranked
-search returns content the agent did not need for a path. code-context routes
-this correctly (its tool descriptions tell an agent to prefer native grep for
-pinpoint lookups) and reaches for the index when a question spans files.
+ranked search does not save tokens there: it returns content the agent did
+not need for a path. code-context answers that question with `find` instead:
+every line containing the exact text, cited `path:line`, from the index's
+token match plus a per-line check, so it returns grep's one-line-per-match
+shape without scanning a file. The ranked tools are reached for when a
+question spans files.
 
 ## Hybrid, not just semantic
 

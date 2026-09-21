@@ -9,7 +9,7 @@
 
 import { appendFileSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { jsonify, type SearchResult } from "./searcher.js";
+import { jsonify, type FindResult, type SearchResult } from "./searcher.js";
 
 /** Rough tokens-per-char - the standard heuristic for English + code. Kept
  * deliberately simple: usage reports `~` figures, not a billed count. */
@@ -38,14 +38,17 @@ export const receiptEnabled = (): boolean =>
  * it doesn't duplicate the repo. */
 export interface UsageEntry {
   ts: string;
-  tool: "search" | "sql";
+  tool: "find" | "search" | "sql";
   query: string;
   returnedTokens: number;
   /** search only: whole-file size of the distinct files the hits came from. */
   wholeFileTokens?: number | null;
   ranking?: "hybrid" | "keyword";
-  /** search only: the response, as the regions you'd jump to. */
+  /** search and find: the response, as the regions you'd jump to (a find
+   * match is a single line, so its start and end are the same). */
   hits?: Array<{ path: string; startLine: number; endLine: number }>;
+  /** find only: matching lines across the repo, before the limit. */
+  matches?: number;
   /** sql only. */
   rows?: number;
   /** sql only: a truncated preview of the returned rows (the answer itself). */
@@ -84,6 +87,20 @@ export function searchEntry(result: SearchResult, root: string): UsageEntry {
   };
 }
 
+/** A find returns one line per match, so what it cost is the serialized
+ * matches themselves; the whole-file counterfactual is search's and does not
+ * apply - grep never read the files whole either. */
+export function findEntry(result: FindResult): UsageEntry {
+  return {
+    ts: new Date().toISOString(),
+    tool: "find",
+    query: result.query,
+    returnedTokens: estTokens(jsonify(result.matches)),
+    hits: result.matches.map((m) => ({ path: m.path, startLine: m.line, endLine: m.line })),
+    matches: result.total,
+  };
+}
+
 const ROWS_PREVIEW_CAP = 2000;
 
 export function sqlEntry(query: string, rows: Array<Record<string, unknown>>): UsageEntry {
@@ -119,6 +136,12 @@ export function formatReceipt(entry: UsageEntry, session?: SessionUsage): string
     // it after every response. The raw wholeFileTokens still lives in the entry
     // for anyone who wants to reason about it from the ledger.
     parts.push(`returned ~${fmtTokens(entry.returnedTokens)} tokens | ${plural(hits.length, "chunk", "chunks")} / ${plural(files, "file", "files")}`);
+  } else if (entry.tool === "find") {
+    const hits = entry.hits ?? [];
+    const files = new Set(hits.map((h) => h.path)).size;
+    // The repo-wide count, not just the lines returned: a cut result still
+    // tells the reader how many matches exist.
+    parts.push(`returned ~${fmtTokens(entry.returnedTokens)} tokens | ${plural(entry.matches ?? hits.length, "match", "matches")} / ${plural(files, "file", "files")}`);
   } else {
     parts.push(`returned ~${fmtTokens(entry.returnedTokens)} tokens | ${plural(entry.rows ?? 0, "row", "rows")}`);
   }
@@ -197,6 +220,20 @@ export interface PromptStats {
   promptsWithCx: number;
   /** transient: has the current prompt already used code-context. */
   curPromptUsedCx: boolean;
+  /** code-context invocations by tool (`find`, `search`, `sql`): which door
+   * the agent actually walks through. Absent on stats files written before
+   * it was recorded. */
+  cxCallsByTool?: Record<string, number>;
+  /** The first tool the agent called in each prompt, counted by name - a
+   * code-context tool by its short name, anything else (Grep, Read, Bash)
+   * by the name the hook delivered. This is the selection signal: whether a
+   * grep-shaped prompt opens with `find` or with Grep. Only the tools the
+   * PostToolUse hook is configured to forward are visible, so with the
+   * default `mcp__code-context.*` matcher it records code-context tools
+   * only; widen the matcher to see the rest. Absent on older stats files. */
+  firstToolByPrompt?: Record<string, number>;
+  /** transient: has the current prompt's first tool call been recorded. */
+  curPromptFirstToolSeen?: boolean;
 }
 
 /** The shape Claude Code delivers to a hook command on stdin (subset we use). */
@@ -210,6 +247,21 @@ export interface HookPayload {
 /** A tool name is code-context's when it's one of our MCP tools - matches the
  * default server and any renamed variant (e.g. code-context-local). */
 const isCodeContextTool = (name?: string): boolean => !!name && /^mcp__code[-_]?context/i.test(name);
+
+/** The short tool name inside a code-context MCP tool id:
+ * `mcp__code-context__find` -> `find`, `mcp__code-context-dev__sql` -> `sql`.
+ * The server segment may carry a suffix, so the split is on the last `__`. */
+export function codeContextToolName(name: string): string {
+  const at = name.lastIndexOf("__");
+  return at >= 0 ? name.slice(at + 2) : name;
+}
+
+/** Add one to `counts[key]`, creating the map or the key as needed. */
+function bump(counts: Record<string, number> | undefined, key: string): Record<string, number> {
+  const out = counts ?? {};
+  out[key] = (out[key] ?? 0) + 1;
+  return out;
+}
 
 const MAX_SESSIONS = 25;
 
@@ -235,10 +287,14 @@ function savePromptStats(indexDir: string, all: Record<string, PromptStats>): vo
   }
 }
 
-/** Fold one Claude Code hook event into the local counters. Best-effort. */
+/** Fold one Claude Code hook event into the local counters. Best-effort.
+ * Every PostToolUse event counts toward the first-tool-per-prompt tally
+ * (whatever tools the hook matcher forwards); only code-context's own tools
+ * count as invocations. */
 export function recordHookEvent(indexDir: string, payload: HookPayload): void {
   const event = payload.hook_event_name ?? "";
-  const tracked = event === "UserPromptSubmit" || (event === "PostToolUse" && isCodeContextTool(payload.tool_name));
+  const isCx = event === "PostToolUse" && isCodeContextTool(payload.tool_name);
+  const tracked = event === "UserPromptSubmit" || (event === "PostToolUse" && !!payload.tool_name);
   if (!tracked) return;
 
   const sid = payload.session_id ?? "unknown";
@@ -250,11 +306,23 @@ export function recordHookEvent(indexDir: string, payload: HookPayload): void {
   if (event === "UserPromptSubmit") {
     s.prompts++;
     s.curPromptUsedCx = false;
+    s.curPromptFirstToolSeen = false;
   } else {
-    s.cxCalls++;
-    if (!s.curPromptUsedCx && s.prompts > 0) {
-      s.promptsWithCx++;
-      s.curPromptUsedCx = true;
+    const rawName = payload.tool_name ?? "";
+    const label = isCx ? codeContextToolName(rawName) : rawName;
+    // The first tool of a prompt is the selection signal; a call that lands
+    // before any prompt was seen has no prompt to belong to and is not counted.
+    if (!s.curPromptFirstToolSeen && s.prompts > 0) {
+      s.firstToolByPrompt = bump(s.firstToolByPrompt, label);
+      s.curPromptFirstToolSeen = true;
+    }
+    if (isCx) {
+      s.cxCalls++;
+      s.cxCallsByTool = bump(s.cxCallsByTool, label);
+      if (!s.curPromptUsedCx && s.prompts > 0) {
+        s.promptsWithCx++;
+        s.curPromptUsedCx = true;
+      }
     }
   }
   s.lastAt = now;
