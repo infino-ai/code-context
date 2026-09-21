@@ -75,8 +75,18 @@ const ANSWER_HOOK_EVENT = "PostToolUse";
 /** The event of the hook that fills the `answer` call's narration from the
  * session transcript before the tool runs (`cx hook answer-input`). */
 const ANSWER_INPUT_HOOK_EVENT = "PreToolUse";
+/** The event of the hook that sends a model back for the `answer` call when
+ * it retrieved through the server and stopped without one (`cx hook
+ * answer-stop`). A Stop entry has no matcher: it runs on every stop and
+ * decides from the transcript. */
+const ANSWER_STOP_HOOK_EVENT = "Stop";
 /** Every event our hook entries live under. */
-const ANSWER_HOOK_EVENTS = [ANSWER_HOOK_EVENT, ANSWER_INPUT_HOOK_EVENT];
+const ANSWER_HOOK_EVENTS = [ANSWER_HOOK_EVENT, ANSWER_INPUT_HOOK_EVENT, ANSWER_STOP_HOOK_EVENT];
+/** The `hook` subcommand's arguments for the Stop entry. */
+const STOP_HOOK_ARGS = ["answer-stop"];
+/** What our Stop entry's command ends in, and no other entry's: how the
+ * matcher-less entry is recognised as ours in a settings file. */
+const STOP_HOOK_COMMAND_TAIL = ` hook ${STOP_HOOK_ARGS.join(" ")}`;
 
 /** Indent for the config we write back, matching the shipped `.mcp.json`. */
 const CONFIG_INDENT = 2;
@@ -180,10 +190,11 @@ interface ServerEntry {
   env?: Record<string, string>;
 }
 
-/** One PostToolUse entry in Claude Code's settings: a matcher and the
- * commands run when a tool of that name returns. */
+/** One hook entry in Claude Code's settings: the commands run for the
+ * event, on a tool of the matcher's name where the event has one
+ * (PostToolUse, PreToolUse); a Stop entry has no matcher. */
 interface HookEntry {
-  matcher: string;
+  matcher?: string;
   hooks: Array<{ type: "command"; command: string }>;
 }
 
@@ -436,12 +447,35 @@ export function answerInputHookEntry(opts: InstallCmdOptions, version: string, n
   return hookEntry(opts, version, name, ["answer-input"]);
 }
 
-/** One hook entry running this package's `hook` command with `args`. */
+/** The Stop hook entry: `cx hook answer-stop`, run on every stop, sending
+ * the model back for the `answer` call when it retrieved through the server
+ * and wrote the answer itself instead (commands/hook-cmd.ts). A Stop entry
+ * carries no matcher, the shape Claude Code documents for the event; what
+ * marks it as ours on a re-run or an uninstall is its command, which ends in
+ * the `hook answer-stop` the other entries never run. */
+export function answerStopHookEntry(opts: InstallCmdOptions, version: string, name: string): HookEntry {
+  const { hooks } = hookEntry(opts, version, name, STOP_HOOK_ARGS);
+  return { hooks };
+}
+
+/** One hook entry running this package's `hook` command with `args`, on the
+ * `answer` tool. */
 function hookEntry(opts: InstallCmdOptions, version: string, name: string, args: string[]): HookEntry {
   const [command, head] = commandFor(opts, version);
   const quote = (s: string) => (/[\s"'\\$`]/.test(s) ? `'${s.replace(/'/g, `'\\''`)}'` : s);
   const line = [command, ...head, "hook", ...args].map(quote).join(" ");
   return { matcher: answerHookMatcher(name), hooks: [{ type: "command", command: line }] };
+}
+
+/** Whether a hook entry read from the settings is one of ours for the server
+ * `name`: on the `answer` tool by its matcher, or our matcher-less Stop entry
+ * by the command it runs. */
+function isAnswerHookEntry(entry: unknown, name: string): boolean {
+  if (!entry || typeof entry !== "object") return false;
+  const { matcher, hooks } = entry as { matcher?: unknown; hooks?: unknown };
+  if (matcher === answerHookMatcher(name)) return true;
+  if (matcher !== undefined || !Array.isArray(hooks) || !hooks.length) return false;
+  return hooks.every((h) => h && typeof h === "object" && typeof (h as { command?: unknown }).command === "string" && (h as { command: string }).command.endsWith(STOP_HOOK_COMMAND_TAIL));
 }
 
 /** Our hook entries by event, as the install writes them; empty when the
@@ -454,6 +488,7 @@ export function answerHooks(opts: InstallCmdOptions, version: string, name: stri
   return {
     [ANSWER_HOOK_EVENT]: answerHookEntries(opts, version, name),
     [ANSWER_INPUT_HOOK_EVENT]: [answerInputHookEntry(opts, version, name)],
+    [ANSWER_STOP_HOOK_EVENT]: [answerStopHookEntry(opts, version, name)],
   };
 }
 
@@ -472,14 +507,13 @@ function withAnswerHooks(config: Config, name: string, ours: AnswerHooks, settin
     throw new InstallError(`"hooks" in ${settingsPath} is ${describeJson(hooks)}, not an object. Fix the file and re-run.`);
   }
   const events = hooks as Record<string, unknown>;
-  const matcher = answerHookMatcher(name);
   const nextEvents: Record<string, unknown> = { ...events };
   for (const event of ANSWER_HOOK_EVENTS) {
     const list = events[event] ?? [];
     if (!Array.isArray(list)) {
       throw new InstallError(`"hooks.${event}" in ${settingsPath} is ${describeJson(list)}, not an array. Fix the file and re-run.`);
     }
-    const kept = list.filter((e) => !(e && typeof e === "object" && (e as { matcher?: unknown }).matcher === matcher));
+    const kept = list.filter((e) => !isAnswerHookEntry(e, name));
     const next = [...kept, ...(ours[event] ?? [])];
     if (next.length) nextEvents[event] = next;
     else delete nextEvents[event];
@@ -495,10 +529,9 @@ function withAnswerHooks(config: Config, name: string, ours: AnswerHooks, settin
 function hasAnswerHooks(config: Config, name: string): boolean {
   const hooks = config.hooks;
   if (!hooks || typeof hooks !== "object" || Array.isArray(hooks)) return false;
-  const matcher = answerHookMatcher(name);
   return ANSWER_HOOK_EVENTS.some((event) => {
     const list = (hooks as Record<string, unknown>)[event];
-    return Array.isArray(list) && list.some((e) => e && typeof e === "object" && (e as { matcher?: unknown }).matcher === matcher);
+    return Array.isArray(list) && list.some((e) => isAnswerHookEntry(e, name));
   });
 }
 

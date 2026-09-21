@@ -661,6 +661,14 @@ describe("cx install: the answer-display hooks", () => {
     expect(before.map((h) => h.matcher)).toEqual([matcher]);
     expect(before[0].hooks[0].command).toContain(" hook answer-input");
     expect(before[0].hooks[0].command.startsWith(entry.command)).toBe(true);
+    // And one Stop hook that sends the model back for the answer call when
+    // it retrieved and stopped without one. A Stop entry has no matcher.
+    const stop = read(settingsIn(root)).hooks.Stop as Array<{ matcher?: string; hooks: Array<{ type: string; command: string }> }>;
+    expect(stop).toHaveLength(1);
+    expect(stop[0].matcher).toBeUndefined();
+    expect(stop[0].hooks).toHaveLength(1);
+    expect(stop[0].hooks[0].command.endsWith(" hook answer-stop")).toBe(true);
+    expect(stop[0].hooks[0].command.startsWith(entry.command)).toBe(true);
   });
 
   it("writes no hooks and no env for a local-only entry", async () => {
@@ -686,15 +694,17 @@ describe("cx install: the answer-display hooks", () => {
     await installCmd({ path: root, db: "https://host/db" }, VERSION);
     const after = read(settingsIn(root));
     expect(after.permissions).toEqual({ allow: ["Read"] });
-    expect(after.hooks.Stop).toEqual([{ hooks: [{ type: "command", command: "echo stop" }] }]);
     expect(after.hooks.PostToolUse.filter((h: { matcher: string }) => h.matcher === "Bash")).toHaveLength(1);
     expect(after.hooks.PostToolUse.filter((h: { matcher: string }) => h.matcher === matcher)).toHaveLength(3);
     expect(after.hooks.PreToolUse.filter((h: { matcher: string }) => h.matcher === matcher)).toHaveLength(1);
+    // Their Stop hook stands beside ours.
+    expect(after.hooks.Stop).toHaveLength(2);
+    expect(after.hooks.Stop[0]).toEqual({ hooks: [{ type: "command", command: "echo stop" }] });
     await installCmd({ path: root, uninstall: true }, VERSION);
     const removed = read(settingsIn(root));
     expect(removed.hooks.PostToolUse).toEqual([{ matcher: "Bash", hooks: [{ type: "command", command: "echo theirs" }] }]);
     expect(removed.hooks.PreToolUse).toBeUndefined();
-    expect(removed.hooks.Stop).toBeDefined();
+    expect(removed.hooks.Stop).toEqual([{ hooks: [{ type: "command", command: "echo stop" }] }]);
     expect(read(configIn(root)).mcpServers["code-context"]).toBeUndefined();
   });
 

@@ -40,6 +40,19 @@ export interface HookCmdOptions {
 /** The hook events this command serves. */
 export const HOOK_ANSWER = "answer";
 export const HOOK_ANSWER_INPUT = "answer-input";
+export const HOOK_ANSWER_STOP = "answer-stop";
+
+/** The tool names, as Claude Code spells an MCP tool, whose use in a turn
+ * means the model retrieved through this server; and the one whose use
+ * means the answer was written. The server name is the install's; the
+ * suffixes are the tools'. */
+const RETRIEVAL_TOOL_SUFFIXES = ["__ask", "__search", "__find", "__sql"];
+const ANSWER_TOOL_SUFFIX = "__answer";
+/** What the Stop hook tells the model when it stopped without calling
+ * `answer` after retrieving: the one thing left to do. */
+export const ANSWER_STOP_REASON =
+  "You retrieved through code-context but did not call its answer tool. Call answer now with the question; " +
+  "the answer is written from the rows you retrieved. Do not write it yourself.";
 
 /** The `answer` tool's input the PreToolUse hook fills. */
 export const NARRATION_INPUT = "narration";
@@ -151,8 +164,73 @@ export function hookChunk(input: string, opts: HookCmdOptions, readFile: (path: 
   return pieces[chunk - 1] ?? null;
 }
 
+/** The tool calls the model made since the person's last question, from a
+ * session transcript: every `tool_use` block of its own messages after the
+ * last user prompt, in order; a subagent's are not its own. */
+export function transcriptToolCalls(jsonl: string): string[] {
+  const entries: Array<{ type?: string; isSidechain?: boolean; message?: { content?: unknown } }> = [];
+  for (const line of jsonl.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const parsed = JSON.parse(line);
+      if (parsed && typeof parsed === "object") entries.push(parsed as (typeof entries)[number]);
+    } catch {
+      /* a partial last line */
+    }
+  }
+  let from = -1;
+  for (let i = 0; i < entries.length; i++) {
+    const e = entries[i];
+    if (e.type !== "user" || e.isSidechain) continue;
+    const content = e.message?.content;
+    const prompt =
+      typeof content === "string"
+        ? content.trim().length > 0
+        : Array.isArray(content) && (content as Array<{ type?: string }>).some((b) => b.type === "text") && !(content as Array<{ type?: string }>).some((b) => b.type === "tool_result");
+    if (prompt) from = i;
+  }
+  if (from < 0) return [];
+  const calls: string[] = [];
+  for (const e of entries.slice(from + 1)) {
+    if (e.type !== "assistant" || e.isSidechain) continue;
+    const content = e.message?.content;
+    if (!Array.isArray(content)) continue;
+    for (const block of content as Array<{ type?: string; name?: string }>) {
+      if (block.type === "tool_use" && typeof block.name === "string") calls.push(block.name);
+    }
+  }
+  return calls;
+}
+
+/** The Stop hook's output: when the model retrieved through this server in
+ * this turn and stopped without calling `answer`, it is sent back for that
+ * one call (`decision: block`, the reason as its instruction); otherwise
+ * nothing, and it stops. `stop_hook_active` set means this hook already
+ * sent it back once in this turn, and a model that still did not call the
+ * tool is let go rather than looped. Measured 2026-09-21 on the demo:
+ * Haiku made three asks and wrote the answer itself, where Sonnet and Opus
+ * called the tool; the instruction alone does not hold every model to it. */
+export function hookStopOutput(input: string, readFile: (path: string) => string | null): string | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(input);
+  } catch {
+    return null;
+  }
+  const event = parsed as { transcript_path?: unknown; stop_hook_active?: unknown } | null;
+  if (!event || typeof event !== "object" || typeof event.transcript_path !== "string") return null;
+  if (event.stop_hook_active === true) return null;
+  const transcript = readFile(event.transcript_path);
+  if (transcript === null) return null;
+  const calls = transcriptToolCalls(transcript);
+  const retrieved = calls.some((name) => name.startsWith("mcp__") && RETRIEVAL_TOOL_SUFFIXES.some((s) => name.endsWith(s)));
+  const answered = calls.some((name) => name.startsWith("mcp__") && name.endsWith(ANSWER_TOOL_SUFFIX));
+  if (!retrieved || answered) return null;
+  return JSON.stringify({ decision: "block", reason: ANSWER_STOP_REASON });
+}
+
 export function hookCmd(event: string, opts: HookCmdOptions): void {
-  if (event !== HOOK_ANSWER && event !== HOOK_ANSWER_INPUT) return;
+  if (event !== HOOK_ANSWER && event !== HOOK_ANSWER_INPUT && event !== HOOK_ANSWER_STOP) return;
   let input = "";
   try {
     input = readFileSync(0, "utf8");
@@ -162,6 +240,11 @@ export function hookCmd(event: string, opts: HookCmdOptions): void {
   const readFile = (path: string) => (existsSync(path) ? readFileSync(path, "utf8") : null);
   if (event === HOOK_ANSWER_INPUT) {
     const output = hookNarrationOutput(input, readFile);
+    if (output !== null) process.stdout.write(output);
+    return;
+  }
+  if (event === HOOK_ANSWER_STOP) {
+    const output = hookStopOutput(input, readFile);
     if (output !== null) process.stdout.write(output);
     return;
   }

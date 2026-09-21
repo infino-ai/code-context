@@ -421,7 +421,13 @@ export function answerInstruction(display: AnswerDisplay): string {
     display === "hook"
       ? "it writes the answer from the rows and shows it to the user itself; then reply with one short sentence and nothing else."
       : "it writes the answer from the rows; reply with its text exactly as returned, in full, and nothing else.";
-  return `- answer - when you have what the question needs, call it with the question alone - the writer already has every row this server returned to you: ${tail}\n`;
+  // Imperative, because a model that has the rows in front of it is tempted
+  // to write: Haiku did on one question in three on the demo (2026-09-21),
+  // where Sonnet and Opus called the tool every time.
+  return (
+    `- answer - REQUIRED after retrieving: never write the answer yourself. Once you have what the question needs, ` +
+    `call answer with the question alone - the writer already has every row this server returned to you: ${tail}\n`
+  );
 }
 
 /** The `answer` tool's description, by display mode and table shape. The
@@ -446,7 +452,8 @@ export function answerDescription(display: AnswerDisplay, rows: boolean): string
       : "It returns the finished answer. Reply with that text exactly as returned, in full, and nothing else - do not summarize or rewrite it.";
   return (
     `Write the final answer to the question, by the platform's own writer, from ${from} - every ask, search, find and sql - with checked citations. ` +
-    `Call it with the question once you have what the question needs. Do not restate what you found: the writer has the rows. ${delivery}`
+    "This is how a question is answered here: never write the answer yourself. Once you have what the question needs, " +
+    `call this tool with the question. Do not restate what you found: the writer has the rows. ${delivery}`
   );
 }
 

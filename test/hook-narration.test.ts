@@ -6,7 +6,15 @@
 // `answer` tool through the hook's updated input.
 
 import { describe, expect, it } from "vitest";
-import { NARRATION_CHARS, NARRATION_INPUT, hookNarrationOutput, transcriptNarration } from "../src/commands/hook-cmd.js";
+import {
+  ANSWER_STOP_REASON,
+  NARRATION_CHARS,
+  NARRATION_INPUT,
+  hookNarrationOutput,
+  hookStopOutput,
+  transcriptNarration,
+  transcriptToolCalls,
+} from "../src/commands/hook-cmd.js";
 
 /** One transcript line as Claude Code writes it. */
 const line = (entry: Record<string, unknown>) => JSON.stringify(entry);
@@ -58,6 +66,40 @@ describe("the narration read from a transcript", () => {
     expect(narration!.endsWith(paragraphs[39])).toBe(true);
     // Whole paragraphs only: the cut falls on a paragraph break.
     expect(narration!.split("\n\n").slice(1).every((p) => /^paragraph \d+ x+$/.test(p))).toBe(true);
+  });
+});
+
+describe("the stop hook", () => {
+  const stopEvent = (transcript: string, extra: Record<string, unknown> = {}) =>
+    JSON.stringify({ session_id: "s", transcript_path: "/s/t.jsonl", cwd: "/r", hook_event_name: "Stop", stop_hook_active: false, ...extra });
+  const reader = (transcript: string) => (p: string) => (p === "/s/t.jsonl" ? transcript : null);
+  const retrievedNoAnswer = [
+    user("How does a refresh differ from a flush?"),
+    assistant([{ type: "tool_use", id: "t1", name: "mcp__code-context__ask", input: { question: "refresh" } }]),
+    toolResult("{\"hits\":[]}"),
+    assistant([{ type: "text", text: "Refresh makes documents visible; flush makes them durable." }]),
+  ].join("\n");
+
+  it("lists the model's own tool calls since the last question", () => {
+    expect(transcriptToolCalls(retrievedNoAnswer)).toEqual(["mcp__code-context__ask"]);
+    expect(transcriptToolCalls(TRANSCRIPT)).toEqual(["mcp__code-context__ask"]);
+    expect(transcriptToolCalls("")).toEqual([]);
+  });
+
+  it("sends the model back for the answer call when it retrieved and stopped without one", () => {
+    expect(JSON.parse(hookStopOutput(stopEvent(retrievedNoAnswer), reader(retrievedNoAnswer))!)).toEqual({ decision: "block", reason: ANSWER_STOP_REASON });
+  });
+
+  it("lets the model stop when it called answer, when it never retrieved, or when it was already sent back once", () => {
+    const answered = [retrievedNoAnswer, assistant([{ type: "tool_use", id: "t2", name: "mcp__code-context__answer", input: { question: "q" } }])].join("\n");
+    expect(hookStopOutput(stopEvent(answered), reader(answered))).toBeNull();
+    const plain = [user("hello"), assistant([{ type: "text", text: "hi" }])].join("\n");
+    expect(hookStopOutput(stopEvent(plain), reader(plain))).toBeNull();
+    const withGrep = [user("q"), assistant([{ type: "tool_use", id: "g", name: "Grep", input: {} }]), assistant([{ type: "text", text: "found" }])].join("\n");
+    expect(hookStopOutput(stopEvent(withGrep), reader(withGrep))).toBeNull();
+    expect(hookStopOutput(stopEvent(retrievedNoAnswer, { stop_hook_active: true }), reader(retrievedNoAnswer))).toBeNull();
+    expect(hookStopOutput(stopEvent(retrievedNoAnswer), () => null)).toBeNull();
+    expect(hookStopOutput("not json", reader(retrievedNoAnswer))).toBeNull();
   });
 });
 
