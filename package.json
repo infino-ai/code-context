@@ -51,13 +51,13 @@
     "prepack": "npm run build"
   },
   "dependencies": {
-    "@huggingface/transformers": "^4.2.0",
+    "@huggingface/transformers": "^4.3.0",
     "@infino-ai/infino": "^0.5.10",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@vscode/tree-sitter-wasm": "^0.3.1",
     "commander": "^15.0.0",
-    "ignore": "^7.0.8",
-    "zod": "^4.5.4"
+    "ignore": "^7.0.9",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
     "@types/node": "^26",
