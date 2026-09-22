@@ -11,6 +11,16 @@
 // longer than one message's cap is shown whole across them (see
 // core/answer-display.ts).
 //
+// `cx hook answer-due` - PostToolUse, on the RETRIEVAL tools rather than on
+// `answer`. Runs the moment rows come back and puts one sentence in front of
+// the model through `additionalContext`: the writer has these rows, do not
+// write the answer yourself, call `answer` when ready. It exists because the
+// two halves of that rule were enforced unequally - a Stop hook sends a model
+// back for the call it skipped, while not-writing was only a sentence in the
+// tool text, read once at the top of the turn. Measured 2026-09-22: Haiku
+// wrote its own answer first in 9 runs of 11 and called the tool afterwards
+// anyway; Opus 0 of 25, Sonnet 0 of 23.
+//
 // `cx hook answer-input` - PreToolUse. Runs before the tool; reads the
 // session transcript Claude Code names in the event and fills the call's
 // `narration` with what the model said since the person's question - its
@@ -41,6 +51,7 @@ export interface HookCmdOptions {
 export const HOOK_ANSWER = "answer";
 export const HOOK_ANSWER_INPUT = "answer-input";
 export const HOOK_ANSWER_STOP = "answer-stop";
+export const HOOK_ANSWER_DUE = "answer-due";
 
 /** The tool names, as Claude Code spells an MCP tool, whose use in a turn
  * means the model retrieved through this server; and the one whose use
@@ -53,6 +64,25 @@ const ANSWER_TOOL_SUFFIX = "__answer";
 export const ANSWER_STOP_REASON =
   "You retrieved through code-context but did not call its answer tool. Call answer now with the question; " +
   "the answer is written from the rows you retrieved. Do not write it yourself.";
+
+/** What the PostToolUse hook puts in front of the model the moment rows come
+ * back, before it has decided what to do with them.
+ *
+ * The asymmetry this closes: the `answer` call is enforced - the Stop hook
+ * sends a model back for it - while "never write the answer yourself" was
+ * only a sentence in the tool text, read once at the top of the turn and
+ * many thousands of tokens before the moment it applies. Measured on the
+ * demo 2026-09-22, across every run that called `answer`: Haiku wrote its own
+ * answer first in 9 of 11, up to 3,918 characters of it, and then called the
+ * tool anyway; Opus did so in 0 of 25 and Sonnet in 0 of 23, neither emitting
+ * more than a 212-character status line. So the instruction holds for the
+ * stronger models and not the weaker one, and what the weaker one needs is
+ * the rule beside the rows rather than at the top of the turn.
+ *
+ * It names no thinking, for the reason the file header gives. */
+export const ANSWER_DUE_NOTE =
+  "code-context: the answer tool's writer already holds these rows. Do not write the answer yourself. " +
+  "When you have what the question needs, call answer with the question alone.";
 
 /** The `answer` tool's input the PreToolUse hook fills. */
 export const NARRATION_INPUT = "narration";
@@ -229,8 +259,37 @@ export function hookStopOutput(input: string, readFile: (path: string) => string
   return JSON.stringify({ decision: "block", reason: ANSWER_STOP_REASON });
 }
 
+/** The PostToolUse output that puts the rule beside the rows: the note goes
+ * to the model through `additionalContext`, which is the model's half of a
+ * PostToolUse result (`systemMessage` is the person's half and the model
+ * never sees it). Returns null for input that is not this event, so a
+ * malformed event prints nothing rather than a stray note.
+ *
+ * Deliberately stateless and unconditional: it fires on every retrieval
+ * result rather than once a turn. A reply issuing five queries gets five
+ * copies of one short sentence, which is cheap against what it is there to
+ * prevent - the run that prompted this wrote 3,899 characters of answer
+ * nobody used - and repetition is what the weaker model needs. The matcher
+ * that selects the retrieval tools is the install's, so this never runs on
+ * the `answer` tool's own result. */
+export function hookAnswerDueOutput(input: string): string | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(input);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  return JSON.stringify({
+    hookSpecificOutput: {
+      hookEventName: "PostToolUse",
+      additionalContext: ANSWER_DUE_NOTE,
+    },
+  });
+}
+
 export function hookCmd(event: string, opts: HookCmdOptions): void {
-  if (event !== HOOK_ANSWER && event !== HOOK_ANSWER_INPUT && event !== HOOK_ANSWER_STOP) return;
+  if (event !== HOOK_ANSWER && event !== HOOK_ANSWER_INPUT && event !== HOOK_ANSWER_STOP && event !== HOOK_ANSWER_DUE) return;
   let input = "";
   try {
     input = readFileSync(0, "utf8");
@@ -245,6 +304,11 @@ export function hookCmd(event: string, opts: HookCmdOptions): void {
   }
   if (event === HOOK_ANSWER_STOP) {
     const output = hookStopOutput(input, readFile);
+    if (output !== null) process.stdout.write(output);
+    return;
+  }
+  if (event === HOOK_ANSWER_DUE) {
+    const output = hookAnswerDueOutput(input);
     if (output !== null) process.stdout.write(output);
     return;
   }

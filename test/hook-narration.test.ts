@@ -7,9 +7,11 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  ANSWER_DUE_NOTE,
   ANSWER_STOP_REASON,
   NARRATION_CHARS,
   NARRATION_INPUT,
+  hookAnswerDueOutput,
   hookNarrationOutput,
   hookStopOutput,
   transcriptNarration,
@@ -133,5 +135,57 @@ describe("the hook's output", () => {
     expect(hookNarrationOutput(event({ transcript_path: "/s/missing.jsonl" }), read)).toBeNull();
     expect(hookNarrationOutput(event(), () => user("q"))).toBeNull();
     expect(hookNarrationOutput("not json", read)).toBeNull();
+  });
+});
+
+describe("`cx hook answer-due`: the rule beside the rows", () => {
+  // The asymmetry it closes, measured on the demo 2026-09-22 across every
+  // run that called `answer`: Haiku wrote its own answer first in 9 of 11,
+  // up to 3,918 characters, and called the tool afterwards anyway; Opus 0 of
+  // 25 and Sonnet 0 of 23, neither over a 212-character status line. The
+  // call was already enforced by the Stop hook; not-writing was only a
+  // sentence at the top of the turn.
+  const event = (extra: Record<string, unknown> = {}) =>
+    JSON.stringify({
+      session_id: "s",
+      transcript_path: "/s/transcript.jsonl",
+      hook_event_name: "PostToolUse",
+      tool_name: "mcp__code-context__ask",
+      tool_input: { question: "How does a refresh differ from a flush?" },
+      tool_response: "{\"hits\":[]}",
+      ...extra,
+    });
+
+  it("puts the note in the model's half of the result, not the person's", () => {
+    const out = JSON.parse(hookAnswerDueOutput(event())!);
+    expect(out.hookSpecificOutput.hookEventName).toBe("PostToolUse");
+    // additionalContext reaches the model; systemMessage would reach only
+    // the person, who does not need telling.
+    expect(out.hookSpecificOutput.additionalContext).toBe(ANSWER_DUE_NOTE);
+    expect(out.hookSpecificOutput.systemMessage).toBeUndefined();
+    expect(out).not.toHaveProperty("systemMessage");
+  });
+
+  it("says both halves of the rule, since one half alone is what failed", () => {
+    expect(ANSWER_DUE_NOTE).toMatch(/Do not write the answer yourself/);
+    expect(ANSWER_DUE_NOTE).toMatch(/call answer with the question/);
+  });
+
+  it("names no thinking, which refused a whole session when a description did", () => {
+    expect(ANSWER_DUE_NOTE).not.toMatch(/thought|thinking|reasoning/i);
+  });
+
+  it("fires on every retrieval result rather than once, and needs no transcript", () => {
+    // Stateless by design: five queries in one reply get five copies of one
+    // short sentence, which is cheap against a 3,899-character answer nobody
+    // uses. It also never reads a file, so it cannot fail on one.
+    expect(hookAnswerDueOutput(event())).toBe(hookAnswerDueOutput(event()));
+    expect(hookAnswerDueOutput(event({ transcript_path: undefined }))).not.toBeNull();
+  });
+
+  it("prints nothing for input that is not an event", () => {
+    expect(hookAnswerDueOutput("not json")).toBeNull();
+    expect(hookAnswerDueOutput("[]")).toBeNull();
+    expect(hookAnswerDueOutput("null")).toBeNull();
   });
 });

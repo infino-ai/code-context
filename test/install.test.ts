@@ -645,7 +645,10 @@ describe("cx install: the answer-display hooks", () => {
     await installCmd({ path: root, db: "https://host/db" }, VERSION);
     const entry = read(configIn(root)).mcpServers["code-context"];
     expect(entry.env).toEqual({ CX_ANSWER_DISPLAY: "hook" });
-    const hooks = read(settingsIn(root)).hooks.PostToolUse as Array<{ matcher: string; hooks: Array<{ type: string; command: string }> }>;
+    const all = read(settingsIn(root)).hooks.PostToolUse as Array<{ matcher: string; hooks: Array<{ type: string; command: string }> }>;
+    // Three chunk entries on the answer tool, then the one on the retrieval
+    // tools that reminds the model the writer has the rows.
+    const hooks = all.slice(0, 3);
     expect(hooks.map((h) => h.matcher)).toEqual([matcher, matcher, matcher]);
     hooks.forEach((h, i) => {
       expect(h.hooks).toHaveLength(1);
@@ -655,6 +658,17 @@ describe("cx install: the answer-display hooks", () => {
       // cannot disagree about which cx they are.
       expect(h.hooks[0].command.startsWith(entry.command)).toBe(true);
     });
+    // The retrieval entry. Its matcher is a regex naming the four retrieval
+    // tools and, deliberately, not `answer`: the note belongs beside rows,
+    // never beside the answer the writer just produced.
+    expect(all).toHaveLength(4);
+    const due = all[3];
+    expect(due.matcher).toBe("mcp__code-context__(ask|search|find|sql)");
+    expect(new RegExp(due.matcher).test("mcp__code-context__ask")).toBe(true);
+    expect(new RegExp(due.matcher).test("mcp__code-context__sql")).toBe(true);
+    expect(new RegExp(due.matcher).test("mcp__code-context__answer")).toBe(false);
+    expect(due.hooks[0].command.endsWith(" hook answer-due")).toBe(true);
+    expect(due.hooks[0].command.startsWith(entry.command)).toBe(true);
     // And one PreToolUse hook on the same tool, filling its narration from
     // the session transcript before it runs.
     const before = read(settingsIn(root)).hooks.PreToolUse as Array<{ matcher: string; hooks: Array<{ type: string; command: string }> }>;

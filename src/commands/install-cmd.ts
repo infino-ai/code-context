@@ -80,13 +80,20 @@ const ANSWER_INPUT_HOOK_EVENT = "PreToolUse";
  * answer-stop`). A Stop entry has no matcher: it runs on every stop and
  * decides from the transcript. */
 const ANSWER_STOP_HOOK_EVENT = "Stop";
-/** Every event our hook entries live under. */
+/** Every event our hook entries live under. The due entry shares
+ * PostToolUse with the chunk entries and is told apart by its matcher. */
 const ANSWER_HOOK_EVENTS = [ANSWER_HOOK_EVENT, ANSWER_INPUT_HOOK_EVENT, ANSWER_STOP_HOOK_EVENT];
 /** The `hook` subcommand's arguments for the Stop entry. */
 const STOP_HOOK_ARGS = ["answer-stop"];
+/** The `hook` subcommand's arguments for the retrieval entry. */
+const DUE_HOOK_ARGS = ["answer-due"];
 /** What our Stop entry's command ends in, and no other entry's: how the
  * matcher-less entry is recognised as ours in a settings file. */
 const STOP_HOOK_COMMAND_TAIL = ` hook ${STOP_HOOK_ARGS.join(" ")}`;
+/** What our retrieval entry's command ends in: the retrieval matcher names
+ * tools a person may have their own hooks on, so the command decides
+ * ownership there as well as the matcher. */
+const DUE_HOOK_COMMAND_TAIL = ` hook ${DUE_HOOK_ARGS.join(" ")}`;
 
 /** Indent for the config we write back, matching the shipped `.mcp.json`. */
 const CONFIG_INDENT = 2;
@@ -425,6 +432,21 @@ export function answerHookMatcher(name: string): string {
   return `mcp__${name}__answer`;
 }
 
+/** The retrieval tools this server offers, as the `answer-due` matcher names
+ * them. `ask` is registered only with a platform database; a matcher naming a
+ * tool that is not registered simply never fires. */
+const RETRIEVAL_TOOLS = ["ask", "search", "find", "sql"];
+
+/** The matcher of the `answer-due` entry: the four retrieval tools and not
+ * `answer`. Claude Code reads a matcher holding characters outside
+ * `[A-Za-z0-9_\- ,|]` as a JavaScript regular expression tested against the
+ * tool name, so the parentheses make this one a regex; `answer` does not
+ * match any alternative in the group, which is what keeps the note off the
+ * answer tool's own result. */
+export function retrievalHookMatcher(name: string): string {
+  return `mcp__${name}__(${RETRIEVAL_TOOLS.join("|")})`;
+}
+
 /** The hook entries that show a written answer to the person: one per
  * chunk, each running `cx hook answer --chunk i --chunks n` on the tool's
  * result (see core/answer-display.ts for why chunks, and commands/hook-cmd.ts
@@ -458,6 +480,17 @@ export function answerStopHookEntry(opts: InstallCmdOptions, version: string, na
   return { hooks };
 }
 
+/** The entry that puts the rule beside the rows: `cx hook answer-due`, run
+ * after each RETRIEVAL tool returns, adding one sentence to the model's
+ * context through the event's `additionalContext` (commands/hook-cmd.ts).
+ * The Stop entry catches a model that skipped the `answer` call; this one is
+ * for the model that makes the call and writes its own answer first anyway,
+ * which is the commoner fault and the expensive one. */
+export function answerDueHookEntry(opts: InstallCmdOptions, version: string, name: string): HookEntry {
+  const { hooks } = hookEntry(opts, version, name, DUE_HOOK_ARGS);
+  return { matcher: retrievalHookMatcher(name), hooks };
+}
+
 /** One hook entry running this package's `hook` command with `args`, on the
  * `answer` tool. */
 function hookEntry(opts: InstallCmdOptions, version: string, name: string, args: string[]): HookEntry {
@@ -474,6 +507,11 @@ function isAnswerHookEntry(entry: unknown, name: string): boolean {
   if (!entry || typeof entry !== "object") return false;
   const { matcher, hooks } = entry as { matcher?: unknown; hooks?: unknown };
   if (matcher === answerHookMatcher(name)) return true;
+  // The retrieval entry names tools the person may well have their own hooks
+  // on, so it is ours by matcher AND command, never by matcher alone.
+  if (matcher === retrievalHookMatcher(name)) {
+    return Array.isArray(hooks) && hooks.length > 0 && hooks.every((h) => h && typeof h === "object" && typeof (h as { command?: unknown }).command === "string" && (h as { command: string }).command.endsWith(DUE_HOOK_COMMAND_TAIL));
+  }
   if (matcher !== undefined || !Array.isArray(hooks) || !hooks.length) return false;
   return hooks.every((h) => h && typeof h === "object" && typeof (h as { command?: unknown }).command === "string" && (h as { command: string }).command.endsWith(STOP_HOOK_COMMAND_TAIL));
 }
@@ -486,7 +524,7 @@ export type AnswerHooks = Record<string, HookEntry[]>;
  * hooks that show the answer, and the one that fills its narration. */
 export function answerHooks(opts: InstallCmdOptions, version: string, name: string): AnswerHooks {
   return {
-    [ANSWER_HOOK_EVENT]: answerHookEntries(opts, version, name),
+    [ANSWER_HOOK_EVENT]: [...answerHookEntries(opts, version, name), answerDueHookEntry(opts, version, name)],
     [ANSWER_INPUT_HOOK_EVENT]: [answerInputHookEntry(opts, version, name)],
     [ANSWER_STOP_HOOK_EVENT]: [answerStopHookEntry(opts, version, name)],
   };
