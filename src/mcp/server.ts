@@ -482,6 +482,54 @@ export function apiToolsInstruction(rows: boolean): string {
   );
 }
 
+/** Whether an index is an index of logs: more of its chunks are log windows
+ * than anything else. The chunker tags `.log`, `.out` and `.err` files
+ * `log`. */
+export function isLogIndex(manifest: { languages?: Record<string, number>; chunks?: number } | undefined): boolean {
+  const logs = manifest?.languages?.log ?? 0;
+  const total = manifest?.chunks ?? Object.values(manifest?.languages ?? {}).reduce((n, c) => n + c, 0);
+  return logs > 0 && logs * 2 > total;
+}
+
+/** The instructions for an index of log files, in the words of the thing
+ * indexed. The code instructions say "this repository" and "code", and on
+ * the demo's CI-logs corpus (2026-09-23) Opus read a folder of `.log` files
+ * as not that: three arms, three Bash-only runs, zero calls to find,
+ * search, sql or ask, with "Look with the index first" in front of it. The
+ * owner: "we need to somehow tell claude to use our tools even for logs";
+ * and, on the order, "maybe it should try find or sql first and then try
+ * ask etc for broader questions. but just going to bash is not what i
+ * meant." So: the tools named for logs, find and sql first, ask for the
+ * questions that span the logs, and the one thing not to do said plainly. */
+export function logIndexInstructions(agentTools: boolean, files: number, chunks: number): string {
+  return (
+    `code-context is an index of the ${files} log files in this directory - every line of every log, in ` +
+    `${chunks} windows. Which tool for which question:\n` +
+    "- find - every line in every log containing an exact string (an error text, a test name, a step name), " +
+    "with the count per log. Where you would grep, use this.\n" +
+    "- search - which log windows are about X: exact terms and meaning in one ranked pass over every log.\n" +
+    "- sql - counts and rankings across the logs in one statement: which logs mention X and how many lines " +
+    "each (rank through bm25_search or hybrid_search over the chunks table and GROUP BY path).\n" +
+    (agentTools
+      ? "- ask - a question or task in plain language over all the logs; returns the log lines it retrieved " +
+        "(facts with path:line and the text), not an answer: compose from them. Spawn several in parallel for " +
+        "independent questions.\n"
+      : "") +
+    "Start with find or sql - a literal, a count, a ranking across the logs" +
+    (agentTools ? " - and use ask for a question that spans the logs. " : ". ") +
+    "Do not open, read or grep the log files with Bash, Grep or Read: the index holds every line of every log " +
+    "and answers in one call, and a single log here can run to tens of thousands of lines. Read a file only " +
+    "for a hit marked truncated.\n" +
+    SWEEP_TO_A_TOOL +
+    "\n" +
+    "Hits carry the lines: when a hit answers the question, answer from it. A hit's content shows each line " +
+    "with its own number in the file, so cite a place as path:line or path:start-end from those numbers and " +
+    "only where the thing you name sits - never the hit's whole line range, which spans the window. " +
+    CITE_EXACTLY +
+    " A 'partial' marker means files over the index cap were left out, so a missing match is not proof of absence."
+  );
+}
+
 export function indexFirst(agentTools: boolean): string {
   const tools = agentTools ? "find, search, sql and ask" : "find, search and sql";
   return (
@@ -1272,6 +1320,12 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
   }
   if (apiTools) sqlDescription += API_TOOLS_SQL_NOTE;
 
+  // What the local index holds, read once here: an index of logs gets its
+  // instructions in log words (`logIndexInstructions`), a code index the
+  // text below.
+  const startManifest = readManifest(indexDir(defaultRoot));
+  const logIndex = mode.kind === "chunks" && isLogIndex(startManifest);
+
   const server = new McpServer(
     { name: "code-context", version: "0.1.2" },
     {
@@ -1279,6 +1333,8 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
         ? rowsInstructions(rows, agentTools)
         : mode.kind === "unresolved"
         ? unresolvedInstructions(TABLE, mode.cause, agentTools)
+        : logIndex
+        ? logIndexInstructions(agentTools, startManifest?.files ?? 0, startManifest?.chunks ?? 0)
         : "code-context is a local index of this repository. Which tool for which question:\n" +
         "- find - every line containing an exact string, where you would grep.\n" +
         // With `ask` on the surface, `search` must not claim the same question.

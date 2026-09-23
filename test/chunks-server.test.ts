@@ -36,7 +36,7 @@ process.env.CX_AUTO_INDEX = "0";
 delete process.env.CX_NO_RECEIPT;
 delete process.env.CX_INDEX_DIR;
 
-const { SQL_DESCRIPTION, PREFER_SEVERAL_ASKS, FIND_BY_BARE_NAME, indexFirst, findHint } = await import("../src/mcp/server.js");
+const { SQL_DESCRIPTION, PREFER_SEVERAL_ASKS, FIND_BY_BARE_NAME, indexFirst, findHint, isLogIndex, logIndexInstructions } = await import("../src/mcp/server.js");
 const { API_KEY_ENV, MANIFEST_NAME, TABLE, DEFAULT_TABLE, configureHosted, hostedSettingsFromFlags } = await import("../src/core/config.js");
 
 /** One chunk as the hosted search returns it. */
@@ -129,6 +129,35 @@ function expectSharedSentences(instructions: string): void {
     "Be efficient: prefer few, well-chosen tool calls, and hand a sweep across many files to a tool built for it rather than searching by hand.",
   );
 }
+
+describe("an index of logs is told apart and gets its instructions in log words", () => {
+  it("is a log index when more of its chunks are log windows than anything else", () => {
+    expect(isLogIndex({ languages: { log: 4903 }, chunks: 4903 })).toBe(true);
+    expect(isLogIndex({ languages: { log: 3000, other: 200 }, chunks: 3200 })).toBe(true);
+    expect(isLogIndex({ languages: { ts: 5000, log: 12 }, chunks: 5012 })).toBe(false);
+    expect(isLogIndex({ languages: { rs: 5539 }, chunks: 5539 })).toBe(false);
+    expect(isLogIndex(undefined)).toBe(false);
+  });
+
+  it("names the logs, puts find and sql first, ask for the questions that span them, and says not to grep the files", () => {
+    const text = logIndexInstructions(true, 35, 4903);
+    expect(text).toContain("an index of the 35 log files in this directory");
+    expect(text).toContain("4903 windows");
+    expect(text).not.toContain("repository");
+    expect(text).toContain("- find - every line in every log containing an exact string");
+    expect(text).toContain("- sql - counts and rankings across the logs");
+    expect(text).toContain("- ask - a question or task in plain language over all the logs");
+    expect(text).toContain("Start with find or sql");
+    expect(text).toContain("use ask for a question that spans the logs");
+    expect(text).toContain("Do not open, read or grep the log files with Bash, Grep or Read");
+    expectSharedSentences(text);
+    // Without the agent tools there is no ask line and no ask in the order.
+    const alone = logIndexInstructions(false, 35, 4903);
+    expect(alone).not.toContain("- ask -");
+    expect(alone).not.toContain("use ask");
+    expect(alone).toContain("Start with find or sql");
+  });
+});
 
 describe("the hint on an empty find", () => {
   it("names the bare name with defines when a signature or phrase found nothing", () => {
