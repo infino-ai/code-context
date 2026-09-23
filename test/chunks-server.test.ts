@@ -281,6 +281,32 @@ describe("the chunks table with CX_AGENT_TOOLS=0: the lane that hides ask", () =
   });
 });
 
+describe("the chunks table with CX_ANSWER_TOOL=0: the caller's model writes the answer", () => {
+  let s: Started;
+  beforeAll(async () => {
+    process.env.CX_ANSWER_TOOL = "0";
+    s = await start(up(), "cx-chunks-noanswer-");
+  });
+  afterAll(async () => {
+    delete process.env.CX_ANSWER_TOOL;
+    await stop(s);
+  });
+
+  it("keeps ask and drops answer, from the tool list and from the instructions alike", async () => {
+    const { tools } = await s.client.listTools();
+    const names = tools.map((t) => t.name);
+    expect(names).toContain("ask");
+    expect(names).not.toContain("answer");
+    const instructions = s.client.getInstructions() ?? "";
+    expect(instructions).toContain("- ask -");
+    expect(instructions).not.toContain("- answer -");
+    expect(instructions).not.toContain("never write the answer yourself");
+    // The four retrieval tools are still the four; the index-first sentence
+    // names ask among them.
+    expect(instructions).toContain(indexFirst(true));
+  });
+});
+
 describe("the chunks table with CX_ANSWER_DISPLAY=hook: the install wrote the hook", () => {
   let s: Started;
   beforeAll(async () => {

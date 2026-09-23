@@ -70,6 +70,7 @@ import {
   autoIndexEnabled as autoIndexSetting,
   autoSyncEnabled as autoSyncSetting,
   agentToolsEnabled,
+  answerToolEnabled,
   subagentK,
   subagentMaxTurns,
   subagentMaxWallSecs,
@@ -1077,6 +1078,11 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
   // text's card and validation note.
   const platformTools = hosted !== null;
   const agentTools = platformTools && agentToolsEnabled();
+  // Whether `answer` rides beside `ask`. Off (CX_ANSWER_TOOL=0) the caller's
+  // model writes the final answer from the rows itself, and the tool and its
+  // routing line are both absent - for the same reason `ask` is taken out at
+  // the source above: a line for a tool that is not there costs a turn.
+  const answerTool = agentTools && answerToolEnabled();
   // How the `answer` tool delivers the written answer: through the hook `cx
   // install` wrote (the entry sets CX_ANSWER_DISPLAY), or as text the model
   // relays. Read once; the instructions and the tool text say the same thing.
@@ -1271,7 +1277,7 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
             // must reach the person without the caller's model retyping it -
             // see core/answer-display.ts for the two deliveries and what
             // each was measured to do.
-            answerInstruction(answerDisplay)
+            (answerTool ? answerInstruction(answerDisplay) : "")
           : "") +
         indexFirst(agentTools) +
         "\n" +
@@ -1914,21 +1920,23 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
       }
     };
 
-    server.registerTool(
-      "answer",
-      {
-        title: "Write the answer from what was retrieved, and deliver it",
-        annotations: READ_ONLY,
-        description: answerDescription(answerDisplay, Boolean(rows)),
-        inputSchema: {
-          question: z.string().min(1).describe("The question as the user asked it."),
-          narration: z.string().optional().describe("Set by the installed hook. Leave it out."),
-          under: retrievalInputs.under,
-          path: retrievalInputs.path,
+    if (answerTool) {
+      server.registerTool(
+        "answer",
+        {
+          title: "Write the answer from what was retrieved, and deliver it",
+          annotations: READ_ONLY,
+          description: answerDescription(answerDisplay, Boolean(rows)),
+          inputSchema: {
+            question: z.string().min(1).describe("The question as the user asked it."),
+            narration: z.string().optional().describe("Set by the installed hook. Leave it out."),
+            under: retrievalInputs.under,
+            path: retrievalInputs.path,
+          },
         },
-      },
-      writeAnswer,
-    );
+        writeAnswer,
+      );
+    }
   }
 
   const transport = serveOptions.transport ?? new StdioServerTransport();

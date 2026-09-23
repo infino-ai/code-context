@@ -288,6 +288,18 @@ export function agentToolsEnabled(): boolean {
   return !OFF_VALUES.includes((process.env.CX_AGENT_TOOLS ?? "").toLowerCase());
 }
 
+/** Whether the MCP server registers `answer` beside `ask` (CX_ANSWER_TOOL,
+ * default on). Off, the model that called the tools writes the final answer
+ * itself from the rows they returned: `ask` stays, `answer` is neither
+ * registered nor named in the instructions, and nothing tells the model
+ * "never write the answer yourself". This is the shape the hosted lane had
+ * before the tool existed, and it is kept so the two writers can be measured
+ * against each other on one deployment. Says nothing when CX_AGENT_TOOLS is
+ * off, which removes both tools. */
+export function answerToolEnabled(): boolean {
+  return !OFF_VALUES.includes((process.env.CX_ANSWER_TOOL ?? "").toLowerCase());
+}
+
 /** The table this client builds when nothing overrides the name: the one
  * table a process owns. A process whose `CX_TABLE` names anything else is a
  * search-only process over a table something else loaded (see TABLE), and
