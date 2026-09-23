@@ -155,7 +155,7 @@ GROUP BY t.path ORDER BY chunks_with_term DESC LIMIT 15
   is a new root and builds its own index on first query (the main checkout's
   index does not carry over).
 - When the server was started with `--db`, the same index is also kept on an
-  infino-platform database; the build and every sync write both, so nothing
+  Infino platform database; the build and every sync write both, so nothing
   about the lifecycle changes for you.
 
 ## ask (when present)

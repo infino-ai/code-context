@@ -27,10 +27,10 @@ Not unless you ask it to. By default there are no accounts, no API keys, and
 no server: the embedding model is a small local model downloaded once from
 the public model hub, and after that everything runs offline. The one opt-in
 is `--db` (next question), which also keeps the index in a database you own
-on infino-platform, so the platform's `ask` tool can run
+on the Infino platform, so the platform's `ask` tool can run
 over it.
 
-### Can the index also live on infino-platform?
+### Can the index also live on the Infino platform?
 
 Yes, and it is the same index. `cx index --db https://host/<database>
 --api-key-file <path>` builds the local index exactly as without the flag and

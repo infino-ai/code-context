@@ -106,7 +106,7 @@ cx sql <statement>        read-only SQL; --embed q="text" fills {{q}}
 cx status                 what the index holds, how fresh, vector readiness
 cx usage                  ledger of queries run and what each returned  (-n, --all, --clear, --json)
 cx mcp                    serve the MCP tools over stdio
-cx index --db <url>       also keep the index on an infino-platform database  (--api-key-file, --embed-provider, --analyzer)
+cx index --db <url>       also keep the index on an Infino platform database  (--api-key-file, --embed-provider, --analyzer)
 cx mcp --db <url>         also serve ask over that copy                    (--api-key-file, the ask caps)
 ```
 
@@ -149,7 +149,7 @@ stack.
   Every chunk carries `path, start_line, end_line, lang, content`.
 - **Index:** [infino](https://github.com/infino-ai/infino) tables - BM25 and
   IVF vector indexes over a single copy of the data - queried in-process
-  through the Node binding locally, and the same table on an infino-platform
+  through the Node binding locally, and the same table on an Infino platform
   database for `ask`, written by the same builds and syncs.
 - **Embeddings:** a small local model for the local copy (chosen by a
   [measured eval](embedder-eval.md)); the platform embeds its copy with its
