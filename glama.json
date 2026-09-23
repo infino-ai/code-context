@@ -4,5 +4,19 @@
     "muralikpbhat",
     "ashishmishra26",
     "ekechinwokah"
-  ]
+  ],
+  "baseImage": "debian:trixie-slim",
+  "nodeVersion": "24",
+  "buildSteps": [
+    "pnpm install",
+    "pnpm run build"
+  ],
+  "cmdArguments": [
+    "mcp-proxy",
+    "--",
+    "node",
+    "dist/cli.js",
+    "mcp"
+  ],
+  "placeholderArguments": {}
 }
