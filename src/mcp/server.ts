@@ -71,6 +71,7 @@ import {
   autoSyncEnabled as autoSyncSetting,
   agentToolsEnabled,
   answerToolEnabled,
+  apiToolsEnabled,
   subagentK,
   subagentMaxTurns,
   subagentMaxWallSecs,
@@ -455,6 +456,29 @@ export function answerDescription(display: AnswerDisplay, rows: boolean): string
     `Write the final answer to the question, by the platform's own writer, from ${from} - every ask, search, find and sql - with checked citations. ` +
     "This is how a question is answered here: never write the answer yourself. Once you have what the question needs, " +
     `call this tool with the question. Do not restate what you found: the writer has the rows. ${delivery}`
+  );
+}
+
+/** What `sql` says about itself when the card and the verdict are tools
+ * rather than parts of it (CX_API_TOOLS). */
+const API_TOOLS_SQL_NOTE =
+  " The result is the rows alone: read the table's measured shape with table_card before your first " +
+  "statement, and check a result against the question with validate.";
+
+/** The routing lines for the platform's routes offered as tools: the card,
+ * the retrieval check, and - over a code table - the citation pass. */
+export function apiToolsInstruction(rows: boolean): string {
+  return (
+    "\n- table_card - what a model needs to know about the table before its first query: its columns with " +
+    "their index roles, per-column statistics and sample rows, as the platform measured them. Call it once, first.\n" +
+    "- validate - did this result answer this question? The same check the platform's own retrieval loop " +
+    "gates itself on: pass the question, the statement that ran and the rows it returned; a refusal names " +
+    "the question's terms the index does not hold (do not search for those again) and a statement to run instead.\n" +
+    (rows
+      ? ""
+      : "- cite - check the citations of the answer you drafted against the index: each path:line is " +
+        "repaired where the index says it belongs and each cited sentence is graded against its lines. " +
+        "Run it on your draft before you reply, and reply with the answer it returns.\n")
   );
 }
 
@@ -939,7 +963,9 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
     question?: string,
     column: string = CONTENT_COLUMN,
   ): Promise<{ verdict?: Record<string, unknown>; telemetry?: { rttMs: number; readTokens?: number } }> => {
-    if (!ctx.hosted || !verdictDb) return {};
+    // Under the API tools the verdict is the model's to ask for (`validate`),
+    // not attached to every statement.
+    if (!ctx.hosted || !verdictDb || apiTools) return {};
     try {
       const verdict = await verdictDb.validate({
         table: TABLE,
@@ -1083,6 +1109,10 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
   // routing line are both absent - for the same reason `ask` is taken out at
   // the source above: a line for a tool that is not there costs a turn.
   const answerTool = agentTools && answerToolEnabled();
+  // The platform's own routes as tools the model calls (CX_API_TOOLS):
+  // table_card, validate, cite. With them on, sql carries no card and no
+  // verdict - the model asks for both - see apiToolsEnabled.
+  const apiTools = platformTools && apiToolsEnabled();
   // How the `answer` tool delivers the written answer: through the hook `cx
   // install` wrote (the entry sets CX_ANSWER_DISPLAY), or as text the model
   // relays. Read once; the instructions and the tool text say the same thing.
@@ -1236,15 +1266,16 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
 
   const rows = mode.kind === "rows" ? mode.shape : null;
   let sqlDescription = rows ? rowsSqlDescription(rows) : mode.kind === "unresolved" ? unresolvedDescription("Read-only SQL", TABLE) : SQL_DESCRIPTION;
-  if (platformTools) {
+  if (platformTools && !apiTools) {
     sqlDescription += VALIDATION_NOTE;
     if (card) sqlDescription += CARD_PREAMBLE + JSON.stringify(card);
   }
+  if (apiTools) sqlDescription += API_TOOLS_SQL_NOTE;
 
   const server = new McpServer(
     { name: "code-context", version: "0.1.2" },
     {
-      instructions: rows
+      instructions: (rows
         ? rowsInstructions(rows, agentTools)
         : mode.kind === "unresolved"
         ? unresolvedInstructions(TABLE, mode.cause, agentTools)
@@ -1291,7 +1322,7 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
         " Read a file only for a hit marked truncated. " +
         "Every tool takes an optional 'path' (an absolute repo root) to target another repository. " +
         "A 'partial' marker means files over the index cap were left out, so a missing match is not " +
-        "proof of absence.",
+        "proof of absence.") + (apiTools ? apiToolsInstruction(Boolean(rows)) : ""),
     },
   );
 
@@ -1702,6 +1733,100 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
       }
     },
   );
+
+  if (apiTools && hosted) {
+    // The platform's routes as tools (CX_API_TOOLS). One client for the
+    // three, no cold-start retries: a model asking for a card or a check
+    // waits on the answer, not on a database coming up.
+    const apiDb = hostedDbFor(hosted, { ...hostedOptions, coldStartSecs: 0 });
+    // The text column a check or a citation is read against: the chunks
+    // table's content, or a rows table's own primary text.
+    const apiColumn = rows ? rows.primaryText : CONTENT_COLUMN;
+
+    server.registerTool(
+      "table_card",
+      {
+        title: "The table's measured shape, before the first query",
+        annotations: READ_ONLY,
+        description:
+          `What a model needs to know about ${TABLE} before its first query: its columns with their index ` +
+          "roles, per-column statistics (min, max, distinct counts) and sample rows, as the platform's " +
+          "optimizer last measured them from the table itself. Use it to choose columns and write a statement " +
+          "without discovering the shape by trial. Call it once, before sql or search.",
+        inputSchema: {
+          tier: z.enum(["lean", "enriched"]).optional().describe("The card's depth: lean (the measured shape, the default) or enriched (adds column descriptions and synonyms)."),
+        },
+      },
+      async ({ tier }: { tier?: "lean" | "enriched" }) => {
+        try {
+          const record = await apiDb.tableCard(TABLE, tier);
+          return ok((record.card ?? record) as Record<string, unknown>);
+        } catch (err) {
+          return fail(`table_card failed: ${(err as Error).message}${refusalHint(err)}`);
+        }
+      },
+    );
+
+    server.registerTool(
+      "validate",
+      {
+        title: "Did this result answer this question?",
+        annotations: READ_ONLY,
+        description:
+          "Did this result answer this question? The same check the platform's own retrieval loop gates " +
+          "itself on, for a caller driving its own retrieval: pass the question you are answering, the " +
+          "statement that ran and the rows it returned. 'valid' means the rows would be accepted as answering " +
+          "the question's terms - no rows, an aggregate of zeros, or rows naming nothing the question named " +
+          "are refused with the reason - not that they are correct. A refusal names the question's terms that " +
+          "occur nowhere in the index ('absent': no query will find them, so do not search for them again) and " +
+          "carries a 'suggestion' statement when the one that ran should be rewritten. Sent with no rows, it " +
+          "is the diagnosis alone: which of the question's terms the index holds, to check before a query.",
+        inputSchema: {
+          question: z.string().min(1).describe("The question the rows are meant to answer, as the user asked it."),
+          statement: z.string().min(1).describe("The statement that produced the rows, as it ran - a SQL statement, or the search or find call."),
+          rows: z.array(z.record(z.string(), z.unknown())).describe("The rows it returned, as objects; an empty array checks the question's terms against the index alone."),
+        },
+      },
+      async ({ question, statement, rows: given }: { question: string; statement: string; rows: Record<string, unknown>[] }) => {
+        try {
+          const verdict = await apiDb.validate({ table: TABLE, column: apiColumn, statement, rows: given, question });
+          return ok(verdict as Record<string, unknown>);
+        } catch (err) {
+          return fail(`validate failed: ${(err as Error).message}${refusalHint(err)}`);
+        }
+      },
+    );
+
+    // Citations are path:line over a code table; a rows table is cited by
+    // its key, and the pass has nothing to check there.
+    if (!rows) {
+      server.registerTool(
+        "cite",
+        {
+          title: "Check and repair an answer's citations, grade each cited sentence",
+          annotations: READ_ONLY,
+          description:
+            "Check an answer's citations against the index: every path:line and path:start-end in your draft " +
+            "is checked against the rows of the cited file, repaired where the index says it belongs, and each " +
+            "cited sentence is graded against the lines it cites. Returns the answer as it stands after the " +
+            "pass, how many citations held, what was repaired or could not be placed, and the grades. Run it " +
+            "on your draft before you reply, and reply with the answer it returns.",
+          inputSchema: {
+            answer: z.string().min(1).describe("The answer you drafted, with its citations as you wrote them."),
+            question: z.string().optional().describe("The question the answer answers, shown to the grader beside each claim."),
+          },
+        },
+        async ({ answer, question }: { answer: string; question?: string }) => {
+          try {
+            const result = await apiDb.cite({ table: TABLE, column: CONTENT_COLUMN, answer, ...(question ? { question } : {}) });
+            return ok(result as Record<string, unknown>);
+          } catch (err) {
+            return fail(`cite failed: ${(err as Error).message}${refusalHint(err)}`);
+          }
+        },
+      );
+    }
+  }
 
   if (agentTools) {
     /** The inputs of `ask`. */

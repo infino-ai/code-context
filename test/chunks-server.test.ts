@@ -307,6 +307,84 @@ describe("the chunks table with CX_ANSWER_TOOL=0: the caller's model writes the 
   });
 });
 
+/** The platform with its routes as tools: a card computed for the table, the
+ * check and the citation pass answering. */
+const CARD = { schema: [{ name: "path", index: "key" }, { name: "content", index: "fts" }], rows: 12, samples: [] };
+const withApiRoutes = () =>
+  scriptPlatform({
+    list_tables: () => [200, [TABLE]],
+    table_card: () => [200, { card: CARD, built_at: "2026-09-23T00:00:00Z" }],
+    hybrid_search: () => [200, [CHUNK]],
+    query_sql: () => [200, [{ n: 7 }]],
+    validate: (body) => [200, { valid: (body?.rows as unknown[]).length > 0, check: "anchors", anchors: ["f"], rows: (body?.rows as unknown[]).length }],
+    cite: (body) => [200, { answer: body?.answer, citations: 1, held: 1, rows_read: 3, model_tokens: 0 }],
+  });
+
+describe("the chunks table with CX_API_TOOLS=1 and no agent tools: the platform's routes as tools", () => {
+  let s: Started;
+  beforeAll(async () => {
+    process.env.CX_API_TOOLS = "1";
+    process.env.CX_AGENT_TOOLS = "0";
+    s = await start(withApiRoutes(), "cx-chunks-api-");
+  });
+  afterAll(async () => {
+    delete process.env.CX_API_TOOLS;
+    delete process.env.CX_AGENT_TOOLS;
+    await stop(s);
+  });
+
+  it("registers table_card, validate and cite beside find, search and sql, and names them; sql carries neither card nor verdict", async () => {
+    const { tools } = await s.client.listTools();
+    const names = tools.map((t) => t.name);
+    expect(names).toEqual(expect.arrayContaining(["find", "search", "sql", "table_card", "validate", "cite"]));
+    expect(names).not.toContain("ask");
+    expect(names).not.toContain("answer");
+    const sql = tools.find((t) => t.name === "sql")?.description ?? "";
+    expect(sql).not.toContain("'validation'");
+    expect(sql).not.toContain("The table's own measured shape");
+    expect(sql).toContain("read the table's measured shape with table_card");
+    const instructions = s.client.getInstructions() ?? "";
+    expect(instructions).toContain("- table_card -");
+    expect(instructions).toContain("- validate -");
+    expect(instructions).toContain("- cite -");
+    expect(instructions).not.toContain("- ask -");
+    // The card was still read at startup for the sql text; under the tools
+    // it is the model's to ask for, so nothing folds it in.
+    expect(s.startup).toEqual(["table_card"]);
+  });
+
+  it("table_card returns the card, validate sends the question with the statement and rows, cite sends the draft", async () => {
+    const card = await call(s, "table_card", {});
+    expect(card.ok).toBe(true);
+    expect(card.ops).toEqual(["table_card"]);
+    expect(card.value).toEqual(CARD);
+
+    const verdict = await call(s, "validate", { question: "where is f?", statement: "SELECT 1", rows: [{ path: "src/a.ts" }] });
+    expect(verdict.ok).toBe(true);
+    expect(verdict.ops).toEqual(["validate"]);
+    expect(verdict.value).toMatchObject({ valid: true, check: "anchors", rows: 1 });
+    const sent = s.sent.at(-1)?.body;
+    expect(sent).toMatchObject({ table_name: TABLE, field_name: "content", statement: "SELECT 1", question: "where is f?", rows: [{ path: "src/a.ts" }] });
+
+    const cited = await call(s, "cite", { answer: "f is at src/a.ts:1.", question: "where is f?" });
+    expect(cited.ok).toBe(true);
+    expect(cited.ops).toEqual(["cite"]);
+    expect(cited.value).toMatchObject({ answer: "f is at src/a.ts:1.", held: 1 });
+    expect(s.sent.at(-1)?.body).toMatchObject({ table_name: TABLE, field_name: "content", answer: "f is at src/a.ts:1.", question: "where is f?" });
+  });
+
+  it("a sql statement under the tools returns rows with no verdict attached", async () => {
+    // A statement that embeds runs on the platform (the local index is not
+    // built here); with the tools on, no validate follows it.
+    const statement = `SELECT path FROM hybrid_search('${TABLE}','content','body','embedding', {{q}}, 30)`;
+    const r = await call(s, "sql", { query: statement, embed: { q: "body" }, question: "where is body?" });
+    expect(r.ok, String(r.value)).toBe(true);
+    expect(r.ops).toContain("query_sql");
+    expect(r.ops).not.toContain("validate");
+    expect((r.value as Record<string, unknown>).validation).toBeUndefined();
+  });
+});
+
 describe("the chunks table with CX_ANSWER_DISPLAY=hook: the install wrote the hook", () => {
   let s: Started;
   beforeAll(async () => {

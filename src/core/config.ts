@@ -51,6 +51,8 @@ export const DEFAULT_SUBAGENT_MAX_WALL_SECS = 120;
 
 /** Spellings that turn a boolean env flag off (`CX_AUTO_INDEX=0`, ...). */
 const OFF_VALUES = ["0", "false", "no"];
+/** The spellings that switch a default-off setting on. */
+const ON_VALUES = ["1", "true", "yes"];
 
 /** Who fills the platform table's vectors: `platform` (its embedding column
  * is filled and queried server-side with the platform's own model) or `local`
@@ -298,6 +300,21 @@ export function agentToolsEnabled(): boolean {
  * off, which removes both tools. */
 export function answerToolEnabled(): boolean {
   return !OFF_VALUES.includes((process.env.CX_ANSWER_TOOL ?? "").toLowerCase());
+}
+
+/** Whether the MCP server offers the platform's own API routes as tools the
+ * model calls itself (CX_API_TOOLS, default off): `table_card`, `validate`
+ * and `cite`. On, `sql` hands back rows alone - no card in its text, no
+ * verdict on its result - so the model reads the table's shape, checks a
+ * result against the question, and checks its answer's citations by
+ * choosing to, the way a caller driving its own retrieval against the
+ * platform would. Off is the measured default: the card and the verdict
+ * ride inside `sql`, because a check the model may call is a check it
+ * declined when it was offered (the card tool, 2026-09-11). The owner,
+ * 2026-09-23: "can we offer the full set of tools we built ... but without
+ * hydrate and sub_agent ... let me see what happens." */
+export function apiToolsEnabled(): boolean {
+  return ON_VALUES.includes((process.env.CX_API_TOOLS ?? "").toLowerCase());
 }
 
 /** The table this client builds when nothing overrides the name: the one

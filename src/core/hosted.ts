@@ -417,6 +417,29 @@ export class HostedDb {
     return this.parseJson(exchange, "validate") as RowRecord;
   }
 
+  /** `POST /v1/cite/{db}`: an answer's `path:line` and `path:start-end`
+   * citations checked against a code table, repaired where the index says
+   * where they belong, and - on a deployment that runs the grading model -
+   * each cited sentence graded against its lines. The response carries the
+   * answer as it stands after the pass (`answer`), the counts (`citations`,
+   * `held`), what was `repaired`, `unplaced`, `unheld` and why, and `graded`
+   * when a model ran; the model and its key stay on the platform. The pass
+   * the platform runs on its own written answers, offered here to a caller
+   * whose answer its own model wrote. */
+  async cite(req: { table: string; column: string; answer: string; question?: string }): Promise<RowRecord> {
+    const body: RowRecord = { table_name: req.table, field_name: req.column, answer: req.answer };
+    if (req.question !== undefined) body.question = req.question;
+    const exchange = await this.call({
+      op: "cite",
+      method: "POST",
+      body: JSON.stringify(body),
+      contentType: JSON_CONTENT_TYPE,
+      acceptJson: true,
+      timeoutMs: this.timeoutMs,
+    });
+    return this.parseJson(exchange, "cite") as RowRecord;
+  }
+
   /** `GET /v1/table_card/{db}?table=[&tier=]`: the table's card - its schema
    * with each column's index role, per-column statistics (min, max, distinct)
    * and sample rows, as the platform's optimizer last computed them from the
