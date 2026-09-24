@@ -274,10 +274,22 @@ const CARD_PREAMBLE =
  * names every column, so from the model's side a card tool adds nothing it
  * can see it needs, while what the card actually adds is the statistics. A
  * fact that cannot be declined has to be in the text, not behind a call. */
-export const SQL_DESCRIPTION =
+/** The first sentence of the sql text: what the statement runs over. Kept
+ * apart so the sibling tables, when a deployment names some, are said right
+ * after it and not at the tail. Measured on the demo's 64-project corpus
+ * (2026-09-24, host 71): with the siblings appended after some 1,450
+ * tokens of recipes and the card, Opus wrote four statements over the code
+ * table alone, looked for logs among its files, and answered that the
+ * corpus had no issues and no test runs; on the host before, with a shorter
+ * text, it had joined the logs table at once. What the model must know to
+ * choose a table has to come before what it must know to write the query. */
+export const SQL_DESCRIPTION_OPENING =
   "Read-only SQL, one SELECT or WITH, over " +
   `${TABLE}(path, start_line, end_line, lang, symbol, content[, embedding]) - lang is the ` +
-  "file extension, e.g. 'rs' - for counts, rankings, and GROUP BY across the whole repo. " +
+  "file extension, e.g. 'rs' - for counts, rankings, and GROUP BY across the whole repo. ";
+
+export const SQL_DESCRIPTION =
+  SQL_DESCRIPTION_OPENING +
   "The search functions are table-valued: a ranked search is a relation, so WHERE, GROUP BY, " +
   "ORDER BY and joins compose with it in one pass, and one query replaces the several round " +
   "trips of searching, then filtering, then counting. Rank through a search relation rather " +
@@ -1408,13 +1420,19 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
   };
 
   const rows = mode.kind === "rows" ? mode.shape : null;
-  let sqlDescription = rows ? rowsSqlDescription(rows) : mode.kind === "unresolved" ? unresolvedDescription("Read-only SQL", TABLE) : SQL_DESCRIPTION;
+  // The sibling tables come second, right after what the statement runs
+  // over, on the code text; the other texts take them at the end.
+  const siblingText = siblingNames.length > 0 ? siblingsNote(TABLE, siblings, siblingsUnresolved, siblingNotes()) : "";
+  let sqlDescription = rows
+    ? rowsSqlDescription(rows) + siblingText
+    : mode.kind === "unresolved"
+    ? unresolvedDescription("Read-only SQL", TABLE) + siblingText
+    : SQL_DESCRIPTION_OPENING + (siblingText ? `${siblingText.trimStart()} ` : "") + SQL_DESCRIPTION.slice(SQL_DESCRIPTION_OPENING.length);
   if (platformTools && !apiTools) {
     sqlDescription += VALIDATION_NOTE;
     if (card) sqlDescription += CARD_PREAMBLE + JSON.stringify(card);
   }
   if (apiTools) sqlDescription += API_TOOLS_SQL_NOTE;
-  if (siblingNames.length > 0) sqlDescription += siblingsNote(TABLE, siblings, siblingsUnresolved, siblingNotes());
 
   // What the local index holds, read once here: an index of logs gets its
   // instructions in log words (`logIndexInstructions`), a code index the
@@ -1436,8 +1454,11 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
           // checkout it has been told nothing about. It has been told: the
           // table's columns, what is in it and how to read it are in the
           // sql tool's text, so the looking around is named as not needed.
-          "code-context is a local index of this repository: every file's lines are in it, and what the " +
-          "repository holds is in the sql tool's text, so begin with these tools, not with ls, cat or a look " +
+          "code-context is a local index of this repository: every file's lines are in it" +
+          (siblingNames.length > 0
+            ? `, and beside it in the same database the tables ${siblingNames.join(", ")}, which one sql statement joins with it`
+            : "") +
+          ", and what the repository holds is in the sql tool's text, so begin with these tools, not with ls, cat or a look " +
           "at CLAUDE.md. Which tool for which question:\n" +
         "- find - every line containing an exact string, where you would grep.\n" +
         // With `ask` on the surface, `search` must not claim the same question.
