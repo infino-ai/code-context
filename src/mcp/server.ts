@@ -631,12 +631,19 @@ export function siblingsNote(table: string, siblings: TableShape[], unresolved: 
 }
 
 /** The routing line for a server with sibling tables. */
-export function siblingsInstruction(table: string, siblings: string[]): string {
-  return (
-    `\n- sql also joins ${table} with ${siblings.join(", ")} in one statement - a question that touches two of ` +
-    "these tables is one JOIN on their keys, with the search functions inside it, not one query per table and " +
-    "not a walk through files; their columns, the keys and the statement's shape are in the sql tool's text.\n"
-  );
+export function siblingsInstruction(table: string, siblings: string[], agentTools: boolean): string {
+  const names = siblings.join(", ");
+  // Ask first across the tables: the loop sees their cards and writes the
+  // joins itself, several statements at once; the model's own sql is for
+  // one statement it already knows (the owner, 2026-09-24).
+  return agentTools
+    ? `\n- a question that touches two of these tables - ${table}, ${names} - is an ask first: the loop sees all ` +
+        "three, writes the joins itself, several statements at once, and returns the rows. sql joins them too, " +
+        "for one statement you already know; their columns, the keys and the statement's shape are in the sql " +
+        "tool's text. Never one query per table, never a walk through files.\n"
+    : `\n- sql also joins ${table} with ${names} in one statement - a question that touches two of these tables ` +
+        "is one JOIN on their keys, with the search functions inside it, not one query per table and not a walk " +
+        "through files; their columns, the keys and the statement's shape are in the sql tool's text.\n";
 }
 
 export function indexFirst(agentTools: boolean, table = "chunks"): string {
@@ -1504,10 +1511,23 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
         (agentTools
           ? "- search - one ranked pass in your own words, when you already know roughly what the code calls the thing; a question you cannot write as one query is ask's.\n"
           : "- search - how does X work, where is Y handled, code by meaning.\n") +
-        "- sql - counts, rankings, and aggregates across the repo, including ranking files by how " +
-        "much of them is about a topic (rank by hybrid_search, not bm25, when the topic is a concept; " +
-        "a total over a search relation is the top k's matched lines, never a file's length - sizes " +
-        "and whole-repo counts come from the chunks table with no search function).\n" +
+        // With ask on the surface, sql is the statement the model already
+        // knows, and a question that needs several - or reaches across the
+        // tables - is an ask, which writes them itself, at once. The rows text
+        // took this shape on 2026-09-11 and delegation followed; the code text
+        // kept "counts, rankings, and aggregates" with no handoff, and on the
+        // three-table corpus (2026-09-24) the model wrote seven statements one
+        // after another where one ask would have run them together (the
+        // owner: "why aren't we using ask that would be better - then the ask
+        // can formulate many sql statements in parallel").
+        (agentTools
+          ? "- sql - one statement you already know: a count, a ranking, a filter, a join, in one SELECT. " +
+            "A question that needs several statements, or that reaches across the tables, is an ask: the " +
+            "loop writes them itself, several at once, and returns the rows. "
+          : "- sql - counts, rankings, and aggregates across the repo, ") +
+        "Ranking files by how much of them is about a topic goes through hybrid_search, not bm25, when the " +
+        "topic is a concept; a total over a search relation is the top k's matched lines, never a file's " +
+        "length - sizes and whole-repo counts come from the chunks table with no search function.\n" +
         (agentTools
           ? // The whole-mechanism question is ask's too, as several asks in one
             // reply: a tool that had the platform write the answer in one long
@@ -1540,7 +1560,7 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
         "A 'partial' marker means files over the index cap were left out, so a missing match is not " +
         "proof of absence.") +
         (apiTools ? apiToolsInstruction(Boolean(rows)) : "") +
-        (siblingNames.length > 0 ? siblingsInstruction(TABLE, siblingNames) : ""),
+        (siblingNames.length > 0 ? siblingsInstruction(TABLE, siblingNames, agentTools) : ""),
     },
   );
 
@@ -2222,7 +2242,9 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
           // reaches the tables beside the code and joins them (the owner,
           // 2026-09-24: "it's still not reaching for ask often enough").
           (siblingNames.length > 0
-            ? `It searches ${TABLE} and, in the same database, ${siblingNames.join(", ")}, and joins them: a question that touches the code and the tables beside it is one ask. `
+            ? `It searches ${TABLE} and, in the same database, ${siblingNames.join(", ")}, and joins them: a question ` +
+              "that touches the code and the tables beside it is an ask first, not your own sql - the loop writes the " +
+              "statements, several at once, joins included, and you read the rows. "
             : "") +
           // "Use it for a lookup" read as a narrow tool; the owner's rule is
           // the opposite ("it should also use ask extensively it's just

@@ -457,7 +457,10 @@ describe("the chunks table with CX_SIBLING_TABLES: the tables a statement may jo
     expect(sql).toContain("chunks_swelogs(path utf8, start_line i64, content large_utf8, instance_id utf8, resolved utf8)");
     expect(sql).toContain("Join swe_issues to chunks_swelogs on instance_id");
     const instructions = s.client.getInstructions() ?? "";
-    expect(instructions).toContain("- sql also joins chunks with swe_issues, chunks_swelogs in one statement");
+    // Ask first across the tables: the loop writes the joins itself, several
+    // at once; the model's own sql is for one statement it already knows.
+    expect(instructions).toContain("- a question that touches two of these tables - chunks, swe_issues, chunks_swelogs - is an ask first");
+    expect(instructions).toContain("- sql - one statement you already know");
     // The siblings come second in the sql text, before the recipes and the
     // card, and the ask text says its search spans them.
     expect(sql.indexOf("joinable with chunks in one statement")).toBeLessThan(sql.indexOf("The search functions are table-valued"));
