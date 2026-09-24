@@ -560,11 +560,20 @@ export function siblingsInstruction(table: string, siblings: string[]): string {
   );
 }
 
-export function indexFirst(agentTools: boolean): string {
+export function indexFirst(agentTools: boolean, table = "chunks"): string {
   const tools = agentTools ? "find, search, sql and ask" : "find, search and sql";
+  // "only for what the index could not give you" left the model the judge
+  // of what the index gives, and it judged reading a file's lines as not
+  // that: on the demo's 64-project corpus (2026-09-24) a run ranked the
+  // longest test logs with one sql JOIN and then read the logs with ten
+  // Bash calls, wc, grep, tail and sed, when their lines were one statement
+  // away. So the statement is written out, and the file tools are named as
+  // not the way to read (the owner: "instruction sentence only").
   return (
-    `Look with the index first: ${tools} cover every file in one call and return the lines themselves; ` +
-    "use Grep, Glob or Bash only for what the index could not give you."
+    `Look with the index first: ${tools} cover every file in one call and return the lines themselves, ` +
+    `and the lines of any file or row are one sql statement away (SELECT start_line, content FROM ${table} ` +
+    "WHERE path = '...' ORDER BY start_line). Do not open the checkout with Grep, Glob, Bash or Read for " +
+    "what they can answer."
   );
 }
 
@@ -1416,7 +1425,7 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
             // each was measured to do.
             (answerTool ? answerInstruction(answerDisplay) : "")
           : "") +
-        indexFirst(agentTools) +
+        indexFirst(agentTools, TABLE) +
         "\n" +
         SWEEP_TO_A_TOOL +
         "\n" +
