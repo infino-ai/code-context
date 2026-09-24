@@ -327,6 +327,22 @@ describe("find", () => {
     expect(r.truncated).toBe(true);
   });
 
+  it("carries the lines around a match from its window when context is asked for", async () => {
+    const plain = await find(handle, "Session(");
+    expect(plain.matches[0].before).toBeUndefined();
+    const r = await find(handle, "Session(", { context: 2 });
+    for (const m of r.matches) {
+      expect(Array.isArray(m.before) && Array.isArray(m.after)).toBe(true);
+      expect(m.before!.length).toBeLessThanOrEqual(2);
+      expect(m.after!.length).toBeLessThanOrEqual(2);
+    }
+    // The context is the window's own lines, so a match on the window's first
+    // line has nothing before it, and the total is unchanged by the option.
+    expect(r.total).toBe(plain.total);
+    // Clamped to the cap rather than refused.
+    expect((await find(handle, "Session(", { context: 999 })).matches[0].before!.length).toBeLessThanOrEqual(20);
+  });
+
   it("past the character budget a match keeps its place and loses its text; nothing within the limit is dropped", () => {
     const line = (i: number) => ({ path: `logs/run-${Math.floor(i / 10)}.log`, line: i, text: "x".repeat(200) });
     const rows = Array.from({ length: 50 }, (_, i) => line(i));

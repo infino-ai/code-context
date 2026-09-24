@@ -146,6 +146,7 @@ import {
   numberRowLines,
   partialIndex,
   CONTENT_COLUMN,
+  MAX_FIND_CONTEXT,
 } from "../core/searcher.js";
 import {
   newSession,
@@ -565,7 +566,8 @@ export function logIndexInstructions(agentTools: boolean, files: number, chunks:
     `${chunks} windows. Begin with these tools, not with ls or a look at the directory: what the logs hold ` +
     "is here. Which tool for which question:\n" +
     "- find - every line in every log containing an exact string (an error text, a test name, a step name), " +
-    "with the count per log. Where you would grep, use this.\n" +
+    "with the count per log, and with context the lines around each - what grep -B/-A shows. Where you would " +
+    "grep, use this.\n" +
     "- search - which log windows are about X: exact terms and meaning in one ranked pass over every log.\n" +
     "- sql - counts and rankings across the logs in one statement: which logs mention X and how many lines " +
     "each (rank through bm25_search or hybrid_search over the chunks table and GROUP BY path) - and the lines " +
@@ -1704,7 +1706,9 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
         FIND_BY_BARE_NAME +
         // A flood keeps every place: the lines past the text budget come as
         // path and line numbers (`more`), and a line's text is a sql read.
-        " A wide result lists every matching place: the first lines with their text, the rest by path and " +
+        " The lines around a match - what leads into an error and follows it - come with it when you ask " +
+        "for context (like grep -B/-A); no file need be opened for them. " +
+        "A wide result lists every matching place: the first lines with their text, the rest by path and " +
         "line under more; a line's text is one sql statement away, and byFile counts them all. Not for a " +
         `file you already know - its lines are one sql statement away (SELECT start_line, content FROM ${TABLE} ` +
         "WHERE path = '...' ORDER BY start_line). " +
@@ -1753,6 +1757,17 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
           .max(MAX_FIND_LIMIT)
           .default(DEFAULT_FIND_LIMIT)
           .describe("Maximum matching lines to return; the result reports the total either way."),
+        context: z
+          .number()
+          .int()
+          .min(0)
+          .max(MAX_FIND_CONTEXT)
+          .optional()
+          .describe(
+            "Lines before and after each match to carry, from the match's own window - what grep -B/-A " +
+              "shows - so the lines that lead into an error and follow it come with the match, without " +
+              "opening the file. Up to 20; more than a few matches with context is a wide result.",
+          ),
         path: z
           .string()
           .optional()
@@ -1763,7 +1778,7 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
           ),
       },
     },
-    async ({ query, ignoreCase, defines, under, limit, path }) => {
+    async ({ query, ignoreCase, defines, under, limit, context, path }) => {
       let ctx: RepoCtx;
       try {
         ctx = repoFor(path);
@@ -1806,7 +1821,7 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
       if (!autoIndexed) maybeAutoSync(ctx); // a fresh build is already current
       try {
         const t0 = performance.now();
-        const result = await find(handle, query, { ignoreCase, defines, under, limit });
+        const result = await find(handle, query, { ignoreCase, defines, under, limit, context });
         recordOf(ctx).addLines(TABLE, result.matches);
         let usage: string | undefined;
         if (receiptOn) {

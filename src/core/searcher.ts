@@ -366,6 +366,11 @@ export interface FindMatch {
   text: string;
   /** Definition name(s) of the enclosing chunk (e.g. "parseConfig"), when known. */
   symbol?: string;
+  /** The lines before and after the match from its own window, when the
+   * caller asked for `context`: what grep -B/-A shows, without opening the
+   * file. Each cut to FIND_LINE_CAP like the match itself. */
+  before?: string[];
+  after?: string[];
 }
 
 /** Matching lines in one file - the `grep -c` view. */
@@ -430,7 +435,17 @@ export interface FindOptions {
    * which is why `search` has no such option: a scoped RANKED search is `sql`
    * over a search relation, where the filter composes in the same pass. */
   under?: string;
+  /** Lines before and after each match to carry, from the match's own
+   * window: what grep -B/-A shows. On the demo's CI-logs corpus
+   * (2026-09-24) the model followed a find with `rg -n -B 12` over the
+   * files for exactly this, the lines that lead into each error; with the
+   * context on the match it has no reason to. Clamped to MAX_FIND_CONTEXT;
+   * a window is about sixty lines, so context past its edge is cut there. */
+  context?: number;
 }
+
+/** Most context lines a find carries on each side of a match. */
+export const MAX_FIND_CONTEXT = 20;
 
 /** Does this chunk's `symbol` column declare `name`?
  *
@@ -497,7 +512,8 @@ export function cutFindMatches(
   const more: FindLocations[] = [];
   let chars = 0;
   for (const m of rows.slice(0, limit)) {
-    const size = m.path.length + m.text.length + (m.symbol?.length ?? 0) + FIND_MATCH_OVERHEAD;
+    const around = [...(m.before ?? []), ...(m.after ?? [])].reduce((n, l) => n + l.length + 4, 0);
+    const size = m.path.length + m.text.length + (m.symbol?.length ?? 0) + around + FIND_MATCH_OVERHEAD;
     if (matches.length === 0 || chars + size <= budget) {
       matches.push(m);
       chars += size;
@@ -543,14 +559,24 @@ export function matchLines(
   startLine: number,
   query: string,
   ignoreCase: boolean,
-): Array<{ line: number; text: string; at: number }> {
+  context = 0,
+): Array<{ line: number; text: string; at: number; before?: string[]; after?: string[] }> {
   const needle = ignoreCase ? query.toLowerCase() : query;
-  const out: Array<{ line: number; text: string; at: number }> = [];
-  const lines = content.split("\n");
+  const out: Array<{ line: number; text: string; at: number; before?: string[]; after?: string[] }> = [];
+  const lines = content.split("\n").map((l) => l.replace(/\r$/, ""));
   for (let i = 0; i < lines.length; i++) {
-    const text = lines[i].replace(/\r$/, "");
+    const text = lines[i];
     const at = (ignoreCase ? text.toLowerCase() : text).indexOf(needle);
-    if (at >= 0) out.push({ line: startLine + i, text, at });
+    if (at < 0) continue;
+    if (context > 0) {
+      // The lines around the match from its own window, cut like the match:
+      // what grep -B/-A shows, without opening the file.
+      const before = lines.slice(Math.max(0, i - context), i).map((l) => l.slice(0, FIND_LINE_CAP));
+      const after = lines.slice(i + 1, i + 1 + context).map((l) => l.slice(0, FIND_LINE_CAP));
+      out.push({ line: startLine + i, text, at, before, after });
+    } else {
+      out.push({ line: startLine + i, text, at });
+    }
   }
   return out;
 }
@@ -662,6 +688,7 @@ function checkFindQuery(query: string, analyzer: Analyzer, column: string, limit
 export async function find(handle: IndexHandle, query: string, opts: FindOptions = {}): Promise<FindResult> {
   const limit = checkFindQuery(query, analyzerOf(handle.manifest), CONTENT_COLUMN, opts.limit);
   const ignoreCase = opts.ignoreCase ?? false;
+  const context = Math.min(Math.max(0, Math.trunc(opts.context ?? 0)), MAX_FIND_CONTEXT);
   const partial = partialIndex(handle.manifest);
 
   const terms = plainTerms(query);
@@ -680,7 +707,7 @@ export async function find(handle: IndexHandle, query: string, opts: FindOptions
     if (under !== undefined && path !== under && !path.startsWith(`${under}/`)) continue;
     const symbol = row.symbol ? String(row.symbol) : undefined;
     const declares = definesName(symbol, query, ignoreCase);
-    for (const m of matchLines(String(row.content), Number(row.start_line), query, ignoreCase)) {
+    for (const m of matchLines(String(row.content), Number(row.start_line), query, ignoreCase, context)) {
       const key = `${path} ${m.line}`;
       if (declares) declaring.add(key);
       if (seen.has(key)) continue;
@@ -690,6 +717,7 @@ export async function find(handle: IndexHandle, query: string, opts: FindOptions
         line: m.line,
         text: excerpt(m.text, m.at, query.length),
         ...(symbol ? { symbol } : {}),
+        ...(m.before ? { before: m.before, after: m.after } : {}),
       });
     }
   }

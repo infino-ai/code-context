@@ -46,6 +46,17 @@ describe("the retrieval record", () => {
     ]);
   });
 
+  it("keeps a row with bigint cells rather than throwing on its key", () => {
+    // A row off the local engine carries bigint cells (COUNT(*), MAX); the
+    // record used to key it with JSON.stringify and threw "Do not know how
+    // to serialize a BigInt", failing the whole sql call (the demo,
+    // 2026-09-24).
+    const record = new RetrievalRecord();
+    record.addRows("chunks_cilogs", [{ path: "a.log", chunks: 3n, lines: 6496n }]);
+    expect(record.size).toBe(1);
+    expect(record.facts()[0].row).toEqual({ path: "a.log", chunks: 3n, lines: 6496n });
+  });
+
   it("keeps the most recent rows when over the cap, and forgets everything on clear", () => {
     const record = new RetrievalRecord();
     const hits = Array.from({ length: RECORD_ROWS_CAP + 5 }, (_, i) => ({ path: `src/f${i}.rs`, startLine: 1 }));
