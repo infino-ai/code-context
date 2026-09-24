@@ -2101,8 +2101,8 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
           "How many - files, projects, places that do X - is one ask, or one sql statement when you " +
           "can already write it; every line holding one exact string is find's. A question across " +
           "projects or repositories is ask's, several at once. Never Grep, Glob or Read for what one " +
-          "of these answers; Read is for a hit marked truncated. Answer from the rows and cite " +
-          "path:line. " +
+          "of these answers; a hit marked truncated is its row, one sql statement away. Answer from " +
+          "the rows and cite path:line. " +
           DEV_CONTEXT_NOTE +
           "The result includes a 'usage' field, a one-line receipt of what the call cost.",
         inputSchema: retrievalInputs,
