@@ -327,20 +327,25 @@ describe("find", () => {
     expect(r.truncated).toBe(true);
   });
 
-  it("cuts the matches at the character budget before the line limit, the first match always kept", () => {
-    const line = (i: number) => ({ path: `logs/run-${i}.log`, line: i, text: "x".repeat(200) });
+  it("past the character budget a match keeps its place and loses its text; nothing within the limit is dropped", () => {
+    const line = (i: number) => ({ path: `logs/run-${Math.floor(i / 10)}.log`, line: i, text: "x".repeat(200) });
     const rows = Array.from({ length: 50 }, (_, i) => line(i));
-    // Each match costs about 260 characters here; a 1,000-character budget
-    // holds three of them, and the line limit of 500 never comes into it.
-    const cut = cutFindMatches(rows, 500, 1_000);
-    expect(cut.length).toBe(3);
-    expect(cut[0]).toEqual(rows[0]);
-    // The limit still wins when it is the smaller.
-    expect(cutFindMatches(rows, 2, 1_000_000).length).toBe(2);
-    // A single match wider than the budget is returned rather than nothing.
-    expect(cutFindMatches([{ path: "a.log", line: 1, text: "y".repeat(5_000) }], 500, 100).length).toBe(1);
+    // Each match costs about 260 characters here: a 1,000-character budget
+    // carries three with their text, and the other 47 as places by file.
+    const { matches, more } = cutFindMatches(rows, 500, 1_000);
+    expect(matches.length).toBe(3);
+    expect(matches[0]).toEqual(rows[0]);
+    expect(more.reduce((n, m) => n + m.lines.length, 0)).toBe(47);
+    expect(more[0]).toEqual({ path: "logs/run-0.log", lines: [3, 4, 5, 6, 7, 8, 9] });
+    expect(more.at(-1)).toEqual({ path: "logs/run-4.log", lines: [40, 41, 42, 43, 44, 45, 46, 47, 48, 49] });
+    // The line limit still bounds what is listed at all.
+    const limited = cutFindMatches(rows, 2, 1_000_000);
+    expect(limited.matches.length).toBe(2);
+    expect(limited.more).toEqual([]);
+    // A single match wider than the budget carries its text rather than nothing.
+    expect(cutFindMatches([{ path: "a.log", line: 1, text: "y".repeat(5_000) }], 500, 100).matches.length).toBe(1);
     // The default budget holds a code-sized result whole.
-    expect(cutFindMatches(rows, 500).length).toBe(50);
+    expect(cutFindMatches(rows, 500).matches.length).toBe(50);
   });
 
   it("refuses a query the index cannot look up, naming the index's analyzer", async () => {

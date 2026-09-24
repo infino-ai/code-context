@@ -377,8 +377,12 @@ export interface FindFileCount {
 export interface FindResult {
   query: string;
   ignoreCase: boolean;
-  /** Matching lines in path then line order, cut at the limit. */
+  /** Matching lines in path then line order, cut at the limit, with their
+   * text while the character budget lasts. */
   matches: FindMatch[];
+  /** The matching lines within the limit that the text budget did not
+   * reach: every one of them, as path and line numbers by file, no excerpt. */
+  more?: FindLocations[];
   /** Matching lines across the repo before the limit was applied. */
   total: number;
   /** Distinct files with at least one match, before the limit. */
@@ -456,35 +460,54 @@ export function definesName(symbolColumn: string | undefined, name: string, igno
 /** Per-line cap so one minified or generated line cannot flood the result. */
 const FIND_LINE_CAP = 240;
 
-/** Characters of matches one `find` result carries at most, whatever the
+/** Characters of match TEXT one `find` result carries at most, whatever the
  * line limit says. The limit counts lines and was sized for code, at about
  * fifty tokens a line; log lines are the cap's 240 characters of timestamps
  * and colour codes, which tokenize densely. Measured 2026-09-24 on the
  * demo's CI-logs index: `find "##[error]"` returned 500 lines, 58,058
  * characters, over Claude Code's tool-result cap, so the result went to a
- * file and the model read it with the shell for the rest of the run. A cut
- * list still carries the full `total` and `byFile`, so what the caller loses
- * is lines it could not have read anyway. */
+ * file and the model read it with the shell for the rest of the run. Past
+ * the budget a match keeps its place and loses its excerpt (`more`), so no
+ * match within the line limit is dropped (the owner: "i hope you are not
+ * just capping rows and dropping them that would suck"). */
 export const FIND_RESULT_CHAR_BUDGET = 24_000;
 
 /** Characters a match costs beyond its path and text: the line number and
  * the JSON around them, as the result is written. */
 const FIND_MATCH_OVERHEAD = 40;
 
-/** The matches a result carries: the first `limit` of `rows`, cut earlier
- * where the next one would take the result past the character budget. The
- * first match always goes, so a single long line still comes back. */
-export function cutFindMatches(rows: readonly FindMatch[], limit: number, budget = FIND_RESULT_CHAR_BUDGET): FindMatch[] {
-  const kept: FindMatch[] = [];
+/** The matches past the text budget, by file: every place, no excerpt. A
+ * line's text is one sql statement away (SELECT start_line, content FROM
+ * the table WHERE path = ... AND start_line <= line AND end_line >= line). */
+export interface FindLocations {
+  path: string;
+  lines: number[];
+}
+
+/** The matches a result carries: the first `limit` of `rows`, with their
+ * text until the character budget is spent, and the rest of the `limit` as
+ * path and line numbers only. The first match always carries its text, so a
+ * single long line still comes back. */
+export function cutFindMatches(
+  rows: readonly FindMatch[],
+  limit: number,
+  budget = FIND_RESULT_CHAR_BUDGET,
+): { matches: FindMatch[]; more: FindLocations[] } {
+  const matches: FindMatch[] = [];
+  const more: FindLocations[] = [];
   let chars = 0;
-  for (const m of rows) {
-    if (kept.length >= limit) break;
+  for (const m of rows.slice(0, limit)) {
     const size = m.path.length + m.text.length + (m.symbol?.length ?? 0) + FIND_MATCH_OVERHEAD;
-    if (kept.length > 0 && chars + size > budget) break;
-    kept.push(m);
-    chars += size;
+    if (matches.length === 0 || chars + size <= budget) {
+      matches.push(m);
+      chars += size;
+      continue;
+    }
+    const last = more.at(-1);
+    if (last && last.path === m.path) last.lines.push(m.line);
+    else more.push({ path: m.path, lines: [m.line] });
   }
-  return kept;
+  return { matches, more };
 }
 
 /** Characters kept ahead of the match when a long line is cut to a window, so
@@ -683,15 +706,16 @@ export async function find(handle: IndexHandle, query: string, opts: FindOptions
     .map(([path, count]) => ({ path, count }))
     .sort((a, b) => b.count - a.count || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
 
-  const matches = cutFindMatches(rows, limit);
+  const { matches, more } = cutFindMatches(rows, limit);
   return {
     query,
     ignoreCase,
     matches,
+    ...(more.length ? { more } : {}),
     total: rows.length,
     files: byFile.length,
     byFile,
-    ...(rows.length > matches.length ? { truncated: true } : {}),
+    ...(rows.length > limit ? { truncated: true } : {}),
     ...(partial ? { partial } : {}),
     ...(opts.defines ? { definedFrom: matched } : {}),
     ...(under !== undefined ? { under } : {}),

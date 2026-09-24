@@ -436,16 +436,18 @@ export const FIND_BY_BARE_NAME =
  * with spaces is a phrase or a signature, which one exact line may never
  * hold; with `defines` on and nothing found, the name itself is in doubt.
  * A bare identifier that is simply absent gets no hint - zero is the answer. */
-export function findHint(query: string, total: number, defines: boolean, shown = total): string | null {
-  // A cut list is a flood, and the whole of it is not what the caller
-  // wanted: the counts are complete, and the next move is narrower terms
-  // or a count - never the shell over a saved result (the demo, 2026-09-24:
-  // a 58,000-character find went to a file and Bash read it).
-  if (total > shown) {
+export function findHint(query: string, total: number, defines: boolean, withText = total, listed = total): string | null {
+  // A flood: the counts are complete, every place within the limit is
+  // listed, and the text of the rest is one sql away - never the shell over
+  // a saved result (the demo, 2026-09-24: a 58,000-character find went to a
+  // file and Bash read it).
+  if (total > withText) {
+    const beyond = total > listed ? ` ${total - listed} more are counted in total and byFile but not listed.` : "";
     return (
-      `The list is cut at ${shown} of ${total} lines; total and byFile are complete. Narrow the terms, ` +
-      "add under, or count with sql (SELECT count(*) FROM token_match(...) WHERE path LIKE '...'); a saved " +
-      "result is not for the shell to read."
+      `${withText} of ${total} lines carry their text; the rest are listed by path and line under more.${beyond} ` +
+      "For a line's text, sql: SELECT start_line, content FROM the table WHERE path = '...' AND start_line <= " +
+      "<line> AND end_line >= <line>. To see less, narrow the terms or add under; to count, sql over " +
+      "token_match. A saved result is not for the shell to read."
     );
   }
   if (total > 0) return null;
@@ -579,8 +581,9 @@ export function logIndexInstructions(agentTools: boolean, files: number, chunks:
     (agentTools ? " - and use ask for a question that spans the logs. " : ". ") +
     "Do not open, read or grep the log files with Bash, Grep or Read: the index holds every line of every log " +
     "and answers in one call, and a single log here can run to tens of thousands of lines. A hit marked " +
-    "truncated is its window, one sql statement away. A find that comes back cut is a flood: narrow the " +
-    "terms, add under, or count with sql - never read the saved result with the shell.\n" +
+    "truncated is its window, one sql statement away. A find with a `more` list is a flood: every place is " +
+    "listed, the text of any line is one sql statement away, and the next move is narrower terms, under, " +
+    "or a count with sql - never the shell.\n" +
     SWEEP_TO_A_TOOL +
     "\n" +
     "Hits carry the lines: when a hit answers the question, answer from it. A hit's content shows each line " +
@@ -1699,7 +1702,12 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
         // nothing and the model fell back to a regex Grep; the bare name with
         // defines would have listed the declarations on the first call.
         FIND_BY_BARE_NAME +
-        " Not for a file you already know - Read that file. " +
+        // A flood keeps every place: the lines past the text budget come as
+        // path and line numbers (`more`), and a line's text is a sql read.
+        " A wide result lists every matching place: the first lines with their text, the rest by path and " +
+        "line under more; a line's text is one sql statement away, and byFile counts them all. Not for a " +
+        `file you already know - its lines are one sql statement away (SELECT start_line, content FROM ${TABLE} ` +
+        "WHERE path = '...' ORDER BY start_line). " +
         // find's hand-off must name the tool that owns the question on this
         // surface, or it sends a mechanism question to search.
         (agentTools
@@ -1806,7 +1814,8 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
           recordUsage(ctx.dir, entry);
           usage = formatReceipt(entry, session);
         }
-        const hint = findHint(query, result.total, Boolean(defines), result.matches.length);
+        const listed = result.matches.length + (result.more ?? []).reduce((n, m) => n + m.lines.length, 0);
+        const hint = findHint(query, result.total, Boolean(defines), result.matches.length, listed);
         return ok({
           ...result,
           ...(hint ? { hint } : {}),
