@@ -291,7 +291,13 @@ export const SQL_DESCRIPTION =
   "subsystem, 'code about X', 'files that do Y' - the shape of almost every ranking question. " +
   `bm25_search('${TABLE}','content','terms', k) is keyword only: reach for it when the topic ` +
   "is itself a literal string you know appears in the source and you want counts a reader can " +
-  `check as occurrences. vector_search('${TABLE}','embedding', {{q}}, k) is meaning alone. ` +
+  `check as occurrences. vector_search('${TABLE}','embedding', {{q}}, k) is meaning alone - for a ` +
+  "question whose words will not be the code's words: SELECT path, start_line, content FROM " +
+  `vector_search('${TABLE}','embedding', {{q}}, 20). token_match('${TABLE}','content','the terms','and') is ` +
+  "every row holding every term, unranked and complete - an identifier, an exact phrase, a count a reader " +
+  `can check: SELECT count(*) FROM token_match('${TABLE}','content','separability_matrix','and'). ` +
+  `exact_match('${TABLE}','content','value') is the rows whose whole value equals the string - a lookup on ` +
+  "a short indexed column, never on content. " +
   "The {{name}} placeholders are filled server-side from the embed " +
   "map, so they cost you nothing but the name. Which files have the most code about a topic, " +
   "ranked - the whole question in one statement, filtered on the " +
@@ -324,15 +330,21 @@ export const SQL_DESCRIPTION =
   // log is read and shaped in sql. The owner: "we should be more explicit
   // maybe with better examples." Each statement below was run on the
   // platform before it was written here.
-  "sql is also how you READ here, and never the shell, Grep or Read: the lines of a file, " +
-  `SELECT start_line, content FROM ${TABLE} WHERE path = 'src/x.rs' ORDER BY start_line (a stretch: ` +
-  "AND start_line BETWEEN 380 AND 440); what a long file or log is made of, the shell's cut | sort | uniq -c, " +
-  "SELECT substr(line, 1, 50) AS head, count(*) AS n FROM (SELECT unnest(string_to_array(content, chr(10))) AS line " +
-  `FROM ${TABLE} WHERE path = '...') GROUP BY head ORDER BY n DESC LIMIT 20; how often a pattern occurs, the same ` +
-  "inner SELECT with WHERE line LIKE '%pattern%' or regexp_like(line, '...') and count(*); the kinds of error in " +
-  "a log, regexp_replace(line, '^.*?([A-Za-z.]+(Error|Exception)).*$', '\\1') AS kind, count(*) ... GROUP BY kind. " +
-  "Rows are windows that overlap by a few lines, so a per-line count runs a little high and the ranking is right; " +
-  "log lines may carry colour codes, so match inside the line (LIKE '%FAILED%'), never at its start. " +
+  "sql is also how you READ here, and never the shell, Grep or Read - with the search functions doing " +
+  `the finding: the lines of a file, SELECT start_line, content FROM ${TABLE} WHERE path = 'src/x.rs' ORDER BY ` +
+  "start_line (a stretch: AND start_line BETWEEN 380 AND 440); every place a phrase occurs, complete and " +
+  `unranked, token_match('${TABLE}', 'content', 'the terms', 'and') - how often, SELECT count(*) FROM ` +
+  `token_match('${TABLE}', 'content', 'the terms', 'and') WHERE path LIKE 'x/%'; the lines about something, ` +
+  "ranked, bm25_search or hybrid_search as above; what a long file or log is made of, the shell's " +
+  "cut | sort | uniq -c, SELECT substr(line, 1, 50) AS head, count(*) AS n FROM (SELECT " +
+  `unnest(string_to_array(content, chr(10))) AS line FROM ${TABLE} WHERE path = '...') GROUP BY head ORDER BY n ` +
+  "DESC LIMIT 20; the kinds of error in a log, the same unnest over " +
+  `bm25_search('${TABLE}', 'content', 'Error Exception', 200) WHERE path = '...', then regexp_replace(line, ` +
+  "'^.*?([A-Za-z.]+(Error|Exception)).*$', '\\1') AS kind, count(*) ... GROUP BY kind - the search function " +
+  "finds the windows, string functions only shape their lines, and a LIKE or regexp_like scan over the whole " +
+  "table is the one form to avoid. Rows are windows that overlap by a few lines, so a per-line count runs a " +
+  "little high and the ranking is right; log lines may carry colour codes, so match inside an unnested line " +
+  "(LIKE '%FAILED%'), never at its start. " +
   "Select start_line beside content whenever you mean to read or cite the code: a row's text " +
   "comes back with each line's own number in the file when the row carries its start line, and " +
   "unnumbered when it does not, since nothing then places the text. " +
