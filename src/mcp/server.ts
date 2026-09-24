@@ -547,7 +547,13 @@ export function siblingsNote(table: string, siblings: TableShape[], unresolved: 
     ` Also in this database, and joinable with ${table} in one statement: ${described.join("; ")}.` +
     (unresolved.length ? ` (${unresolved.join(", ")} could not be described when this server started; name them by their columns as you know them.)` : "") +
     ` Every statement here runs on the platform, so a JOIN, a subquery or a UNION across these tables is one call, ` +
-    `and the search functions take any of them as their first argument.` +
+    `and the search functions take any of them as their first argument and their rows join like a table's: ` +
+    // The join is the move, written out: a model that had the keys and the
+    // tables still answered one table at a time and read the rest from
+    // files (the owner, 2026-09-24: "i don't think opus or the models are
+    // using joins. that's the key advantage we have we have to be explicit").
+    `write the JOIN - FROM hybrid_search('${siblings[0]?.table ?? table}', '<text column>', '<terms>', 'embedding', {{q}}, 50) AS s ` +
+    `JOIN ${table} AS t ON <key> = <key> WHERE ... - and not one query per table.` +
     (notes ? ` ${notes}` : "")
   );
 }
@@ -555,8 +561,9 @@ export function siblingsNote(table: string, siblings: TableShape[], unresolved: 
 /** The routing line for a server with sibling tables. */
 export function siblingsInstruction(table: string, siblings: string[]): string {
   return (
-    `\n- sql also joins ${table} with ${siblings.join(", ")} in one statement - a question that reaches across them ` +
-    "is one JOIN here, not a walk through files; their columns and the keys that join them are in the sql tool's text.\n"
+    `\n- sql also joins ${table} with ${siblings.join(", ")} in one statement - a question that touches two of ` +
+    "these tables is one JOIN on their keys, with the search functions inside it, not one query per table and " +
+    "not a walk through files; their columns, the keys and the statement's shape are in the sql tool's text.\n"
   );
 }
 
