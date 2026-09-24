@@ -317,6 +317,22 @@ export const SQL_DESCRIPTION =
   "aggregate. A path prefix is not a topic: filtering on WHERE path LIKE 'src/thing/%' and " +
   "measuring lengths answers how big those files are, not which code is about the thing, and " +
   "it guesses the answer from a directory name instead of retrieving it. " +
+  // Reading is sql's too, and it has to be said with the statements written
+  // out: on the demo's 64-project corpus (2026-09-24) the model ranked the
+  // longest test logs with sql and then read them with the shell - wc, grep,
+  // awk, cut | sort | uniq -c - because nothing here said how a file or a
+  // log is read and shaped in sql. The owner: "we should be more explicit
+  // maybe with better examples." Each statement below was run on the
+  // platform before it was written here.
+  "sql is also how you READ here, and never the shell, Grep or Read: the lines of a file, " +
+  `SELECT start_line, content FROM ${TABLE} WHERE path = 'src/x.rs' ORDER BY start_line (a stretch: ` +
+  "AND start_line BETWEEN 380 AND 440); what a long file or log is made of, the shell's cut | sort | uniq -c, " +
+  "SELECT substr(line, 1, 50) AS head, count(*) AS n FROM (SELECT unnest(string_to_array(content, chr(10))) AS line " +
+  `FROM ${TABLE} WHERE path = '...') GROUP BY head ORDER BY n DESC LIMIT 20; how often a pattern occurs, the same ` +
+  "inner SELECT with WHERE line LIKE '%pattern%' or regexp_like(line, '...') and count(*); the kinds of error in " +
+  "a log, regexp_replace(line, '^.*?([A-Za-z.]+(Error|Exception)).*$', '\\1') AS kind, count(*) ... GROUP BY kind. " +
+  "Rows are windows that overlap by a few lines, so a per-line count runs a little high and the ranking is right; " +
+  "log lines may carry colour codes, so match inside the line (LIKE '%FAILED%'), never at its start. " +
   "Select start_line beside content whenever you mean to read or cite the code: a row's text " +
   "comes back with each line's own number in the file when the row carries its start line, and " +
   "unnumbered when it does not, since nothing then places the text. " +
@@ -1403,7 +1419,14 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
         ? unresolvedInstructions(TABLE, mode.cause, agentTools)
         : logIndex
         ? logIndexInstructions(agentTools, startManifest?.files ?? 0, startManifest?.chunks ?? 0)
-        : "code-context is a local index of this repository. Which tool for which question:\n" +
+        : // The first move was ls and cat CLAUDE.md, every run, before any of
+          // these tools (the demo, 2026-09-24): the model looks around a
+          // checkout it has been told nothing about. It has been told: the
+          // table's columns, what is in it and how to read it are in the
+          // sql tool's text, so the looking around is named as not needed.
+          "code-context is a local index of this repository: every file's lines are in it, and what the " +
+          "repository holds is in the sql tool's text, so begin with these tools, not with ls, cat or a look " +
+          "at CLAUDE.md. Which tool for which question:\n" +
         "- find - every line containing an exact string, where you would grep.\n" +
         // With `ask` on the surface, `search` must not claim the same question.
         // It did - "how does X work, where is Y handled" on both lines - and
