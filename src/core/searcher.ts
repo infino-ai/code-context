@@ -456,6 +456,37 @@ export function definesName(symbolColumn: string | undefined, name: string, igno
 /** Per-line cap so one minified or generated line cannot flood the result. */
 const FIND_LINE_CAP = 240;
 
+/** Characters of matches one `find` result carries at most, whatever the
+ * line limit says. The limit counts lines and was sized for code, at about
+ * fifty tokens a line; log lines are the cap's 240 characters of timestamps
+ * and colour codes, which tokenize densely. Measured 2026-09-24 on the
+ * demo's CI-logs index: `find "##[error]"` returned 500 lines, 58,058
+ * characters, over Claude Code's tool-result cap, so the result went to a
+ * file and the model read it with the shell for the rest of the run. A cut
+ * list still carries the full `total` and `byFile`, so what the caller loses
+ * is lines it could not have read anyway. */
+export const FIND_RESULT_CHAR_BUDGET = 24_000;
+
+/** Characters a match costs beyond its path and text: the line number and
+ * the JSON around them, as the result is written. */
+const FIND_MATCH_OVERHEAD = 40;
+
+/** The matches a result carries: the first `limit` of `rows`, cut earlier
+ * where the next one would take the result past the character budget. The
+ * first match always goes, so a single long line still comes back. */
+export function cutFindMatches(rows: readonly FindMatch[], limit: number, budget = FIND_RESULT_CHAR_BUDGET): FindMatch[] {
+  const kept: FindMatch[] = [];
+  let chars = 0;
+  for (const m of rows) {
+    if (kept.length >= limit) break;
+    const size = m.path.length + m.text.length + (m.symbol?.length ?? 0) + FIND_MATCH_OVERHEAD;
+    if (kept.length > 0 && chars + size > budget) break;
+    kept.push(m);
+    chars += size;
+  }
+  return kept;
+}
+
 /** Characters kept ahead of the match when a long line is cut to a window, so
  * the excerpt shows what leads into the match rather than starting on it. */
 const FIND_EXCERPT_LEAD = 60;
@@ -652,14 +683,15 @@ export async function find(handle: IndexHandle, query: string, opts: FindOptions
     .map(([path, count]) => ({ path, count }))
     .sort((a, b) => b.count - a.count || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
 
+  const matches = cutFindMatches(rows, limit);
   return {
     query,
     ignoreCase,
-    matches: rows.slice(0, limit),
+    matches,
     total: rows.length,
     files: byFile.length,
     byFile,
-    ...(rows.length > limit ? { truncated: true } : {}),
+    ...(rows.length > matches.length ? { truncated: true } : {}),
     ...(partial ? { partial } : {}),
     ...(opts.defines ? { definedFrom: matched } : {}),
     ...(under !== undefined ? { under } : {}),

@@ -436,7 +436,18 @@ export const FIND_BY_BARE_NAME =
  * with spaces is a phrase or a signature, which one exact line may never
  * hold; with `defines` on and nothing found, the name itself is in doubt.
  * A bare identifier that is simply absent gets no hint - zero is the answer. */
-export function findHint(query: string, total: number, defines: boolean): string | null {
+export function findHint(query: string, total: number, defines: boolean, shown = total): string | null {
+  // A cut list is a flood, and the whole of it is not what the caller
+  // wanted: the counts are complete, and the next move is narrower terms
+  // or a count - never the shell over a saved result (the demo, 2026-09-24:
+  // a 58,000-character find went to a file and Bash read it).
+  if (total > shown) {
+    return (
+      `The list is cut at ${shown} of ${total} lines; total and byFile are complete. Narrow the terms, ` +
+      "add under, or count with sql (SELECT count(*) FROM token_match(...) WHERE path LIKE '...'); a saved " +
+      "result is not for the shell to read."
+    );
+  }
   if (total > 0) return null;
   const words = query.trim().split(/\s+/);
   if (words.length > 1) {
@@ -546,22 +557,30 @@ export function isLogIndex(manifest: { languages?: Record<string, number>; chunk
 export function logIndexInstructions(agentTools: boolean, files: number, chunks: number): string {
   return (
     `code-context is an index of the ${files} log files in this directory - every line of every log, in ` +
-    `${chunks} windows. Which tool for which question:\n` +
+    // The first move on the demo (2026-09-24) was `ls -S` of the directory,
+    // then grep, and twelve Bash calls with none of these tools; it was
+    // never told the looking around was not needed.
+    `${chunks} windows. Begin with these tools, not with ls or a look at the directory: what the logs hold ` +
+    "is here. Which tool for which question:\n" +
     "- find - every line in every log containing an exact string (an error text, a test name, a step name), " +
     "with the count per log. Where you would grep, use this.\n" +
     "- search - which log windows are about X: exact terms and meaning in one ranked pass over every log.\n" +
     "- sql - counts and rankings across the logs in one statement: which logs mention X and how many lines " +
-    "each (rank through bm25_search or hybrid_search over the chunks table and GROUP BY path).\n" +
+    "each (rank through bm25_search or hybrid_search over the chunks table and GROUP BY path) - and the lines " +
+    "themselves: what fills a log, how often a pattern occurs, the kinds of error. The statements are in the " +
+    "sql tool's text; they replace the shell's grep, cut, sort and uniq.\n" +
     (agentTools
       ? "- ask - a question or task in plain language over all the logs; returns the log lines it retrieved " +
         "(facts with path:line and the text), not an answer: compose from them. Spawn several in parallel for " +
-        "independent questions.\n"
+        "independent questions, and use it for any question that is not one literal or one count you can " +
+        "already write.\n"
       : "") +
     "Start with find or sql - a literal, a count, a ranking across the logs" +
     (agentTools ? " - and use ask for a question that spans the logs. " : ". ") +
     "Do not open, read or grep the log files with Bash, Grep or Read: the index holds every line of every log " +
-    "and answers in one call, and a single log here can run to tens of thousands of lines. Read a file only " +
-    "for a hit marked truncated.\n" +
+    "and answers in one call, and a single log here can run to tens of thousands of lines. A hit marked " +
+    "truncated is its window, one sql statement away. A find that comes back cut is a flood: narrow the " +
+    "terms, add under, or count with sql - never read the saved result with the shell.\n" +
     SWEEP_TO_A_TOOL +
     "\n" +
     "Hits carry the lines: when a hit answers the question, answer from it. A hit's content shows each line " +
@@ -1787,7 +1806,7 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
           recordUsage(ctx.dir, entry);
           usage = formatReceipt(entry, session);
         }
-        const hint = findHint(query, result.total, Boolean(defines));
+        const hint = findHint(query, result.total, Boolean(defines), result.matches.length);
         return ok({
           ...result,
           ...(hint ? { hint } : {}),

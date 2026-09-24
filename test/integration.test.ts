@@ -7,7 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { connect } from "@infino-ai/infino";
 import { indexRepo, indexRepoStaged, syncRepo } from "../src/core/indexer.js";
 import { readManifest } from "../src/core/manifest.js";
-import { analyzerOf, analyzerTokens, find, plainTerms, runSql, search } from "../src/core/searcher.js";
+import { analyzerOf, analyzerTokens, cutFindMatches, find, plainTerms, runSql, search } from "../src/core/searcher.js";
 import { TABLE } from "../src/core/config.js";
 import type { IndexHandle } from "../src/core/context.js";
 import type { Embedder } from "../src/core/embedder.js";
@@ -325,6 +325,22 @@ describe("find", () => {
     expect(r.matches.length).toBe(1);
     expect(r.total).toBe(2);
     expect(r.truncated).toBe(true);
+  });
+
+  it("cuts the matches at the character budget before the line limit, the first match always kept", () => {
+    const line = (i: number) => ({ path: `logs/run-${i}.log`, line: i, text: "x".repeat(200) });
+    const rows = Array.from({ length: 50 }, (_, i) => line(i));
+    // Each match costs about 260 characters here; a 1,000-character budget
+    // holds three of them, and the line limit of 500 never comes into it.
+    const cut = cutFindMatches(rows, 500, 1_000);
+    expect(cut.length).toBe(3);
+    expect(cut[0]).toEqual(rows[0]);
+    // The limit still wins when it is the smaller.
+    expect(cutFindMatches(rows, 2, 1_000_000).length).toBe(2);
+    // A single match wider than the budget is returned rather than nothing.
+    expect(cutFindMatches([{ path: "a.log", line: 1, text: "y".repeat(5_000) }], 500, 100).length).toBe(1);
+    // The default budget holds a code-sized result whole.
+    expect(cutFindMatches(rows, 500).length).toBe(50);
   });
 
   it("refuses a query the index cannot look up, naming the index's analyzer", async () => {

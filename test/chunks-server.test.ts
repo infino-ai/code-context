@@ -150,6 +150,12 @@ describe("an index of logs is told apart and gets its instructions in log words"
     expect(text).toContain("Start with find or sql");
     expect(text).toContain("use ask for a question that spans the logs");
     expect(text).toContain("Do not open, read or grep the log files with Bash, Grep or Read");
+    // The looking around is named as not needed, the lines are sql's too,
+    // and a cut find is a flood to narrow, never a file for the shell.
+    expect(text).toContain("Begin with these tools, not with ls or a look at the directory");
+    expect(text).toContain("what fills a log, how often a pattern occurs, the kinds of error");
+    expect(text).toContain("A find that comes back cut is a flood");
+    expect(text).not.toContain("Read a file only");
     expectSharedSentences(text);
     // Without the agent tools there is no ask line and no ask in the order.
     const alone = logIndexInstructions(false, 35, 4903);
