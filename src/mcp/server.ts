@@ -654,9 +654,12 @@ export function indexFirst(agentTools: boolean, table = "chunks"): string {
   // longest test logs with one sql JOIN and then read the logs with ten
   // Bash calls, wc, grep, tail and sed, when their lines were one statement
   // away. So the statement is written out, and the file tools are named as
-  // not the way to read (the owner: "instruction sentence only").
+  // not the way to read (the owner: "instruction sentence only"). With ask
+  // on the surface it is the first of these: it runs the searches and the
+  // statements itself, several at once (the owner, 2026-09-24: "the outer
+  // model should be primed to use ask as much as possible").
   return (
-    `Look with the index first: ${tools} cover every file in one call and return the lines themselves, ` +
+    `Look with the index first${agentTools ? ", and ask first among these: it runs the searches and the statements itself, several at once, and returns the lines" : ""}: ${tools} cover every file in one call and return the lines themselves, ` +
     `and the lines of any file or row are one sql statement away (SELECT start_line, content FROM ${table} ` +
     "WHERE path = '...' ORDER BY start_line), and ranked when you want the lines about something rather " +
     `than all of them - hybrid_search, bm25_search or vector_search inside the statement (SELECT path, ` +
@@ -1500,8 +1503,35 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
           (siblingNames.length > 0
             ? `, and beside it in the same database the tables ${siblingNames.join(", ")}, which one sql statement joins with it`
             : "") +
-          ", and what the repository holds is in the sql tool's text, so begin with these tools, not with ls, cat or a look " +
-          "at CLAUDE.md. Which tool for which question:\n" +
+          ", and what the repository holds is in the sql tool's text, so begin with " +
+          (agentTools ? "ask" : "these tools") +
+          ", not with ls, cat or a look at CLAUDE.md" +
+          // Ask leads the list and the sentence: the tool named first is the
+          // tool reached for, and the model reached for sql seven times on a
+          // question one ask would have run as one (the owner, 2026-09-24:
+          // "the outer model should be primed to use ask as much as
+          // possible. sql is great and those should stay but it should reach
+          // for ask most of the time").
+          (agentTools ? ": ask is the tool for most questions here, and find, search and sql are for the cases named" : "") +
+          ". Which tool for which question:\n" +
+        (agentTools
+          ? // The whole-mechanism question is ask's too, as several asks in one
+            // reply: a tool that had the platform write the answer in one long
+            // call (`explore`) lost to this twice on the judged passes - see the
+            // note on `retrieve` - and the routing the model reads is this list.
+            `- ask - a question or task in plain language, first for most questions; returns the rows it retrieved (facts with path:line and the code), not an answer: compose from them. It runs the searches and the statements itself, several at once, over every table in scope. ${PREFER_SEVERAL_ASKS} How many - files, projects, places - is an ask or one sql statement, never a walk through files; a question across projects or tables is ask's, several at once.\n` +
+            // Several asks in one reply beat a loop that waits on itself for a
+            // question that splits into independent parts (measured
+            // 2026-09-12: one exploration took longer than four asks running
+            // at once).
+            "  A mechanism that spans files - how X works end to end, what calls what - is one ask per part: they run at the same time, and you do the following-up yourself from the rows they return. " +
+            "If an ask did not bring back what you wanted, rephrase it - more specific, or broader - and ask again, or ask several at once, rather than read files yourself.\n" +
+            // The written answer is the platform's, not the caller's, and it
+            // must reach the person without the caller's model retyping it -
+            // see core/answer-display.ts for the two deliveries and what
+            // each was measured to do.
+            (answerTool ? answerInstruction(answerDisplay) : "")
+          : "") +
         "- find - every line containing an exact string, where you would grep.\n" +
         // With `ask` on the surface, `search` must not claim the same question.
         // It did - "how does X work, where is Y handled" on both lines - and
@@ -1528,24 +1558,6 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
         "Ranking files by how much of them is about a topic goes through hybrid_search, not bm25, when the " +
         "topic is a concept; a total over a search relation is the top k's matched lines, never a file's " +
         "length - sizes and whole-repo counts come from the chunks table with no search function.\n" +
-        (agentTools
-          ? // The whole-mechanism question is ask's too, as several asks in one
-            // reply: a tool that had the platform write the answer in one long
-            // call (`explore`) lost to this twice on the judged passes - see the
-            // note on `retrieve` - and the routing the model reads is this list.
-            `- ask - a question or task in plain language; returns the rows it retrieved (facts with path:line and the code), not an answer: compose from them. ${PREFER_SEVERAL_ASKS} How many - files, projects, places - is an ask or one sql statement, never a walk through files; a question across projects is ask's, several at once.\n` +
-            // Several asks in one reply beat a loop that waits on itself for a
-            // question that splits into independent parts (measured
-            // 2026-09-12: one exploration took longer than four asks running
-            // at once).
-            "  A mechanism that spans files - how X works end to end, what calls what - is one ask per part: they run at the same time, and you do the following-up yourself from the rows they return. " +
-            "If an ask did not bring back what you wanted, rephrase it - more specific, or broader - and ask again, or ask several at once, rather than read files yourself.\n" +
-            // The written answer is the platform's, not the caller's, and it
-            // must reach the person without the caller's model retyping it -
-            // see core/answer-display.ts for the two deliveries and what
-            // each was measured to do.
-            (answerTool ? answerInstruction(answerDisplay) : "")
-          : "") +
         indexFirst(agentTools, TABLE) +
         "\n" +
         SWEEP_TO_A_TOOL +
@@ -2174,7 +2186,15 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
         // The repository's own instructions ride with the question only
         // when asked for (CX_DEV_CONTEXT=1); off, the loop's model gets the
         // question alone.
-        const context = devContextEnabled() ? devContext(ctx.root) : undefined;
+        // With sibling tables in scope the loop sees their cards - columns
+        // and sample rows - and not the deployment's own words on how they
+        // join and what their values mean; those ride as context, the way
+        // a repository's instructions do (the owner, 2026-09-24: "does the
+        // inner loop have those strong sql examples?").
+        const context =
+          [devContextEnabled() ? devContext(ctx.root) : undefined, siblingNames.length > 0 ? siblingNotes() : ""]
+            .filter(Boolean)
+            .join("\n\n") || undefined;
         // `under` names a subtree of a code index, and a row of a hosted
         // table of another shape sits in no directory - so it is left out
         // there, exactly as find leaves its own out.
@@ -2249,9 +2269,9 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
           // "Use it for a lookup" read as a narrow tool; the owner's rule is
           // the opposite ("it should also use ask extensively it's just
           // cheaper and faster").
-          "Use it for any question about the code or the data that is not a count you can already write " +
-          "or one exact literal: where is Y handled, how does X work, which files or projects do Z, what " +
-          "the rows about W say. " +
+          "Use it for most questions, before your own sql or search: any question about the code or the data " +
+          "that is not one statement you already know or one exact literal - where is Y handled, how does X " +
+          "work, which files or projects do Z, what the rows about W say, what fails and why. " +
           `${PREFER_SEVERAL_ASKS} ` +
           "A single question over a large codebase splits the same way: one call per section with " +
           "`under` naming its subtree, all issued together. " +
@@ -2305,7 +2325,9 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
         // as the installed hook read it from the session transcript; the
         // model itself types nothing here.
         const said = narration?.trim();
-        const context = [dev, said ? `${NARRATION_HEADING}\n${said}` : undefined].filter(Boolean).join("\n\n");
+        const context = [dev, siblingNames.length > 0 ? siblingNotes() : "", said ? `${NARRATION_HEADING}\n${said}` : undefined]
+          .filter(Boolean)
+          .join("\n\n");
         // The rows this server returned to the model in the session: the
         // platform writes from them and runs no loop. With none on record -
         // a question answered without a retrieval through this server - the
