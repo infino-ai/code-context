@@ -162,7 +162,7 @@ import {
   formatReceipt,
   recordUsage,
 } from "../core/usage.js";
-import { type CardJoin, cardJoins, ENGINE_ID_COLUMN, joinPredicate, resolveTableShape, SNIPPET_CHARS, type TableShape, uniqueJoins } from "../core/table-shape.js";
+import { ENGINE_ID_COLUMN, resolveTableShape, SNIPPET_CHARS, type TableShape } from "../core/table-shape.js";
 import {
   indexRepoStaged,
   syncRepo,

@@ -421,17 +421,17 @@ describe("the chunks table with CX_API_TOOLS=1 and no agent tools: the platform'
 });
 
 /** The platform with two sibling tables the primary may join: their schemas
- * answered by name, each sibling's card carrying the joins the platform found
- * on the tables' values when asked for beside the others (the primary has no
- * card), and query_sql answering any statement. */
+ * and cards answered by name (the primary has no card), the cards saying
+ * nothing about keys, join_keys answering with them, and query_sql
+ * answering any statement. */
 const ISSUES_FIELDS = [{ name: "instance_id", type: "utf8" }, { name: "project", type: "utf8" }, { name: "problem_statement", type: "large_utf8" }];
 const LOGS_FIELDS = [{ name: "path", type: "utf8" }, { name: "start_line", type: "i64" }, { name: "content", type: "large_utf8" }, { name: "instance_id", type: "utf8" }, { name: "resolved", type: "utf8" }];
-/** The joins as the platform writes them: the logs' issue id into the
- * issues, and the code's first path segment against the issues' project. */
+/** The joins as join_keys writes them: the logs' issue id into the issues,
+ * and the code's first path segment against the issues' project. */
 const LOGS_TO_ISSUES = { from_table: "chunks_swelogs", from_column: "instance_id", to_table: "swe_issues", to_column: "instance_id", inclusion: 1, coverage: 0.6, verified: false };
 const CODE_TO_ISSUES = { from_table: TABLE, from_column: "path", from_expression: "split_part({column}, '/', 1)", to_table: "swe_issues", to_column: "project", inclusion: 1, coverage: 1, verified: false };
-const siblingCard = (table: string, fields: Array<{ name: string; type: string }>, joins: unknown[]) => ({
-  card: { table, rows: 10, schema: fields.map((f) => ({ name: f.name, type: f.type, index: f.type === "large_utf8" ? "fts" : "scalar" })), joins, sample_rows: [] },
+const siblingCard = (table: string, fields: Array<{ name: string; type: string }>) => ({
+  card: { table, rows: 10, schema: fields.map((f) => ({ name: f.name, type: f.type, index: f.type === "large_utf8" ? "fts" : "scalar" })), sample_rows: [] },
   tier: "lean",
   built_ms: 1,
   storage_bytes: 1,
@@ -440,16 +440,14 @@ const withSiblings = () =>
   scriptPlatform({
     list_tables: () => [200, [TABLE, "swe_issues", "chunks_swelogs"]],
     schema: (body) => (body?.table_name === "swe_issues" ? [200, ISSUES_FIELDS] : body?.table_name === "chunks_swelogs" ? [200, LOGS_FIELDS] : [404, { error: "no such table" }]),
-    // A card asked for beside its siblings carries the joins among them;
-    // each sibling's card lists the joins it takes part in, so the one
-    // between the logs and the issues arrives from both.
+    // A card is the table's own shape and carries no key to any other table.
     table_card: (query) =>
-      query?.table === "swe_issues" && query.tables
-        ? [200, siblingCard("swe_issues", ISSUES_FIELDS, [LOGS_TO_ISSUES, CODE_TO_ISSUES])]
-        : query?.table === "chunks_swelogs" && query.tables
-        ? [200, siblingCard("chunks_swelogs", LOGS_FIELDS, [LOGS_TO_ISSUES])]
+      query?.table === "swe_issues"
+        ? [200, siblingCard("swe_issues", ISSUES_FIELDS)]
+        : query?.table === "chunks_swelogs"
+        ? [200, siblingCard("chunks_swelogs", LOGS_FIELDS)]
         : [404, { error: "no card" }],
-    // The route an agent calls before it writes a JOIN: the same keys, each
+    // The route an agent calls before it writes a JOIN: the keys, each
     // once, with the predicate written out.
     join_keys: (body) =>
       Array.isArray(body?.tables) && (body.tables as string[]).length >= 2
@@ -484,15 +482,15 @@ describe("the chunks table with CX_SIBLING_TABLES: the tables a statement may jo
     expect(sql).toContain("swe_issues(instance_id utf8, project utf8, problem_statement large_utf8)");
     expect(sql).toContain("chunks_swelogs(path utf8, start_line i64, content large_utf8, instance_id utf8, resolved utf8)");
     expect(sql).toContain("chunks_swelogs.resolved is 'true' or 'false' per run.");
-    // No key reaches the tool text. The cards are asked for alone, so the
-    // platform's joins never arrive; no join_keys call is made at startup;
-    // the worked JOIN carries a placeholder and says to call join_keys first
-    // (2026-09-24, after the corpus's keys had been written into this text
-    // by hand and then by a startup call: the owner, "you doctored the
-    // demo?").
-    const cardAsks = s.sent.filter((sent) => sent.op === "table_card").map((sent) => [sent.body?.table, sent.body?.tables]);
-    expect(cardAsks).toContainEqual(["swe_issues", undefined]);
-    expect(cardAsks).toContainEqual(["chunks_swelogs", undefined]);
+    // No key reaches the tool text. Each card is asked for by table and
+    // tier alone (a card route parameter that handed joins back with the
+    // card is gone); no join_keys call is made at startup; the worked JOIN
+    // carries a placeholder and says to call join_keys first (2026-09-24,
+    // after the corpus's keys had been written into this text by hand and
+    // then by a startup call: the owner, "you doctored the demo?").
+    const cardAsks = s.sent.filter((sent) => sent.op === "table_card").map((sent) => [sent.body?.table, Object.keys(sent.body ?? {}).sort()]);
+    expect(cardAsks).toContainEqual(["swe_issues", ["table", "tier"]]);
+    expect(cardAsks).toContainEqual(["chunks_swelogs", ["table", "tier"]]);
     expect(s.sent.filter((sent) => sent.op === "join_keys")).toEqual([]);
     expect(sql).not.toContain("Keys found on the tables' values");
     expect(sql).not.toContain("instance_id = swe_issues.instance_id");

@@ -86,18 +86,16 @@ describe("joinKeys", () => {
 });
 
 describe("tableCard", () => {
-  it("asks for the card alone, or beside the tables it is written across", async () => {
-    const { db, calls } = client([json({ card: { table: "logs" } }), json({ card: { table: "logs", joins: [] } })]);
+  it("asks for the card by table and tier, and nothing else", async () => {
+    const { db, calls } = client([json({ card: { table: "logs" } }), json({ card: { table: "logs" } })]);
     await db.tableCard("logs", "lean");
-    await db.tableCard("logs", undefined, ["issues", "logs", "code"]);
-    const [alone, beside] = calls.map((c) => new URL(c.url));
-    expect(alone.pathname).toBe("/v1/table_card/cx");
-    expect(alone.searchParams.get("table")).toBe("logs");
-    expect(alone.searchParams.get("tier")).toBe("lean");
-    expect(alone.searchParams.has("tables")).toBe(false);
-    // The table itself is not one of the tables beside it.
-    expect(beside.searchParams.get("tables")).toBe("issues,code");
-    expect(beside.searchParams.has("tier")).toBe(false);
+    await db.tableCard("logs");
+    const [tiered, plain] = calls.map((c) => new URL(c.url));
+    expect(tiered.pathname).toBe("/v1/table_card/cx");
+    expect(tiered.searchParams.get("table")).toBe("logs");
+    expect(tiered.searchParams.get("tier")).toBe("lean");
+    expect([...tiered.searchParams.keys()].sort()).toEqual(["table", "tier"]);
+    expect([...plain.searchParams.keys()]).toEqual(["table"]);
     expect(calls.every((c) => c.method === "GET")).toBe(true);
   });
 });
