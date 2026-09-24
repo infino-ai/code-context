@@ -494,6 +494,15 @@ describe("the chunks table with CX_SIBLING_TABLES: the tables a statement may jo
     // sibling; its keys and the cards' are the same joins, listed once.
     const keyAsks = s.sent.filter((sent) => sent.op === "join_keys").map((sent) => sent.body?.tables);
     expect(keyAsks).toEqual([["chunks", "swe_issues", "chunks_swelogs"]]);
+    // And the model has join_keys as a tool of its own on any hosted
+    // server, API-tools mode or not, named in the routing line.
+    const joinKeysTool = tools.find((t) => t.name === "join_keys");
+    expect(joinKeysTool?.description).toContain("never by matching column names");
+    expect(s.client.getInstructions() ?? "").toContain("join_keys returns the keys of any tables you name");
+    const r = await call(s, "join_keys", { tables: ["chunks_swelogs", "swe_issues"] });
+    expect(r.ok).toBe(true);
+    expect(((r.value as Record<string, unknown>).joins as unknown[]).length).toBe(2);
+    expect(r.ops).toEqual(["join_keys"]);
     expect(sql).toContain(
       "Keys found on the tables' values, write a JOIN on these: chunks_swelogs.instance_id = swe_issues.instance_id; split_part(chunks.path, '/', 1) = swe_issues.project.",
     );

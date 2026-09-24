@@ -650,14 +650,19 @@ export function siblingsInstruction(table: string, siblings: string[], agentTool
   // Ask first across the tables: the loop sees their cards and writes the
   // joins itself, several statements at once; the model's own sql is for
   // one statement it already knows (the owner, 2026-09-24).
+  // The keys are in the sql text for these tables, and join_keys answers
+  // them for any tables, so a statement across tables never guesses a key
+  // from a column name.
   return agentTools
     ? `\n- a question that touches two of these tables - ${table}, ${names} - is an ask first: the loop sees all ` +
         "three, writes the joins itself, several statements at once, and returns the rows. sql joins them too, " +
         "for one statement you already know; their columns, the keys and the statement's shape are in the sql " +
-        "tool's text. Never one query per table, never a walk through files.\n"
+        "tool's text, and join_keys returns the keys of any tables you name. Never one query per table, never a " +
+        "walk through files.\n"
     : `\n- sql also joins ${table} with ${names} in one statement - a question that touches two of these tables ` +
         "is one JOIN on their keys, with the search functions inside it, not one query per table and not a walk " +
-        "through files; their columns, the keys and the statement's shape are in the sql tool's text.\n";
+        "through files; their columns, the keys and the statement's shape are in the sql tool's text, and " +
+        "join_keys returns the keys of any tables you name.\n";
 }
 
 export function indexFirst(agentTools: boolean, table = "chunks"): string {
@@ -2048,6 +2053,38 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
     },
   );
 
+  if (hosted) {
+    // The call before a JOIN, on every hosted server and not only under
+    // CX_API_TOOLS: a model that knows which tables its question spans has
+    // no other way to the keys (the owner, 2026-09-24: "the outer model
+    // knows the tables it wants to search across. what does it do then?").
+    const keysDb = hostedDbFor(hosted, { ...hostedOptions, coldStartSecs: 0 });
+    server.registerTool(
+      "join_keys",
+      {
+        title: "The keys two or more tables join on, found on their values",
+        annotations: READ_ONLY,
+        description:
+          "The keys the named tables join on, found by the platform on the tables' values - which columns hold " +
+          "each other's values, and through which expression where they meet only through one - never by " +
+          "matching column names. Each join comes back with its two sides, the share of the referencing side's " +
+          "values found on the other, whether a statement counted it, and 'predicate', the ON clause ready to " +
+          `paste: alias a search's rows as the table (FROM hybrid_search('${TABLE}', ...) AS ${TABLE} JOIN other ON ` +
+          "<predicate>) and it reads as written. Call it before writing a statement across tables.",
+        inputSchema: {
+          tables: z.array(z.string().min(1)).min(2).max(8).describe(`The tables the statement will span, ${TABLE} among them when it is one of them.`),
+        },
+      },
+      async ({ tables }: { tables: string[] }) => {
+        try {
+          return ok((await keysDb.joinKeys(tables)) as Record<string, unknown>);
+        } catch (err) {
+          return fail(`join_keys failed: ${(err as Error).message}${refusalHint(err)}`);
+        }
+      },
+    );
+  }
+
   if (apiTools && hosted) {
     // The platform's routes as tools (CX_API_TOOLS). One client for the
     // three, no cold-start retries: a model asking for a card or a check
@@ -2077,31 +2114,6 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
           return ok((record.card ?? record) as Record<string, unknown>);
         } catch (err) {
           return fail(`table_card failed: ${(err as Error).message}${refusalHint(err)}`);
-        }
-      },
-    );
-
-    server.registerTool(
-      "join_keys",
-      {
-        title: "The keys two or more tables join on, found on their values",
-        annotations: READ_ONLY,
-        description:
-          "The keys the named tables join on, found by the platform on the tables' values - which columns hold " +
-          "each other's values, and through which expression where they meet only through one - never by " +
-          "matching column names. Each join comes back with its two sides, the share of the referencing side's " +
-          "values found on the other, whether a statement counted it, and 'predicate', the ON clause ready to " +
-          `paste: alias a search's rows as the table (FROM hybrid_search('${TABLE}', ...) AS ${TABLE} JOIN other ON ` +
-          "<predicate>) and it reads as written. Call it before writing a statement across tables.",
-        inputSchema: {
-          tables: z.array(z.string().min(1)).min(2).max(8).describe(`The tables the statement will span, ${TABLE} among them when it is one of them.`),
-        },
-      },
-      async ({ tables }: { tables: string[] }) => {
-        try {
-          return ok((await apiDb.joinKeys(tables)) as Record<string, unknown>);
-        } catch (err) {
-          return fail(`join_keys failed: ${(err as Error).message}${refusalHint(err)}`);
         }
       },
     );
