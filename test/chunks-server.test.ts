@@ -414,6 +414,57 @@ describe("the chunks table with CX_API_TOOLS=1 and no agent tools: the platform'
   });
 });
 
+/** The platform with two sibling tables the primary may join: their schemas
+ * answered by name, no cards, and query_sql answering any statement. */
+const ISSUES_FIELDS = [{ name: "instance_id", type: "utf8" }, { name: "project", type: "utf8" }, { name: "problem_statement", type: "large_utf8" }];
+const LOGS_FIELDS = [{ name: "path", type: "utf8" }, { name: "start_line", type: "i64" }, { name: "content", type: "large_utf8" }, { name: "instance_id", type: "utf8" }, { name: "resolved", type: "utf8" }];
+const withSiblings = () =>
+  scriptPlatform({
+    list_tables: () => [200, [TABLE, "swe_issues", "chunks_swelogs"]],
+    schema: (body) => (body?.table_name === "swe_issues" ? [200, ISSUES_FIELDS] : body?.table_name === "chunks_swelogs" ? [200, LOGS_FIELDS] : [404, { error: "no such table" }]),
+    table_card: () => [404, { error: "no card" }],
+    hybrid_search: () => [200, [CHUNK]],
+    query_sql: () => [200, [{ project: "astropy__astropy", issues: 21, resolved: 10 }]],
+    validate: () => [200, { valid: true, check: "unchecked" }],
+  });
+
+describe("the chunks table with CX_SIBLING_TABLES: the tables a statement may join", () => {
+  let s: Started;
+  beforeAll(async () => {
+    process.env.CX_SIBLING_TABLES = "swe_issues,chunks_swelogs";
+    process.env.CX_SIBLING_NOTES = "Join swe_issues to chunks_swelogs on instance_id, and either to the code by project.";
+    s = await start(withSiblings(), "cx-chunks-siblings-");
+  });
+  afterAll(async () => {
+    delete process.env.CX_SIBLING_TABLES;
+    delete process.env.CX_SIBLING_NOTES;
+    await stop(s);
+  });
+
+  it("describes the siblings' columns and the join keys in the sql text and names them in the instructions", async () => {
+    // Startup read each sibling's schema (and asked for its card), nothing more.
+    expect(s.startup.filter((op) => op === "schema").length).toBe(2);
+    const { tools } = await s.client.listTools();
+    const sql = tools.find((t) => t.name === "sql")?.description ?? "";
+    expect(sql).toContain("joinable with chunks in one statement");
+    expect(sql).toContain("swe_issues(instance_id utf8, project utf8, problem_statement large_utf8)");
+    expect(sql).toContain("chunks_swelogs(path utf8, start_line i64, content large_utf8, instance_id utf8, resolved utf8)");
+    expect(sql).toContain("Join swe_issues to chunks_swelogs on instance_id");
+    const instructions = s.client.getInstructions() ?? "";
+    expect(instructions).toContain("- sql also joins chunks with swe_issues, chunks_swelogs in one statement");
+  });
+
+  it("runs a plain statement on the platform, where the join can run, rather than on the local index", async () => {
+    const r = await call(s, "sql", {
+      query: "SELECT i.project, count(*) AS issues FROM swe_issues i JOIN chunks_swelogs l ON l.instance_id = i.instance_id GROUP BY i.project",
+      question: "how many issues per project have a log?",
+    });
+    expect(r.ok, String(r.value)).toBe(true);
+    expect(r.ops).toContain("query_sql");
+    expect((r.value as Record<string, unknown>).rows).toEqual([{ project: "astropy__astropy", issues: 21, resolved: 10 }]);
+  });
+});
+
 describe("the chunks table with CX_ANSWER_DISPLAY=hook: the install wrote the hook", () => {
   let s: Started;
   beforeAll(async () => {

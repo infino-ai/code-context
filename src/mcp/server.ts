@@ -72,6 +72,8 @@ import {
   agentToolsEnabled,
   answerToolEnabled,
   apiToolsEnabled,
+  siblingNotes,
+  siblingTables,
   subagentK,
   subagentMaxTurns,
   subagentMaxWallSecs,
@@ -527,6 +529,34 @@ export function logIndexInstructions(agentTools: boolean, files: number, chunks:
     "only where the thing you name sits - never the hit's whole line range, which spans the window. " +
     CITE_EXACTLY +
     " A 'partial' marker means files over the index cap were left out, so a missing match is not proof of absence."
+  );
+}
+
+/** What `sql` says about the sibling tables: each one's columns as the
+ * platform describes them, its indexed text and vector columns, that a
+ * statement across them is one call, and the deployment's own words on the
+ * keys that join them. */
+export function siblingsNote(table: string, siblings: TableShape[], unresolved: string[], notes: string): string {
+  const described = siblings.map(
+    (s) =>
+      `${s.table}(${columnList(s)})` +
+      (s.textColumns.length ? `, full-text indexed on ${s.textColumns.join(", ")}` : "") +
+      (s.vectorColumn ? `, vector column ${s.vectorColumn}` : ""),
+  );
+  return (
+    ` Also in this database, and joinable with ${table} in one statement: ${described.join("; ")}.` +
+    (unresolved.length ? ` (${unresolved.join(", ")} could not be described when this server started; name them by their columns as you know them.)` : "") +
+    ` Every statement here runs on the platform, so a JOIN, a subquery or a UNION across these tables is one call, ` +
+    `and the search functions take any of them as their first argument.` +
+    (notes ? ` ${notes}` : "")
+  );
+}
+
+/** The routing line for a server with sibling tables. */
+export function siblingsInstruction(table: string, siblings: string[]): string {
+  return (
+    `\n- sql also joins ${table} with ${siblings.join(", ")} in one statement - a question that reaches across them ` +
+    "is one JOIN here, not a walk through files; their columns and the keys that join them are in the sql tool's text.\n"
   );
 }
 
@@ -1231,6 +1261,25 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
     }
   }
 
+  // Sibling tables (CX_SIBLING_TABLES): the other hosted tables a statement
+  // may join with the primary. Each is described once here, best-effort as
+  // the card is - one that cannot be described is named in the text as such
+  // rather than dropped, since the join is still the model's to write.
+  const siblingNames = hosted ? siblingTables() : [];
+  const siblings: TableShape[] = [];
+  const siblingsUnresolved: string[] = [];
+  if (siblingNames.length > 0) {
+    const describer = hostedDbFor(hosted!, { ...hostedOptions, coldStartSecs: 0 });
+    for (const name of siblingNames) {
+      try {
+        siblings.push(await resolveTableShape(describer, name, CARD_TIER, noCard));
+      } catch (err) {
+        siblingsUnresolved.push(name);
+        console.error(`sibling table ${name} could not be described: ${(err as Error).message}${refusalHint(err)}`);
+      }
+    }
+  }
+
   /** The rows a call on `ctx` runs over, read off the startup decision - no
    * platform call, no await: the shape when the context carries the platform
    * client (the default root) and the table is of another shape; `failed`
@@ -1319,6 +1368,7 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
     if (card) sqlDescription += CARD_PREAMBLE + JSON.stringify(card);
   }
   if (apiTools) sqlDescription += API_TOOLS_SQL_NOTE;
+  if (siblingNames.length > 0) sqlDescription += siblingsNote(TABLE, siblings, siblingsUnresolved, siblingNotes());
 
   // What the local index holds, read once here: an index of logs gets its
   // instructions in log words (`logIndexInstructions`), a code index the
@@ -1378,7 +1428,9 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
         " Read a file only for a hit marked truncated. " +
         "Every tool takes an optional 'path' (an absolute repo root) to target another repository. " +
         "A 'partial' marker means files over the index cap were left out, so a missing match is not " +
-        "proof of absence.") + (apiTools ? apiToolsInstruction(Boolean(rows)) : ""),
+        "proof of absence.") +
+        (apiTools ? apiToolsInstruction(Boolean(rows)) : "") +
+        (siblingNames.length > 0 ? siblingsInstruction(TABLE, siblingNames) : ""),
     },
   );
 
@@ -1721,6 +1773,14 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
       const over = rowsOver("sql", ctx);
       if (over && "failed" in over) return over.failed;
       if (over) return sqlOnPlatform(ctx, query, embeds, question, { column: over.shape.primaryText, numbered: false, key: over.shape.keyColumn });
+      // With sibling tables named, every statement runs on the platform: a
+      // JOIN across them has nowhere else to run, and a plain statement over
+      // the primary alone gives the same rows there as here.
+      if (ctx.hosted && siblingNames.length > 0) {
+        const notReady = await platformNotReady("sql", ctx);
+        if (notReady) return notReady;
+        return sqlOnPlatform(ctx, query, embeds, question, { numbered: true });
+      }
       // The chunks table's statement runs on the platform when it embeds a
       // query, whatever else is configured: a `{{q}}` is a vector function's,
       // the platform embeds it with the table's own model, and the local side

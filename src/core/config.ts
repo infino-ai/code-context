@@ -317,6 +317,28 @@ export function apiToolsEnabled(): boolean {
   return ON_VALUES.includes((process.env.CX_API_TOOLS ?? "").toLowerCase());
 }
 
+/** Hosted tables beside the primary that `sql` may join (CX_SIBLING_TABLES,
+ * comma-separated, default none). Named, the server reads each one's schema
+ * at startup and puts it in the sql tool's text with the primary's, and
+ * every sql statement runs on the platform, where a JOIN across them is one
+ * call - the local index holds the primary table alone. Built 2026-09-24
+ * for a demo corpus of code, issues and test logs (the owner: "cross corpus
+ * questions that would need joins to work well so we can show a competitive
+ * advantage"). */
+export function siblingTables(): string[] {
+  return (process.env.CX_SIBLING_TABLES ?? "")
+    .split(",")
+    .map((name) => name.trim())
+    .filter(Boolean);
+}
+
+/** What the model is told about the siblings beyond their columns - the
+ * keys that join them, in the deployment's words (CX_SIBLING_NOTES). The
+ * schema says what the columns are; only the corpus knows which ones match. */
+export function siblingNotes(): string {
+  return (process.env.CX_SIBLING_NOTES ?? "").trim();
+}
+
 /** The table this client builds when nothing overrides the name: the one
  * table a process owns. A process whose `CX_TABLE` names anything else is a
  * search-only process over a table something else loaded (see TABLE), and
