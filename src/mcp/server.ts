@@ -615,6 +615,11 @@ export function logIndexInstructions(agentTools: boolean, files: number, chunks:
  * keys, first typed by hand, then computed at startup, and the model never
  * had to find one (the owner: "you doctored the demo?"). The keys are the
  * join_keys tool's to return when the model calls it. */
+/** The one rule a model with sibling tables is held to, as the owner wrote
+ * it (2026-09-24). Stated as a rule, in the sql text and the instructions,
+ * because the softer "call join_keys first" was measured skipped. */
+export const JOIN_KEYS_RULE = "YOU MUST CALL join_keys BEFORE ANY sql CALL IF THE QUERY INVOLVES MORE THAN ONE TABLE.";
+
 export function siblingsNote(table: string, siblings: TableShape[], unresolved: string[], notes: string): string {
   const described = siblings.map(
     (s) =>
@@ -624,6 +629,10 @@ export function siblingsNote(table: string, siblings: TableShape[], unresolved: 
   );
   const partner = siblings[0]?.table ?? table;
   return (
+    // The rule first, in the owner's words (2026-09-24, after Opus was
+    // measured twice writing a cross-table statement with no join_keys
+    // call: "it's not forceful enough").
+    ` ${JOIN_KEYS_RULE}` +
     ` Also in this database, and joinable with ${table} in one statement: ${described.join("; ")}.` +
     (unresolved.length ? ` (${unresolved.join(", ")} could not be described when this server started; name them by their columns as you know them.)` : "") +
     ` Every statement here runs on the platform, so a JOIN, a subquery or a UNION across these tables is one call, ` +
@@ -649,12 +658,12 @@ export function siblingsInstruction(table: string, siblings: string[], agentTool
   // text, so a statement across tables never guesses a key from a column
   // name and never reads one we typed.
   return agentTools
-    ? `\n- a question that touches two of these tables - ${table}, ${names} - is an ask first: the loop sees all ` +
+    ? `\n- ${JOIN_KEYS_RULE} A question that touches two of these tables - ${table}, ${names} - is an ask first: the loop sees all ` +
         "three, writes the joins itself, several statements at once, and returns the rows. sql joins them too, " +
         "for one statement you already know: call join_keys with the tables for the keys, then write the JOIN; " +
         "their columns and the statement's shape are in the sql tool's text. Never one query per table, never a " +
         "walk through files.\n"
-    : `\n- sql also joins ${table} with ${names} in one statement - a question that touches two of these tables ` +
+    : `\n- ${JOIN_KEYS_RULE} sql also joins ${table} with ${names} in one statement - a question that touches two of these tables ` +
         "is one JOIN, with the search functions inside it, not one query per table and not a walk through " +
         "files: call join_keys with the tables for the keys, then write the JOIN; their columns and the " +
         "statement's shape are in the sql tool's text.\n";

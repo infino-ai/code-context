@@ -496,6 +496,12 @@ describe("the chunks table with CX_SIBLING_TABLES: the tables a statement may jo
     expect(sql).not.toContain("instance_id = swe_issues.instance_id");
     expect(sql).toContain("JOIN chunks ON <the predicate join_keys returned> WHERE ...");
     expect(sql).toContain("call join_keys with the tables first and paste its predicate into ON");
+    // The rule, in the owner's words, heads the sibling text and the
+    // routing line (2026-09-24: "it's not forceful enough").
+    const rule = "YOU MUST CALL join_keys BEFORE ANY sql CALL IF THE QUERY INVOLVES MORE THAN ONE TABLE.";
+    expect(sql.indexOf(rule)).toBeGreaterThan(-1);
+    expect(sql.indexOf(rule)).toBeLessThan(sql.indexOf("Also in this database"));
+    expect(s.client.getInstructions() ?? "").toContain(`- ${rule}`);
     // The model has join_keys as a tool of its own on any hosted server,
     // API-tools mode or not, named in the routing line; a call returns the
     // platform's keys with their predicates.
@@ -509,7 +515,7 @@ describe("the chunks table with CX_SIBLING_TABLES: the tables a statement may jo
     const instructions = s.client.getInstructions() ?? "";
     // Ask first across the tables: the loop writes the joins itself, several
     // at once; the model's own sql is for one statement it already knows.
-    expect(instructions).toContain("- a question that touches two of these tables - chunks, swe_issues, chunks_swelogs - is an ask first");
+    expect(instructions).toContain(`- ${rule} A question that touches two of these tables - chunks, swe_issues, chunks_swelogs - is an ask first`);
     expect(instructions).toContain("- sql - one statement you already know");
     // The siblings come second in the sql text, before the recipes and the
     // card, and the ask text says its search spans them.
