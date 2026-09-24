@@ -129,7 +129,7 @@ export function refusalHint(err: unknown): string {
 }
 import { hostedDbFor, localDb, newHostedMemo, platformLabel, platformTableReady, type IndexHandle } from "../core/context.js";
 import { devContext, devContextEnabled } from "../core/dev-context.js";
-import { foldValidationFacts, rankRows } from "../core/facts.js";
+import { budgetSqlRows, foldValidationFacts, rankRows, sqlBudgetHint } from "../core/facts.js";
 import { HostedError, type HostedOptions, type RowRecord } from "../core/hosted.js";
 import { RetrievalRecord } from "../core/retrieval-record.js";
 import {
@@ -358,6 +358,14 @@ export const SQL_DESCRIPTION =
   "table is the one form to avoid. Rows are windows that overlap by a few lines, so a per-line count runs a " +
   "little high and the ranking is right; log lines may carry colour codes, so match inside an unnested line " +
   "(LIKE '%FAILED%'), never at its start. " +
+  // The dialect, where the model wrote functions it does not have: on the
+  // demo (2026-09-24) regexp_extract failed as unknown, regexp_match came
+  // back as a list this side cannot render, and the third try was a scan
+  // of whole windows past the result budget - then the shell.
+  "The dialect is Apache DataFusion: regexp_like, regexp_replace, substr, position, split_part, " +
+  "string_to_array with unnest, CASE WHEN; regexp_match returns a list this side cannot show, so shape " +
+  "with regexp_replace instead, and there is no regexp_extract. A result past the tool's budget keeps " +
+  "every row's keys and places and cuts the text, so select the lines you mean rather than whole windows. " +
   "Select start_line beside content whenever you mean to read or cite the code: a row's text " +
   "comes back with each line's own number in the file when the row carries its start line, and " +
   "unnumbered when it does not, since nothing then places the text. " +
@@ -1431,8 +1439,11 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
         recordUsage(ctx.dir, entry);
         usage = formatReceipt(entry, session);
       }
+      const held = budgetSqlRows(rowsOut, (row) => jsonify(row).length);
+      const hint = sqlBudgetHint(rowsOut.length, held.budget);
       return ok({
-        rows: rowsOut,
+        rows: held.rows,
+        ...(hint ? { hint } : {}),
         ...(verdict ? { validation: verdict } : {}),
         index: "platform",
         took_ms: Math.round((performance.now() - t0) * 1000) / 1000,
@@ -1954,8 +1965,11 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
           recordUsage(ctx.dir, entry);
           usage = formatReceipt(entry, session);
         }
+        const held = budgetSqlRows(rows, (row) => jsonify(row).length);
+        const hint = sqlBudgetHint(rows.length, held.budget);
         return ok({
-          rows,
+          rows: held.rows,
+          ...(hint ? { hint } : {}),
           ...(verdict ? { validation: verdict } : {}),
           ...(partial ? { partial } : {}),
           ...(autoIndexed ? { auto_indexed: autoIndexNote(autoIndexed) } : {}),

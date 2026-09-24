@@ -5,7 +5,40 @@
 // reads, and leave the verdict carrying the note alone.
 
 import { describe, expect, it } from "vitest";
-import { foldValidationFacts, ordersRows, rankRows } from "../src/core/facts.js";
+import { budgetSqlRows, foldValidationFacts, ordersRows, rankRows, SQL_CELL_CHAR_CAP, sqlBudgetHint } from "../src/core/facts.js";
+import { jsonify } from "../src/core/json.js";
+
+describe("budgetSqlRows", () => {
+  const size = (row: Record<string, unknown>) => jsonify(row).length;
+
+  it("keeps every row: text cells cut at the cap while the budget lasts, keys and places alone past it", () => {
+    const rows = Array.from({ length: 40 }, (_, i) => ({ path: `logs/run-${i}.log`, start_line: i * 60 + 1, content: "x".repeat(2_000) }));
+    // Each capped row costs about 1,600 characters; a 5,000-character budget
+    // carries three with their text and the other 37 as places.
+    const { rows: held, budget } = budgetSqlRows(rows, size, 5_000);
+    expect(held.length).toBe(40);
+    expect(budget).toEqual({ cutCells: 40, keysOnly: 37 });
+    expect(String(held[0].content).startsWith("x".repeat(SQL_CELL_CHAR_CAP))).toBe(true);
+    expect(String(held[0].content)).toContain("[cut: 500 more characters]");
+    expect(held[3]).toEqual({ path: "logs/run-3.log", start_line: 181 });
+    expect(sqlBudgetHint(40, budget)).toContain("37 of 40 rows carry their keys and places only");
+    expect(sqlBudgetHint(40, budget)).toContain("40 long text cells were cut");
+  });
+
+  it("leaves a small result exactly as it was, with no hint", () => {
+    const rows = [{ path: "a.rs", n: 3n }, { path: "b.rs", n: 1n }];
+    const { rows: held, budget } = budgetSqlRows(rows, size);
+    expect(held).toEqual(rows);
+    expect(sqlBudgetHint(2, budget)).toBeNull();
+  });
+
+  it("a single row wider than the budget still carries its (cut) text", () => {
+    const { rows: held, budget } = budgetSqlRows([{ path: "a.log", content: "y".repeat(50_000) }], size, 100);
+    expect(held.length).toBe(1);
+    expect(budget.keysOnly).toBe(0);
+    expect(String(held[0].content).length).toBeLessThan(SQL_CELL_CHAR_CAP + 60);
+  });
+});
 
 describe("rankRows", () => {
   const rows = [{ path: "a", n: 3 }, { path: "b", n: 2 }, { path: "c", n: 1 }];

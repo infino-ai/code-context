@@ -61,6 +61,83 @@ export function rankRows<R extends Record<string, unknown>>(rows: readonly R[], 
   return rows.map((row, i) => ({ [RANK_FIELD]: i + 1, ...row }) as R);
 }
 
+/** Characters of cell text one `sql` result carries at most. A statement
+ * that selects whole windows of a log table - `SELECT path, start_line,
+ * content ... WHERE content LIKE '%##[error]%'` - came back as 217,262
+ * characters over 214 rows on the demo's CI-logs corpus (2026-09-24), past
+ * Claude Code's tool-result cap; the result went to a file, the model went
+ * to the shell for the rest of the run. Past the budget a row keeps its
+ * place and loses its long text, so no row is dropped. */
+export const SQL_RESULT_CHAR_BUDGET = 24_000;
+/** A text cell longer than this is cut and the cut marked, so one wide
+ * column cannot spend the whole budget on its first rows. */
+export const SQL_CELL_CHAR_CAP = 1_500;
+/** A string cell at most this long is a key or a name, kept on a row past
+ * the budget; a longer one is text, dropped there. */
+const KEY_CELL_CHARS = 120;
+
+/** What the budget did to a result: how many cells were cut, how many rows
+ * carry their keys alone. */
+export interface SqlBudget {
+  cutCells: number;
+  keysOnly: number;
+}
+
+function cutCell(text: string): string {
+  if (text.length <= SQL_CELL_CHAR_CAP) return text;
+  return `${text.slice(0, SQL_CELL_CHAR_CAP)} …[cut: ${text.length - SQL_CELL_CHAR_CAP} more characters]`;
+}
+
+/** `rows` held to the result budget: every row kept, in order. While the
+ * budget lasts a row's long text cells are cut at the cell cap; past it a
+ * row keeps only its short cells - keys, names, numbers, places - and its
+ * text is one statement away by those. `jsonify` sizes the rows the way
+ * they are written. */
+export function budgetSqlRows<R extends Record<string, unknown>>(
+  rows: readonly R[],
+  size: (row: Record<string, unknown>) => number,
+  budget = SQL_RESULT_CHAR_BUDGET,
+): { rows: Record<string, unknown>[]; budget: SqlBudget } {
+  const out: Record<string, unknown>[] = [];
+  const tally: SqlBudget = { cutCells: 0, keysOnly: 0 };
+  let chars = 0;
+  for (const row of rows) {
+    const capped: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(row)) {
+      if (typeof value === "string" && value.length > SQL_CELL_CHAR_CAP) {
+        capped[key] = cutCell(value);
+        tally.cutCells += 1;
+      } else capped[key] = value;
+    }
+    const cost = size(capped);
+    if (out.length === 0 || chars + cost <= budget) {
+      out.push(capped);
+      chars += cost;
+      continue;
+    }
+    const slim: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(row)) {
+      if (typeof value !== "string" || value.length <= KEY_CELL_CHARS) slim[key] = value;
+    }
+    out.push(slim);
+    tally.keysOnly += 1;
+    chars += size(slim);
+  }
+  return { rows: out, budget: tally };
+}
+
+/** What a budgeted result tells the model, or null when nothing was cut. */
+export function sqlBudgetHint(total: number, budget: SqlBudget): string | null {
+  if (budget.cutCells === 0 && budget.keysOnly === 0) return null;
+  const parts: string[] = [];
+  if (budget.keysOnly > 0) parts.push(`${budget.keysOnly} of ${total} rows carry their keys and places only, their text left out`);
+  if (budget.cutCells > 0) parts.push(`${budget.cutCells} long text cells were cut at ${SQL_CELL_CHAR_CAP} characters`);
+  return (
+    `${parts.join("; ")}: the result passed the tool's budget. Narrow with WHERE or LIMIT, select ` +
+    "substr(content, 1, n) or the lines you mean by path and start_line, or count instead of reading."
+  );
+}
+
 /** `rows` with the verdict's facts folded in, and the verdict without the
  * facts it no longer needs to carry. A row whose group value has facts gains
  * `file_lines` when the source's length is known and `term_lines` when any
