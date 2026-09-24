@@ -164,6 +164,7 @@ import {
 } from "../core/usage.js";
 import { ENGINE_ID_COLUMN, resolveTableShape, SNIPPET_CHARS, type TableShape } from "../core/table-shape.js";
 import { joinGate, joinRefusal, type PlatformJoin } from "../core/join-gate.js";
+import { topKAggregateRefusal } from "../core/topk-aggregate.js";
 import {
   indexRepoStaged,
   syncRepo,
@@ -1977,6 +1978,13 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
         return fail((err as Error).message);
       }
       const embeds = embed as Record<string, string> | undefined;
+      // A GROUP BY over a ranked search's small top k ranks a share of those
+      // rows, not the corpus; refused with the shapes that do, on every path
+      // (core/topk-aggregate.ts). The one shape behind every ranking the
+      // Infino arm lost on the 2026-09-24 panel, warned against in the text
+      // above and written anyway by every caller family.
+      const topK = topKAggregateRefusal("sql", query);
+      if (topK) return fail(topK);
       // A statement across two or more of the hosted tables is held to the
       // keys the platform found on their values: one written without any of
       // them is refused with the keys, and the model rewrites it. The model
