@@ -572,8 +572,10 @@ export function indexFirst(agentTools: boolean, table = "chunks"): string {
   return (
     `Look with the index first: ${tools} cover every file in one call and return the lines themselves, ` +
     `and the lines of any file or row are one sql statement away (SELECT start_line, content FROM ${table} ` +
-    "WHERE path = '...' ORDER BY start_line). Do not open the checkout with Grep, Glob, Bash or Read for " +
-    "what they can answer."
+    "WHERE path = '...' ORDER BY start_line), and ranked when you want the lines about something rather " +
+    `than all of them - hybrid_search, bm25_search or vector_search inside the statement (SELECT path, ` +
+    `start_line, content FROM hybrid_search('${table}', 'content', '<terms>', 'embedding', {{q}}, 50) ` +
+    "WHERE ...). Do not open the checkout with Grep, Glob, Bash or Read for what they can answer."
   );
 }
 
