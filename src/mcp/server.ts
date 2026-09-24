@@ -1427,7 +1427,8 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
             // question that splits into independent parts (measured
             // 2026-09-12: one exploration took longer than four asks running
             // at once).
-            "  A mechanism that spans files - how X works end to end, what calls what - is one ask per part: they run at the same time, and you do the following-up yourself from the rows they return.\n" +
+            "  A mechanism that spans files - how X works end to end, what calls what - is one ask per part: they run at the same time, and you do the following-up yourself from the rows they return. " +
+            "If an ask did not bring back what you wanted, rephrase it - more specific, or broader - and ask again, or ask several at once, rather than read files yourself.\n" +
             // The written answer is the platform's, not the caller's, and it
             // must reach the person without the caller's model retyping it -
             // see core/answer-display.ts for the two deliveries and what
@@ -2111,6 +2112,14 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
           "A mechanism that spans files - how X works end to end, what calls what - is one ask per " +
           "part: they run at the same time, and you do the following-up yourself from the rows they " +
           "return. " +
+          // A model whose ask came back thin went to Read next, file after
+          // file (Fable on the demo, 2026-09-24). The owner: "you can
+          // rephrase ask to be more specific and re-issue the question again
+          // if you don't get what you want from ask. it can handle a lot of
+          // parallelism so you could even be broader in your search."
+          "If an ask did not bring back what you wanted, rephrase it - more specific, or broader - and " +
+          "ask again, or ask several at once: it runs many searches in parallel, so several asks in one " +
+          "reply cost one wait, and a second ask is cheaper than reading files yourself. " +
           // A count and a question across projects were going to Bash: the
           // sentence here sent "how many" to find and "a file you already
           // know" to Read, and the model took that as the file tools' turn
