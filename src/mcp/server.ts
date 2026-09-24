@@ -163,6 +163,7 @@ import {
   recordUsage,
 } from "../core/usage.js";
 import { ENGINE_ID_COLUMN, resolveTableShape, SNIPPET_CHARS, type TableShape } from "../core/table-shape.js";
+import { joinGate, joinRefusal, type PlatformJoin } from "../core/join-gate.js";
 import {
   indexRepoStaged,
   syncRepo,
@@ -1397,6 +1398,29 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
     }
   }
 
+  /** The platform's keys among a set of hosted tables, asked for once per
+   * set for the server's life: what the join gate holds a statement across
+   * tables to (core/join-gate.ts). A platform that cannot answer leaves the
+   * statement ungated rather than unrun - the gate is a check, not a
+   * precondition - and says so on stderr. */
+  const platformKeys = new Map<string, Promise<PlatformJoin[]>>();
+  const keysAmong = (tables: string[]): Promise<PlatformJoin[]> => {
+    const set = [...tables].sort().join(",");
+    let pending = platformKeys.get(set);
+    if (!pending) {
+      pending = hostedDbFor(hosted!, { ...hostedOptions, coldStartSecs: 0 })
+        .joinKeys(tables)
+        .then((record) => ((record.joins as PlatformJoin[] | undefined) ?? []).filter((j) => typeof j?.predicate === "string"))
+        .catch((err) => {
+          console.error(`join_keys for ${set} failed; the statement runs ungated: ${(err as Error).message}`);
+          platformKeys.delete(set);
+          return [] as PlatformJoin[];
+        });
+      platformKeys.set(set, pending);
+    }
+    return pending;
+  };
+
   /** The rows a call on `ctx` runs over, read off the startup decision - no
    * platform call, no await: the shape when the context carries the platform
    * client (the default root) and the table is of another shape; `failed`
@@ -1944,6 +1968,16 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
         return fail((err as Error).message);
       }
       const embeds = embed as Record<string, string> | undefined;
+      // A statement across two or more of the hosted tables is held to the
+      // keys the platform found on their values: one written without any of
+      // them is refused with the keys, and the model rewrites it. The model
+      // was measured not to call join_keys on its own and to match columns
+      // by name instead (2026-09-24); the owner: "either the model calls it
+      // or we force a rewrite internally".
+      if (ctx.hosted && siblingNames.length > 0) {
+        const verdict = await joinGate(query, [TABLE, ...siblingNames], keysAmong);
+        if (verdict.kind === "refuse") return fail(joinRefusal("sql", verdict));
+      }
       // Over the rows of a hosted table of another shape the statement runs
       // on the platform - and this comes before the local index for the
       // reason find's does. The rows come back as the platform gave them: a

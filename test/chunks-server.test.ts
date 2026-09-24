@@ -519,14 +519,42 @@ describe("the chunks table with CX_SIBLING_TABLES: the tables a statement may jo
     expect(instructions).toContain("beside it in the same database the tables swe_issues, chunks_swelogs");
   });
 
-  it("runs a plain statement on the platform, where the join can run, rather than on the local index", async () => {
+  it("runs a statement across the tables on the platform once the platform's key is in it, asking join_keys itself first", async () => {
     const r = await call(s, "sql", {
       query: "SELECT i.project, count(*) AS issues FROM swe_issues i JOIN chunks_swelogs l ON l.instance_id = i.instance_id GROUP BY i.project",
       question: "how many issues per project have a log?",
     });
     expect(r.ok, String(r.value)).toBe(true);
+    // The gate asked the platform for the keys of exactly the tables named,
+    // then the statement ran; a second statement over the same tables asks
+    // no second time.
+    expect(r.ops[0]).toBe("join_keys");
     expect(r.ops).toContain("query_sql");
+    // (The earlier test in this block called the join_keys tool by hand; the
+    // gate's own call names the tables in the statement's order.)
+    expect(s.sent.filter((sent) => sent.op === "join_keys").map((sent) => sent.body?.tables)).toContainEqual(["swe_issues", "chunks_swelogs"]);
     expect((r.value as Record<string, unknown>).rows).toEqual([{ project: "astropy__astropy", issues: 21, resolved: 10 }]);
+    const again = await call(s, "sql", { query: "SELECT count(*) FROM chunks_swelogs l JOIN swe_issues i ON i.instance_id = l.instance_id" });
+    expect(again.ok, String(again.value)).toBe(true);
+    expect(again.ops).not.toContain("join_keys");
+  });
+
+  it("refuses a statement across the tables written on no key the platform found, and hands back the keys", async () => {
+    // The shape the model wrote when measured (2026-09-24): the two columns
+    // matched by name in a correlated subquery, no join_keys call.
+    const r = await call(s, "sql", {
+      query: "SELECT i.instance_id FROM swe_issues i WHERE i.instance_id IN (SELECT instance_id FROM chunks_swelogs WHERE resolved = 'false')",
+    });
+    expect(r.ok).toBe(false);
+    const text = String(r.value);
+    expect(text).toContain("sql refused: the statement spans swe_issues, chunks_swelogs without a key the platform found on their values");
+    expect(text).toContain("chunks_swelogs.instance_id = swe_issues.instance_id");
+    expect(text).not.toContain("split_part(chunks.path");
+    expect(r.ops).not.toContain("query_sql");
+    // A statement over one table is never gated and asks for no keys.
+    const one = await call(s, "sql", { query: "SELECT count(*) FROM chunks_swelogs WHERE resolved = 'false'" });
+    expect(one.ok, String(one.value)).toBe(true);
+    expect(one.ops).not.toContain("join_keys");
   });
 });
 
