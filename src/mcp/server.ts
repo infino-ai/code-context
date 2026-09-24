@@ -2111,8 +2111,10 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
             // The table this client reads, in either mode: the database can
             // hold several and the loop, shown all of them, does not always
             // pick this one (measured 2026-09-12: two code indexes, and every
-            // ask about the second was answered from the first).
+            // ask about the second was answered from the first). With
+            // siblings named, the loop sees those too and can join them.
             table: TABLE,
+            ...(siblingNames.length > 0 ? { tables: siblingNames } : {}),
           },
           { maxTurns: subagentMaxTurns(), maxWallSecs: subagentMaxWallSecs(), k: subagentK() },
         );
@@ -2158,8 +2160,19 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
           "subagent chooses and runs the searches itself - keyword, hybrid, vector and SQL, as the " +
           "question needs - over the whole repository and returns the rows it found, with exact path, " +
           "start_line, end_line and the code, in the shape of search hits, plus aggregate rows (counts, " +
-          "rankings) and the SQL whose rows answer the question - never a summary. Use it " +
-          "for a lookup you will read yourself - where is Y handled, which files or symbols. " +
+          "rankings) and the SQL whose rows answer the question - never a summary. " +
+          // The scope, said where the choice is made: with siblings, an ask
+          // reaches the tables beside the code and joins them (the owner,
+          // 2026-09-24: "it's still not reaching for ask often enough").
+          (siblingNames.length > 0
+            ? `It searches ${TABLE} and, in the same database, ${siblingNames.join(", ")}, and joins them: a question that touches the code and the tables beside it is one ask. `
+            : "") +
+          // "Use it for a lookup" read as a narrow tool; the owner's rule is
+          // the opposite ("it should also use ask extensively it's just
+          // cheaper and faster").
+          "Use it for any question about the code or the data that is not a count you can already write " +
+          "or one exact literal: where is Y handled, how does X work, which files or projects do Z, what " +
+          "the rows about W say. " +
           `${PREFER_SEVERAL_ASKS} ` +
           "A single question over a large codebase splits the same way: one call per section with " +
           "`under` naming its subtree, all issued together. " +
@@ -2230,6 +2243,7 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
             ...(under !== undefined && !over ? { under } : {}),
             ...(over ? { projection: rowsProjection(over.shape), shape: over.shape } : {}),
             table: TABLE,
+            ...(siblingNames.length > 0 ? { tables: siblingNames } : {}),
           },
           { maxTurns: subagentMaxTurns(), maxWallSecs: subagentMaxWallSecs(), k: subagentK() },
         );

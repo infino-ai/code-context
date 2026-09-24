@@ -256,6 +256,15 @@ describe("request shapes", () => {
     expect(calls[1].signal).toBeInstanceOf(AbortSignal);
   });
 
+  it("sub_agent sends the sibling tables as `tables` beside `table`, and nothing when there are none", async () => {
+    const answer = { facts: [], coverage: { rows_total: 0, rows_returned: 0, truncated: false }, terminate: "answered", turns: 1, retries: 0, model_tokens: 1 };
+    const { db, calls } = client([json(answer), json(answer)]);
+    await db.subAgent({ question: "q", table: "chunks_swe", tables: ["swe_issues", "chunks_swelogs"] });
+    expect(bodyJson(calls[0])).toEqual({ question: "q", table: "chunks_swe", tables: ["swe_issues", "chunks_swelogs"] });
+    await db.subAgent({ question: "q", table: "chunks", tables: [] });
+    expect(bodyJson(calls[1])).toEqual({ question: "q", table: "chunks" });
+  });
+
   it("validate posts the statement, rows and question, and decodes the verdict", async () => {
     const verdict = {
       valid: false,

@@ -113,6 +113,12 @@ export interface RetrievalAgentRequest {
    * question about the second index from the first until the loop was told
    * which table (2026-09-12). Absent, the loop sees every table's card. */
   table?: string;
+  /** The sibling tables beside `table` that the question may reach into,
+   * sent as the platform's `tables` so the loop sees their cards too and can
+   * join them - on a corpus of code with its issues and test logs as tables,
+   * an ask scoped to the code alone answered a question about the logs from
+   * the code, and the caller stopped asking (2026-09-24). */
+  tables?: string[];
   /** Ask the platform to write the answer as well (the `explore` tool): the
    * loop's own model, shown the final facts with their lines numbered, writes
    * it under the platform's citation instruction - the same sentences the
@@ -291,6 +297,7 @@ export async function runRetrievalAgent(
     ...(budget.maxTurns !== undefined ? { max_turns: budget.maxTurns } : {}),
     max_wall_secs: budget.maxWallSecs,
     ...(request.table !== undefined ? { table: request.table } : {}),
+    ...(request.tables?.length ? { tables: request.tables } : {}),
     ...(request.answer ? { answer: true } : {}),
     ...(request.answer && request.facts?.length ? { facts: request.facts } : {}),
   });

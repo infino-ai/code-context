@@ -452,6 +452,12 @@ describe("the chunks table with CX_SIBLING_TABLES: the tables a statement may jo
     expect(sql).toContain("Join swe_issues to chunks_swelogs on instance_id");
     const instructions = s.client.getInstructions() ?? "";
     expect(instructions).toContain("- sql also joins chunks with swe_issues, chunks_swelogs in one statement");
+    // The siblings come second in the sql text, before the recipes and the
+    // card, and the ask text says its search spans them.
+    expect(sql.indexOf("joinable with chunks in one statement")).toBeLessThan(sql.indexOf("The search functions are table-valued"));
+    const ask = tools.find((t) => t.name === "ask")?.description ?? "";
+    expect(ask).toContain("It searches chunks and, in the same database, swe_issues, chunks_swelogs, and joins them");
+    expect(instructions).toContain("beside it in the same database the tables swe_issues, chunks_swelogs");
   });
 
   it("runs a plain statement on the platform, where the join can run, rather than on the local index", async () => {
