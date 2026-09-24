@@ -464,7 +464,9 @@ describe("the chunks table with CX_SIBLING_TABLES: the tables a statement may jo
   let s: Started;
   beforeAll(async () => {
     process.env.CX_SIBLING_TABLES = "swe_issues,chunks_swelogs";
-    process.env.CX_SIBLING_NOTES = "Join swe_issues to chunks_swelogs on instance_id, and either to the code by project.";
+    // What a deployment may say about the siblings: what a value means. Never
+    // a key - the keys are join_keys's to return.
+    process.env.CX_SIBLING_NOTES = "chunks_swelogs.resolved is 'true' or 'false' per run.";
     s = await start(withSiblings(), "cx-chunks-siblings-");
   });
   afterAll(async () => {
@@ -481,32 +483,31 @@ describe("the chunks table with CX_SIBLING_TABLES: the tables a statement may jo
     expect(sql).toContain("joinable with chunks in one statement");
     expect(sql).toContain("swe_issues(instance_id utf8, project utf8, problem_statement large_utf8)");
     expect(sql).toContain("chunks_swelogs(path utf8, start_line i64, content large_utf8, instance_id utf8, resolved utf8)");
-    expect(sql).toContain("Join swe_issues to chunks_swelogs on instance_id");
-    // Each sibling's card was asked for beside the primary and the other
-    // sibling, and the keys the platform found on the tables' values are in
-    // the text once each, with the worked JOIN written on the one that
-    // touches the primary (the owner, 2026-09-24: "we must have join keys as
-    // part of the card ... it can't just be string match").
+    expect(sql).toContain("chunks_swelogs.resolved is 'true' or 'false' per run.");
+    // No key reaches the tool text. The cards are asked for alone, so the
+    // platform's joins never arrive; no join_keys call is made at startup;
+    // the worked JOIN carries a placeholder and says to call join_keys first
+    // (2026-09-24, after the corpus's keys had been written into this text
+    // by hand and then by a startup call: the owner, "you doctored the
+    // demo?").
     const cardAsks = s.sent.filter((sent) => sent.op === "table_card").map((sent) => [sent.body?.table, sent.body?.tables]);
-    expect(cardAsks).toContainEqual(["swe_issues", "chunks,chunks_swelogs"]);
-    expect(cardAsks).toContainEqual(["chunks_swelogs", "chunks,swe_issues"]);
-    // And join_keys was asked once at startup, over the primary and every
-    // sibling; its keys and the cards' are the same joins, listed once.
-    const keyAsks = s.sent.filter((sent) => sent.op === "join_keys").map((sent) => sent.body?.tables);
-    expect(keyAsks).toEqual([["chunks", "swe_issues", "chunks_swelogs"]]);
-    // And the model has join_keys as a tool of its own on any hosted
-    // server, API-tools mode or not, named in the routing line.
+    expect(cardAsks).toContainEqual(["swe_issues", undefined]);
+    expect(cardAsks).toContainEqual(["chunks_swelogs", undefined]);
+    expect(s.sent.filter((sent) => sent.op === "join_keys")).toEqual([]);
+    expect(sql).not.toContain("Keys found on the tables' values");
+    expect(sql).not.toContain("instance_id = swe_issues.instance_id");
+    expect(sql).toContain("JOIN chunks ON <the predicate join_keys returned> WHERE ...");
+    expect(sql).toContain("call join_keys with the tables first and paste its predicate into ON");
+    // The model has join_keys as a tool of its own on any hosted server,
+    // API-tools mode or not, named in the routing line; a call returns the
+    // platform's keys with their predicates.
     const joinKeysTool = tools.find((t) => t.name === "join_keys");
     expect(joinKeysTool?.description).toContain("never by matching column names");
-    expect(s.client.getInstructions() ?? "").toContain("join_keys returns the keys of any tables you name");
+    expect(s.client.getInstructions() ?? "").toContain("call join_keys with the tables for the keys, then write the JOIN");
     const r = await call(s, "join_keys", { tables: ["chunks_swelogs", "swe_issues"] });
     expect(r.ok).toBe(true);
     expect(((r.value as Record<string, unknown>).joins as unknown[]).length).toBe(2);
     expect(r.ops).toEqual(["join_keys"]);
-    expect(sql).toContain(
-      "Keys found on the tables' values, write a JOIN on these: chunks_swelogs.instance_id = swe_issues.instance_id; split_part(chunks.path, '/', 1) = swe_issues.project.",
-    );
-    expect(sql).toContain("AS swe_issues JOIN chunks ON split_part(chunks.path, '/', 1) = swe_issues.project WHERE ...");
     const instructions = s.client.getInstructions() ?? "";
     // Ask first across the tables: the loop writes the joins itself, several
     // at once; the model's own sql is for one statement it already knows.

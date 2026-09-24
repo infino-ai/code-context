@@ -608,38 +608,32 @@ export function logIndexInstructions(agentTools: boolean, files: number, chunks:
 
 /** What `sql` says about the sibling tables: each one's columns as the
  * platform describes them, its indexed text and vector columns, that a
- * statement across them is one call, the keys the platform found on the
- * tables' values (`joins`, every join of the scope once), and the
- * deployment's own words beyond those. */
-export function siblingsNote(table: string, siblings: TableShape[], unresolved: string[], notes: string, joins: readonly CardJoin[] = []): string {
+ * statement across them is one call, where the keys come from, and the
+ * deployment's own words beyond those. No key is written here: from this
+ * morning until 2026-09-24 afternoon the text carried the corpus's real
+ * keys, first typed by hand, then computed at startup, and the model never
+ * had to find one (the owner: "you doctored the demo?"). The keys are the
+ * join_keys tool's to return when the model calls it. */
+export function siblingsNote(table: string, siblings: TableShape[], unresolved: string[], notes: string): string {
   const described = siblings.map(
     (s) =>
       `${s.table}(${columnList(s)})` +
       (s.textColumns.length ? `, full-text indexed on ${s.textColumns.join(", ")}` : "") +
       (s.vectorColumn ? `, vector column ${s.vectorColumn}` : ""),
   );
-  // The worked JOIN is written on a key the platform found between the
-  // primary and a sibling when there is one - the search's rows aliased as
-  // the sibling, so the predicate reads as the card wrote it - and on a
-  // placeholder when there is none.
-  const keyed = joins.find((j) => j.from_table === table || j.to_table === table);
-  const partner = keyed ? (keyed.from_table === table ? keyed.to_table : keyed.from_table) : (siblings[0]?.table ?? table);
-  const on = keyed ? joinPredicate(keyed) : `${partner}.<key> = ${table}.<key>`;
+  const partner = siblings[0]?.table ?? table;
   return (
     ` Also in this database, and joinable with ${table} in one statement: ${described.join("; ")}.` +
     (unresolved.length ? ` (${unresolved.join(", ")} could not be described when this server started; name them by their columns as you know them.)` : "") +
     ` Every statement here runs on the platform, so a JOIN, a subquery or a UNION across these tables is one call, ` +
     `and the search functions take any of them as their first argument and their rows join like a table's: ` +
-    // The join is the move, written out: a model that had the keys and the
+    // The join is the move, written out as a shape: a model that had the
     // tables still answered one table at a time and read the rest from
     // files (the owner, 2026-09-24: "i don't think opus or the models are
     // using joins. that's the key advantage we have we have to be explicit").
     `write the JOIN - FROM hybrid_search('${partner}', '<text column>', '<terms>', 'embedding', {{q}}, 50) AS ${partner} ` +
-    `JOIN ${table} ON ${on} WHERE ... - and not one query per table.` +
-    // The keys come from the platform, which measured them on the tables'
-    // values when the cards were asked for together; nothing here matches
-    // column names (the owner, 2026-09-24: "it can't just be string match").
-    (joins.length ? ` Keys found on the tables' values, write a JOIN on these: ${joins.map(joinPredicate).join("; ")}.` : "") +
+    `JOIN ${table} ON <the predicate join_keys returned> WHERE ... - and not one query per table. ` +
+    `The keys are not written here: call join_keys with the tables first and paste its predicate into ON.` +
     (notes ? ` ${notes}` : "")
   );
 }
@@ -650,19 +644,19 @@ export function siblingsInstruction(table: string, siblings: string[], agentTool
   // Ask first across the tables: the loop sees their cards and writes the
   // joins itself, several statements at once; the model's own sql is for
   // one statement it already knows (the owner, 2026-09-24).
-  // The keys are in the sql text for these tables, and join_keys answers
-  // them for any tables, so a statement across tables never guesses a key
-  // from a column name.
+  // The keys are join_keys's to return, never written here or in the sql
+  // text, so a statement across tables never guesses a key from a column
+  // name and never reads one we typed.
   return agentTools
     ? `\n- a question that touches two of these tables - ${table}, ${names} - is an ask first: the loop sees all ` +
         "three, writes the joins itself, several statements at once, and returns the rows. sql joins them too, " +
-        "for one statement you already know; their columns, the keys and the statement's shape are in the sql " +
-        "tool's text, and join_keys returns the keys of any tables you name. Never one query per table, never a " +
+        "for one statement you already know: call join_keys with the tables for the keys, then write the JOIN; " +
+        "their columns and the statement's shape are in the sql tool's text. Never one query per table, never a " +
         "walk through files.\n"
     : `\n- sql also joins ${table} with ${names} in one statement - a question that touches two of these tables ` +
-        "is one JOIN on their keys, with the search functions inside it, not one query per table and not a walk " +
-        "through files; their columns, the keys and the statement's shape are in the sql tool's text, and " +
-        "join_keys returns the keys of any tables you name.\n";
+        "is one JOIN, with the search functions inside it, not one query per table and not a walk through " +
+        "files: call join_keys with the tables for the keys, then write the JOIN; their columns and the " +
+        "statement's shape are in the sql tool's text.\n";
 }
 
 export function indexFirst(agentTools: boolean, table = "chunks"): string {
@@ -1347,14 +1341,13 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
   let mode: TableMode = { kind: "chunks" };
   let card: RowRecord | undefined;
   const noCard = (err: unknown) => console.error(`no table card in the sql description: ${(err as Error).message}`);
-  // The sibling tables (CX_SIBLING_TABLES), named before any card is asked
-  // for: a card asked for beside the tables it is written across comes back
-  // with the joins the platform found on their values, and a card asked for
-  // alone with none.
+  // The sibling tables (CX_SIBLING_TABLES). Every card is asked for alone:
+  // asked beside its siblings it would come back carrying the platform's
+  // joins, and no key reaches the tool text - the model calls join_keys.
   const siblingNames = hosted ? siblingTables() : [];
   if (hosted && remoteSearch && TABLE !== DEFAULT_TABLE) {
     try {
-      const shape = await resolveTableShape(registry.get().hosted!, TABLE, CARD_TIER, noCard, siblingNames);
+      const shape = await resolveTableShape(registry.get().hosted!, TABLE, CARD_TIER, noCard);
       card = shape.card;
       if (!shape.isChunks) mode = { kind: "rows", shape };
     } catch (err) {
@@ -1378,7 +1371,7 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
     // server at all. No cold-start retries (`coldStartSecs: 0`), for the
     // reason above: one attempt, and the handshake goes ahead.
     try {
-      const record = await hostedDbFor(hosted, { ...hostedOptions, coldStartSecs: 0 }).tableCard(TABLE, CARD_TIER, siblingNames);
+      const record = await hostedDbFor(hosted, { ...hostedOptions, coldStartSecs: 0 }).tableCard(TABLE, CARD_TIER);
       card = (record.card ?? record) as RowRecord;
     } catch (err) {
       noCard(err);
@@ -1389,15 +1382,14 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
   // may join with the primary. Each is described once here, best-effort as
   // the card is - one that cannot be described is named in the text as such
   // rather than dropped, since the join is still the model's to write. Each
-  // is asked for beside the primary and the other siblings, so its card
-  // carries the joins among them.
+  // is asked for alone (see above).
   const siblings: TableShape[] = [];
   const siblingsUnresolved: string[] = [];
   if (siblingNames.length > 0) {
     const describer = hostedDbFor(hosted!, { ...hostedOptions, coldStartSecs: 0 });
     for (const name of siblingNames) {
       try {
-        siblings.push(await resolveTableShape(describer, name, CARD_TIER, noCard, [TABLE, ...siblingNames]));
+        siblings.push(await resolveTableShape(describer, name, CARD_TIER, noCard));
       } catch (err) {
         siblingsUnresolved.push(name);
         console.error(`sibling table ${name} could not be described: ${(err as Error).message}${refusalHint(err)}`);
@@ -1492,21 +1484,8 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
   const rows = mode.kind === "rows" ? mode.shape : null;
   // The sibling tables come second, right after what the statement runs
   // over, on the code text; the other texts take them at the end.
-  // Every join of the scope once. The keys come from join_keys, the route an
-  // agent calls before it writes a JOIN: the first call over a pair counts
-  // the keys on the data and the platform remembers them. The cards carry
-  // the same joins where they were asked for beside each other, so a
-  // platform without the route yet still yields the estimates.
-  let apiJoins: CardJoin[] = [];
-  if (hosted && siblingNames.length > 0) {
-    try {
-      apiJoins = cardJoins(await hostedDbFor(hosted, { ...hostedOptions, coldStartSecs: 0 }).joinKeys([TABLE, ...siblingNames]));
-    } catch (err) {
-      console.error(`no join keys from the platform: ${(err as Error).message}${refusalHint(err)}`);
-    }
-  }
-  const scopeJoins = uniqueJoins([...apiJoins, ...cardJoins(card), ...siblings.flatMap((s) => s.joins)]);
-  const siblingText = siblingNames.length > 0 ? siblingsNote(TABLE, siblings, siblingsUnresolved, siblingNotes(), scopeJoins) : "";
+  // No key reaches the tool text: the model calls join_keys for them.
+  const siblingText = siblingNames.length > 0 ? siblingsNote(TABLE, siblings, siblingsUnresolved, siblingNotes()) : "";
   let sqlDescription = rows
     ? rowsSqlDescription(rows) + siblingText
     : mode.kind === "unresolved"
