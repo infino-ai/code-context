@@ -73,6 +73,18 @@ const json = (body: unknown, headers: Record<string, string> = {}): Scripted => 
 
 const bodyJson = (call: Recorded): Record<string, unknown> => JSON.parse(call.body as string) as Record<string, unknown>;
 
+describe("joinKeys", () => {
+  it("posts the tables and returns the platform's keys", async () => {
+    const answer = { joins: [{ from_table: "logs", from_column: "instance_id", to_table: "issues", to_column: "instance_id", predicate: "logs.instance_id = issues.instance_id", inclusion: 1, coverage: 0.6, verified: true }], pairs: 1, counted: 1, model_tokens: 0 };
+    const { db, calls } = client([json(answer)]);
+    const keys = await db.joinKeys(["logs", "issues"]);
+    expect(keys).toEqual(answer);
+    expect(calls[0].method).toBe("POST");
+    expect(new URL(calls[0].url).pathname).toBe("/v1/join_keys/cx");
+    expect(bodyJson(calls[0])).toEqual({ tables: ["logs", "issues"] });
+  });
+});
+
 describe("tableCard", () => {
   it("asks for the card alone, or beside the tables it is written across", async () => {
     const { db, calls } = client([json({ card: { table: "logs" } }), json({ card: { table: "logs", joins: [] } })]);

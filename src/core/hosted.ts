@@ -440,6 +440,26 @@ export class HostedDb {
     return this.parseJson(exchange, "cite") as RowRecord;
   }
 
+  /** `POST /v1/join_keys/{db}`: the keys two or more tables join on, found
+   * on their values by the platform - never by matching column names. Each
+   * join comes with the two sides, the share of the referencing side's values
+   * found on the other, whether a statement counted it, and `predicate`, the
+   * `ON` clause ready to paste (`logs.instance_id = issues.instance_id`,
+   * `split_part(code.path, '/', 1) = issues.project`). The first call over
+   * a pair counts it on the data and the platform remembers the verdict;
+   * later calls read it back. What an agent calls before it writes a JOIN. */
+  async joinKeys(tables: readonly string[]): Promise<RowRecord> {
+    const exchange = await this.call({
+      op: "join_keys",
+      method: "POST",
+      body: JSON.stringify({ tables }),
+      contentType: JSON_CONTENT_TYPE,
+      acceptJson: true,
+      timeoutMs: this.timeoutMs,
+    });
+    return this.parseJson(exchange, "join_keys") as RowRecord;
+  }
+
   /** `GET /v1/table_card/{db}?table=[&tier=]`: the table's card - its schema
    * with each column's index role, per-column statistics (min, max, distinct)
    * and sample rows, as the platform's optimizer last computed them from the

@@ -449,6 +449,12 @@ const withSiblings = () =>
         : query?.table === "chunks_swelogs" && query.tables
         ? [200, siblingCard("chunks_swelogs", LOGS_FIELDS, [LOGS_TO_ISSUES])]
         : [404, { error: "no card" }],
+    // The route an agent calls before it writes a JOIN: the same keys, each
+    // once, with the predicate written out.
+    join_keys: (body) =>
+      Array.isArray(body?.tables) && (body.tables as string[]).length >= 2
+        ? [200, { joins: [{ ...LOGS_TO_ISSUES, predicate: "chunks_swelogs.instance_id = swe_issues.instance_id" }, { ...CODE_TO_ISSUES, predicate: "split_part(chunks.path, '/', 1) = swe_issues.project" }], pairs: 3, counted: 0, model_tokens: 0 }]
+        : [400, { error: "two tables at least" }],
     hybrid_search: () => [200, [CHUNK]],
     query_sql: () => [200, [{ project: "astropy__astropy", issues: 21, resolved: 10 }]],
     validate: () => [200, { valid: true, check: "unchecked" }],
@@ -484,6 +490,10 @@ describe("the chunks table with CX_SIBLING_TABLES: the tables a statement may jo
     const cardAsks = s.sent.filter((sent) => sent.op === "table_card").map((sent) => [sent.body?.table, sent.body?.tables]);
     expect(cardAsks).toContainEqual(["swe_issues", "chunks,chunks_swelogs"]);
     expect(cardAsks).toContainEqual(["chunks_swelogs", "chunks,swe_issues"]);
+    // And join_keys was asked once at startup, over the primary and every
+    // sibling; its keys and the cards' are the same joins, listed once.
+    const keyAsks = s.sent.filter((sent) => sent.op === "join_keys").map((sent) => sent.body?.tables);
+    expect(keyAsks).toEqual([["chunks", "swe_issues", "chunks_swelogs"]]);
     expect(sql).toContain(
       "Keys found on the tables' values, write a JOIN on these: chunks_swelogs.instance_id = swe_issues.instance_id; split_part(chunks.path, '/', 1) = swe_issues.project.",
     );

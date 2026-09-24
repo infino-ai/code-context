@@ -535,6 +535,8 @@ export function apiToolsInstruction(rows: boolean): string {
   return (
     "\n- table_card - what a model needs to know about the table before its first query: its columns with " +
     "their index roles, per-column statistics and sample rows, as the platform measured them. Call it once, first.\n" +
+    "- join_keys - the keys two or more tables join on, found on their values: name the tables, get each join's " +
+    "ON clause ready to paste. Call it before writing a statement across tables; never guess a key from a column name.\n" +
     "- validate - did this result answer this question? The same check the platform's own retrieval loop " +
     "gates itself on: pass the question, the statement that ran and the rows it returned; a refusal names " +
     "the question's terms the index does not hold (do not search for those again) and a statement to run instead.\n" +
@@ -1485,10 +1487,20 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
   const rows = mode.kind === "rows" ? mode.shape : null;
   // The sibling tables come second, right after what the statement runs
   // over, on the code text; the other texts take them at the end.
-  // Every join of the scope once: the primary's card and each sibling's
-  // carry the joins they take part in, so one between two of them arrives
-  // from both.
-  const scopeJoins = uniqueJoins([...cardJoins(card), ...siblings.flatMap((s) => s.joins)]);
+  // Every join of the scope once. The keys come from join_keys, the route an
+  // agent calls before it writes a JOIN: the first call over a pair counts
+  // the keys on the data and the platform remembers them. The cards carry
+  // the same joins where they were asked for beside each other, so a
+  // platform without the route yet still yields the estimates.
+  let apiJoins: CardJoin[] = [];
+  if (hosted && siblingNames.length > 0) {
+    try {
+      apiJoins = cardJoins(await hostedDbFor(hosted, { ...hostedOptions, coldStartSecs: 0 }).joinKeys([TABLE, ...siblingNames]));
+    } catch (err) {
+      console.error(`no join keys from the platform: ${(err as Error).message}${refusalHint(err)}`);
+    }
+  }
+  const scopeJoins = uniqueJoins([...apiJoins, ...cardJoins(card), ...siblings.flatMap((s) => s.joins)]);
   const siblingText = siblingNames.length > 0 ? siblingsNote(TABLE, siblings, siblingsUnresolved, siblingNotes(), scopeJoins) : "";
   let sqlDescription = rows
     ? rowsSqlDescription(rows) + siblingText
@@ -2065,6 +2077,31 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
           return ok((record.card ?? record) as Record<string, unknown>);
         } catch (err) {
           return fail(`table_card failed: ${(err as Error).message}${refusalHint(err)}`);
+        }
+      },
+    );
+
+    server.registerTool(
+      "join_keys",
+      {
+        title: "The keys two or more tables join on, found on their values",
+        annotations: READ_ONLY,
+        description:
+          "The keys the named tables join on, found by the platform on the tables' values - which columns hold " +
+          "each other's values, and through which expression where they meet only through one - never by " +
+          "matching column names. Each join comes back with its two sides, the share of the referencing side's " +
+          "values found on the other, whether a statement counted it, and 'predicate', the ON clause ready to " +
+          `paste: alias a search's rows as the table (FROM hybrid_search('${TABLE}', ...) AS ${TABLE} JOIN other ON ` +
+          "<predicate>) and it reads as written. Call it before writing a statement across tables.",
+        inputSchema: {
+          tables: z.array(z.string().min(1)).min(2).max(8).describe(`The tables the statement will span, ${TABLE} among them when it is one of them.`),
+        },
+      },
+      async ({ tables }: { tables: string[] }) => {
+        try {
+          return ok((await apiDb.joinKeys(tables)) as Record<string, unknown>);
+        } catch (err) {
+          return fail(`join_keys failed: ${(err as Error).message}${refusalHint(err)}`);
         }
       },
     );
