@@ -1404,7 +1404,7 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
             // reply: a tool that had the platform write the answer in one long
             // call (`explore`) lost to this twice on the judged passes - see the
             // note on `retrieve` - and the routing the model reads is this list.
-            `- ask - a question or task in plain language; returns the rows it retrieved (facts with path:line and the code), not an answer: compose from them. ${PREFER_SEVERAL_ASKS} How often a string occurs, per file, is find's byFile.\n` +
+            `- ask - a question or task in plain language; returns the rows it retrieved (facts with path:line and the code), not an answer: compose from them. ${PREFER_SEVERAL_ASKS} How many - files, projects, places - is an ask or one sql statement, never a walk through files; a question across projects is ask's, several at once.\n` +
             // Several asks in one reply beat a loop that waits on itself for a
             // question that splits into independent parts (measured
             // 2026-09-12: one exploration took longer than four asks running
@@ -2093,10 +2093,16 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
           "A mechanism that spans files - how X works end to end, what calls what - is one ask per " +
           "part: they run at the same time, and you do the following-up yourself from the rows they " +
           "return. " +
-          "For " +
-          "every occurrence of an exact string, and for how many times it occurs per file, use find " +
-          "(its byFile is the grep -c answer); for a file you already know, Read it. Answer " +
-          "from the rows and cite path:line. " +
+          // A count and a question across projects were going to Bash: the
+          // sentence here sent "how many" to find and "a file you already
+          // know" to Read, and the model took that as the file tools' turn
+          // (the owner, 2026-09-24: "it should use sql or find but it should
+          // also use ask extensively it's just cheaper and faster").
+          "How many - files, projects, places that do X - is one ask, or one sql statement when you " +
+          "can already write it; every line holding one exact string is find's. A question across " +
+          "projects or repositories is ask's, several at once. Never Grep, Glob or Read for what one " +
+          "of these answers; Read is for a hit marked truncated. Answer from the rows and cite " +
+          "path:line. " +
           DEV_CONTEXT_NOTE +
           "The result includes a 'usage' field, a one-line receipt of what the call cost.",
         inputSchema: retrievalInputs,
