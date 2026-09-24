@@ -307,7 +307,7 @@ export const SQL_DESCRIPTION =
   "question whose words will not be the code's words: SELECT path, start_line, content FROM " +
   `vector_search('${TABLE}','embedding', {{q}}, 20). token_match('${TABLE}','content','the terms','and') is ` +
   "every row holding every term, unranked and complete - an identifier, an exact phrase, a count a reader " +
-  `can check: SELECT count(*) FROM token_match('${TABLE}','content','separability_matrix','and'). ` +
+  `can check: SELECT count(*) FROM token_match('${TABLE}','content','<the identifier>','and'). ` +
   `exact_match('${TABLE}','content','value') is the rows whose whole value equals the string - a lookup on ` +
   "a short indexed column, never on content. " +
   "The {{name}} placeholders are filled server-side from the embed " +
