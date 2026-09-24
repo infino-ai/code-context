@@ -73,6 +73,23 @@ const json = (body: unknown, headers: Record<string, string> = {}): Scripted => 
 
 const bodyJson = (call: Recorded): Record<string, unknown> => JSON.parse(call.body as string) as Record<string, unknown>;
 
+describe("tableCard", () => {
+  it("asks for the card alone, or beside the tables it is written across", async () => {
+    const { db, calls } = client([json({ card: { table: "logs" } }), json({ card: { table: "logs", joins: [] } })]);
+    await db.tableCard("logs", "lean");
+    await db.tableCard("logs", undefined, ["issues", "logs", "code"]);
+    const [alone, beside] = calls.map((c) => new URL(c.url));
+    expect(alone.pathname).toBe("/v1/table_card/cx");
+    expect(alone.searchParams.get("table")).toBe("logs");
+    expect(alone.searchParams.get("tier")).toBe("lean");
+    expect(alone.searchParams.has("tables")).toBe(false);
+    // The table itself is not one of the tables beside it.
+    expect(beside.searchParams.get("tables")).toBe("issues,code");
+    expect(beside.searchParams.has("tier")).toBe(false);
+    expect(calls.every((c) => c.method === "GET")).toBe(true);
+  });
+});
+
 // --- URLs ---------------------------------------------------------------------------
 
 describe("parseHostedUrl", () => {

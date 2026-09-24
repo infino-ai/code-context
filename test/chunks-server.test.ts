@@ -421,14 +421,34 @@ describe("the chunks table with CX_API_TOOLS=1 and no agent tools: the platform'
 });
 
 /** The platform with two sibling tables the primary may join: their schemas
- * answered by name, no cards, and query_sql answering any statement. */
+ * answered by name, each sibling's card carrying the joins the platform found
+ * on the tables' values when asked for beside the others (the primary has no
+ * card), and query_sql answering any statement. */
 const ISSUES_FIELDS = [{ name: "instance_id", type: "utf8" }, { name: "project", type: "utf8" }, { name: "problem_statement", type: "large_utf8" }];
 const LOGS_FIELDS = [{ name: "path", type: "utf8" }, { name: "start_line", type: "i64" }, { name: "content", type: "large_utf8" }, { name: "instance_id", type: "utf8" }, { name: "resolved", type: "utf8" }];
+/** The joins as the platform writes them: the logs' issue id into the
+ * issues, and the code's first path segment against the issues' project. */
+const LOGS_TO_ISSUES = { from_table: "chunks_swelogs", from_column: "instance_id", to_table: "swe_issues", to_column: "instance_id", inclusion: 1, coverage: 0.6, verified: false };
+const CODE_TO_ISSUES = { from_table: TABLE, from_column: "path", from_expression: "split_part({column}, '/', 1)", to_table: "swe_issues", to_column: "project", inclusion: 1, coverage: 1, verified: false };
+const siblingCard = (table: string, fields: Array<{ name: string; type: string }>, joins: unknown[]) => ({
+  card: { table, rows: 10, schema: fields.map((f) => ({ name: f.name, type: f.type, index: f.type === "large_utf8" ? "fts" : "scalar" })), joins, sample_rows: [] },
+  tier: "lean",
+  built_ms: 1,
+  storage_bytes: 1,
+});
 const withSiblings = () =>
   scriptPlatform({
     list_tables: () => [200, [TABLE, "swe_issues", "chunks_swelogs"]],
     schema: (body) => (body?.table_name === "swe_issues" ? [200, ISSUES_FIELDS] : body?.table_name === "chunks_swelogs" ? [200, LOGS_FIELDS] : [404, { error: "no such table" }]),
-    table_card: () => [404, { error: "no card" }],
+    // A card asked for beside its siblings carries the joins among them;
+    // each sibling's card lists the joins it takes part in, so the one
+    // between the logs and the issues arrives from both.
+    table_card: (query) =>
+      query?.table === "swe_issues" && query.tables
+        ? [200, siblingCard("swe_issues", ISSUES_FIELDS, [LOGS_TO_ISSUES, CODE_TO_ISSUES])]
+        : query?.table === "chunks_swelogs" && query.tables
+        ? [200, siblingCard("chunks_swelogs", LOGS_FIELDS, [LOGS_TO_ISSUES])]
+        : [404, { error: "no card" }],
     hybrid_search: () => [200, [CHUNK]],
     query_sql: () => [200, [{ project: "astropy__astropy", issues: 21, resolved: 10 }]],
     validate: () => [200, { valid: true, check: "unchecked" }],
@@ -456,6 +476,18 @@ describe("the chunks table with CX_SIBLING_TABLES: the tables a statement may jo
     expect(sql).toContain("swe_issues(instance_id utf8, project utf8, problem_statement large_utf8)");
     expect(sql).toContain("chunks_swelogs(path utf8, start_line i64, content large_utf8, instance_id utf8, resolved utf8)");
     expect(sql).toContain("Join swe_issues to chunks_swelogs on instance_id");
+    // Each sibling's card was asked for beside the primary and the other
+    // sibling, and the keys the platform found on the tables' values are in
+    // the text once each, with the worked JOIN written on the one that
+    // touches the primary (the owner, 2026-09-24: "we must have join keys as
+    // part of the card ... it can't just be string match").
+    const cardAsks = s.sent.filter((sent) => sent.op === "table_card").map((sent) => [sent.body?.table, sent.body?.tables]);
+    expect(cardAsks).toContainEqual(["swe_issues", "chunks,chunks_swelogs"]);
+    expect(cardAsks).toContainEqual(["chunks_swelogs", "chunks,swe_issues"]);
+    expect(sql).toContain(
+      "Keys found on the tables' values, write a JOIN on these: chunks_swelogs.instance_id = swe_issues.instance_id; split_part(chunks.path, '/', 1) = swe_issues.project.",
+    );
+    expect(sql).toContain("AS swe_issues JOIN chunks ON split_part(chunks.path, '/', 1) = swe_issues.project WHERE ...");
     const instructions = s.client.getInstructions() ?? "";
     // Ask first across the tables: the loop writes the joins itself, several
     // at once; the model's own sql is for one statement it already knows.

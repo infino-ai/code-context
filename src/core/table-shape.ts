@@ -43,6 +43,74 @@ export interface CardColumn {
   index?: string;
 }
 
+/** One join a card carries between its table and another it was asked
+ * beside, found by the platform on the two tables' values (the share of the
+ * referencing side's distinct values found on the referenced side, never a
+ * match of column names): each side a table and a column, with an
+ * expression over the column where the values meet only through one - a
+ * path's first segment against a project name - written with
+ * `EXPRESSION_COLUMN_MARK` in place of the column. */
+export interface CardJoin {
+  from_table: string;
+  from_column: string;
+  from_expression?: string;
+  to_table: string;
+  to_column: string;
+  to_expression?: string;
+  /** Share of the referencing side's values found on the referenced side,
+   * 0 to 1; an estimate from the columns' value sketches unless `verified`,
+   * when a statement counted it. */
+  inclusion: number;
+  coverage: number;
+  verified: boolean;
+}
+
+/** Where a join side's expression takes its column, as the platform writes
+ * it: `split_part({column}, '/', 1)` on `code.path` reads
+ * `split_part(code.path, '/', 1)`. */
+export const EXPRESSION_COLUMN_MARK = "{column}";
+
+/** One side of a join as SQL, qualified by its table. */
+export function joinSide(table: string, column: string, expression?: string): string {
+  const qualified = `${table}.${column}`;
+  return expression ? expression.split(EXPRESSION_COLUMN_MARK).join(qualified) : qualified;
+}
+
+/** The `ON` clause of a join, the tables as qualifiers, so a statement that
+ * names the tables (or aliases a search's rows as the table) copies it as it
+ * stands. */
+export function joinPredicate(join: CardJoin): string {
+  return `${joinSide(join.from_table, join.from_column, join.from_expression)} = ${joinSide(join.to_table, join.to_column, join.to_expression)}`;
+}
+
+/** The joins a card carries, those with both sides named; anything else on
+ * the field is not a join this client can write. */
+export function cardJoins(card: RowRecord | null | undefined): CardJoin[] {
+  if (!Array.isArray(card?.joins)) return [];
+  return (card.joins as unknown[]).filter((j): j is CardJoin => {
+    const join = j as Partial<CardJoin> | null;
+    return (
+      typeof join?.from_table === "string" &&
+      typeof join.from_column === "string" &&
+      typeof join.to_table === "string" &&
+      typeof join.to_column === "string"
+    );
+  });
+}
+
+/** Every join once, by its predicate, in the order first seen: the cards of
+ * a scope each carry the joins they take part in, so a join between two of
+ * them arrives twice. */
+export function uniqueJoins(joins: readonly CardJoin[]): CardJoin[] {
+  const seen = new Set<string>();
+  return joins.filter((join) => {
+    const predicate = joinPredicate(join);
+    if (seen.has(predicate)) return false;
+    seen.add(predicate);
+    return true;
+  });
+}
+
 /** One column of the table as the tool text names it. */
 export interface TableColumn {
   name: string;
@@ -104,6 +172,10 @@ export interface TableShape {
    * here for its roles and kept so the tool text can fold it in without a
    * second fetch. Absent for a table the optimizer has not swept yet. */
   card?: RowRecord;
+  /** The joins the card carries to the tables it was asked beside
+   * (`resolveTableShape`'s `tables`); empty for a card asked for alone or a
+   * table without one. */
+  joins: CardJoin[];
 }
 
 /** The platform's type spellings for the three non-scalar column kinds. */
@@ -208,6 +280,7 @@ export function tableShapeFrom(table: string, fields: SchemaField[], card?: RowR
     isChunks: CHUNK_COLUMNS.every((name) => names.has(name)),
     rowColumns,
     projection,
+    joins: cardJoins(card),
     ...(card ? { card } : {}),
   };
 }
@@ -218,18 +291,21 @@ export function tableShapeFrom(table: string, fields: SchemaField[], card?: RowR
  * such a table well enough to search it - but the schema is not: without it
  * nothing here knows what to ask for. `onNoCard` hears why the card was not
  * served, for a caller that wants to log the platform's words; the shape
- * itself just goes without one. Two reads, the only two a shape costs. */
+ * itself just goes without one. `tables` names the other tables the card is
+ * asked beside, so it comes back with its joins to them. Two reads, the
+ * only two a shape costs. */
 export async function resolveTableShape(
   hosted: Pick<HostedDb, "schema" | "tableCard">,
   table: string,
   cardTier?: string,
   onNoCard?: (err: unknown) => void,
+  tables?: readonly string[],
 ): Promise<TableShape> {
   const fields = (await hosted.schema(table)) as unknown;
   if (!Array.isArray(fields)) throw new Error(`schema of ${table}: expected the platform's column descriptors, got ${typeof fields}`);
   let card: RowRecord | null = null;
   try {
-    const record = await hosted.tableCard(table, cardTier);
+    const record = await hosted.tableCard(table, cardTier, tables);
     // The route answers the card bare or wrapped in a record, as the sql
     // description's own fetch has always allowed for.
     const inner = record?.card ?? record;

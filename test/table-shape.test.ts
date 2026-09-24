@@ -12,12 +12,16 @@ import { HostedDb } from "../src/core/hosted.js";
 import {
   ENGINE_ID_COLUMN,
   SNIPPET_CHARS,
+  cardJoins,
+  joinPredicate,
   rowFact,
   rowHit,
   rowKey,
   snippet,
   sqlLiteral,
   tableShapeFrom,
+  uniqueJoins,
+  type CardJoin,
   type SchemaField,
 } from "../src/core/table-shape.js";
 import { findRows, findRowsSql, foldEmbeds, searchRows } from "../src/core/searcher.js";
@@ -189,6 +193,30 @@ describe("tableShapeFrom", () => {
     expect(shape.vectorColumn).toBeNull();
     expect(shape.projection).not.toContain("v");
     expect(shape.columns.find((c) => c.name === "v")?.type).toBe("vector<16>");
+  });
+
+  it("reads the card's joins and writes each as the ON clause the platform found", () => {
+    const byId: CardJoin = { from_table: "logs", from_column: "instance_id", to_table: "issues", to_column: "instance_id", inclusion: 1, coverage: 0.6, verified: false };
+    const byPrefix: CardJoin = {
+      from_table: "code",
+      from_column: "path",
+      from_expression: "split_part({column}, '/', 1)",
+      to_table: "issues",
+      to_column: "project",
+      inclusion: 1,
+      coverage: 1,
+      verified: true,
+    };
+    const card = { table: "issues", schema: [{ name: "instance_id", type: "Utf8", index: "scalar" }], joins: [byId, byPrefix, { nonsense: true }] };
+    const shape = tableShapeFrom("issues", [{ name: "instance_id", type: "utf8" }, { name: "project", type: "utf8" }], card);
+    expect(shape.joins).toEqual([byId, byPrefix]);
+    expect(joinPredicate(byId)).toBe("logs.instance_id = issues.instance_id");
+    expect(joinPredicate(byPrefix)).toBe("split_part(code.path, '/', 1) = issues.project");
+    // A card without the field, or no card, joins nothing; the same join
+    // from two cards is one.
+    expect(tableShapeFrom("issues", [{ name: "instance_id", type: "utf8" }]).joins).toEqual([]);
+    expect(cardJoins({ joins: "no" })).toEqual([]);
+    expect(uniqueJoins([byId, byPrefix, { ...byId }])).toEqual([byId, byPrefix]);
   });
 });
 

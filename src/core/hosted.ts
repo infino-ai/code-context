@@ -446,13 +446,18 @@ export class HostedDb {
    * table itself. A tier asks for a particular depth (`lean` is the measured
    * shape; `enriched` adds column descriptions and synonyms; `semantic` adds
    * the semantic map and is large); absent, the platform serves the best it
-   * has. The one GET on this client: the card is a read of stored state, not
-   * a query, and the platform routes it that way. */
-  async tableCard(table: string, tier?: string): Promise<RowRecord> {
+   * has. `tables` names the other tables the card is asked beside: the card
+   * then carries its `joins` to them, found on the tables' values by the
+   * platform, and each referencing column's `references`; asked alone, a
+   * card carries none, since a join is a fact about two tables. The one GET
+   * on this client: the card is a read of stored state, not a query, and the
+   * platform routes it that way. */
+  async tableCard(table: string, tier?: string, tables?: readonly string[]): Promise<RowRecord> {
+    const beside = (tables ?? []).filter((name) => name && name !== table);
     const exchange = await this.call({
       op: "table_card",
       method: "GET",
-      query: { table, ...(tier ? { tier } : {}) },
+      query: { table, ...(tier ? { tier } : {}), ...(beside.length ? { tables: beside.join(",") } : {}) },
       acceptJson: true,
       timeoutMs: this.timeoutMs,
     });

@@ -15,13 +15,15 @@ import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
-/** One request the platform saw: the op (`/v1/<op>/...`) and its JSON body. */
+/** One request the platform saw: the op (`/v1/<op>/...`) and its JSON body -
+ * or, for a GET, its query parameters, the only body such a request has. */
 export interface Sent {
   op: string;
   body: Record<string, unknown> | undefined;
 }
 
-/** What each route answers, by op: a status and a JSON payload. */
+/** What each route answers, by op: a status and a JSON payload. A GET
+ * route sees the request's query parameters where a POST sees its body. */
 export type Routes = Record<string, (body: Record<string, unknown> | undefined) => [number, unknown]>;
 
 export interface Platform {
@@ -38,7 +40,12 @@ export function scriptPlatform(routes: Routes): Platform {
   const fetchImpl: typeof fetch = async (input, init) => {
     const url = String(input);
     const op = url.split("/v1/")[1].split(/[/?]/)[0];
-    const body = typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : undefined;
+    const body =
+      typeof init?.body === "string"
+        ? (JSON.parse(init.body) as Record<string, unknown>)
+        : url.includes("?")
+        ? Object.fromEntries(new URL(url).searchParams)
+        : undefined;
     sent.push({ op, body });
     const [status, payload] = routes[op]?.(body) ?? [500, { error: `unexpected ${op}` }];
     return new Response(JSON.stringify(payload), { status, headers: { "content-type": "application/json", "x-infino-read-tokens": "0.010" } });
