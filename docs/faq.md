@@ -2,7 +2,7 @@
 
 ### What is SuperGrep?
 
-Retrieval subagents for Claude Sonnet: four tools over an index kept in two
+Retrieval for coding agents: four tools over an index kept in two
 places. `find`, `search` and `sql` run locally, over a ranked index that
 lives in plain files inside your repo, fusing keyword (BM25) and semantic
 search in one pass and exposing read-only SQL over the result. `ask`

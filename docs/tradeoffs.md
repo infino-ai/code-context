@@ -2,20 +2,22 @@
 
 SuperGrep is a ranked retrieval layer, not a do-everything code tool. 
 
-### Small language models do not reason the same as large language models
+### Where a model reading the files does better
 
-A blind judge - `claude-opus-5` with the repository checked out - scores
-SuperGrep's answers against Sonnet's own tools on the same thirty-six
-questions. It holds the exact lookups: `find` ties or wins pinpoint (where is
-this symbol) and known-file (what does this file do), with no more
-unsupported claims than the baseline. It loses aggregation, comprehension and
-by-meaning, in both comparisons, with more unsupported claims overall - **9
-wins, 9 ties, 18 losses** against plain Sonnet; **7, 7, 21** against
-Sonnet's own Explore subagents. So SuperGreps answers are slightly worse when the questions
-are more general, according to an Opus judge, than Sonnet alone. This does not mean
-that answers will appear worse in production, but worth flagging. A model that reads
-the files writes an answer with more of the code in it, and this judge rewards that.
-The full tables and categories are in the [README](../README.md#quality). 
+A blind judge - Opus 5.5 with the repository checked out - grades the same
+thirty-six questions answered by the same model with SuperGrep's tools and
+with Claude Code's file tools, on four Claude models. On Sonnet, Opus and
+Fable the letters come out level, inside the judge's own noise; the saving is
+the bill and the tail. Where SuperGrep is ahead on every model is the
+whole-corpus question - counts, rankings, every occurrence - because an index
+gives the total where grep gives the first forty matches. Where it is behind
+is "explain how X works end to end" and "find the code that does Y" on the
+larger models: a strong model reading whole files does those well, the agent's
+built-in Explore subagent is designed for exactly them, and most of the wrong
+claims SuperGrep makes there say which code path calls which function. That
+gap is real. It does not mean answers will read worse in production, but it is
+worth knowing which questions to expect it on. The full tables, by caller and
+by category, are in the [README](../README.md#the-numbers).
 
 ### It does not do structural code intelligence
 
