@@ -126,7 +126,7 @@ their standard server config. Point the server at a repository with
 not the repository.
 
 The npm release (`npx -y @infino-ai/code-context mcp`) and the Claude Code
-plugin (`/plugin marketplace add infino-ai/code-context`, then
+plugin (`/plugin marketplace add infino-ai/supergrep`, then
 `/plugin install code-context@infino-ai`) ship the local index alone today;
 the platform tools are on the `feat/platform-backend` branch.
 

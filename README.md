@@ -1,6 +1,6 @@
 <div align="center">
 
-[![CI](https://github.com/infino-ai/code-context/actions/workflows/ci.yml/badge.svg)](https://github.com/infino-ai/code-context/actions/workflows/ci.yml)
+[![CI](https://github.com/infino-ai/supergrep/actions/workflows/ci.yml/badge.svg)](https://github.com/infino-ai/supergrep/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/@infino-ai/code-context?label=%40infino-ai%2Fcode-context&logo=npm)](https://www.npmjs.com/package/@infino-ai/code-context)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
@@ -10,7 +10,7 @@
 
 **A search engine for your coding agent.** Point it at a repository and your agent stops reading files one at a time. It asks an index of the whole codebase - and of the logs, docs and issues around it - for exactly what it needs, and gets back cited lines, counts and rankings. The same answers, for less money and in less time, on every Claude model.
 
-**[Try it live at supergrep.infino.ai](https://supergrep.infino.ai)** - put a question to a real codebase and watch the same model answer it with and without SuperGrep, side by side, with the bill for each.
+**[Try it live at infino.ai/supergrep](https://infino.ai/supergrep)** - put a question to a real codebase and watch the same model answer it with and without SuperGrep, side by side, with the bill for each.
 
 ![SuperGrep: find and plain sql on your machine, search, semantic sql and ask in the Infino cloud, one index in both places](docs/subagent/architecture.svg)
 
@@ -98,14 +98,14 @@ Haiku on the index sits two fully correct answers under Opus and Fable on files,
 You need node 22 or newer, on macOS or Linux. Then clone this repo:
 
 ```bash
-git clone -b feat/side-by-side-demo https://github.com/infino-ai/code-context
-cd code-context && npm ci && npm run build
+git clone -b feat/side-by-side-demo https://github.com/infino-ai/supergrep
+cd supergrep && npm ci && npm run build
 ```
 
 Now, in the repository you want to search, one command:
 
 ```bash
-node /path/to/code-context/dist/cli.js install --platform https://host
+node /path/to/supergrep/dist/cli.js install --platform https://host
 ```
 
 That is the whole setup. It indexes the repository, gets you a free account, registers this repository's database, and writes the MCP entry. Open Claude Code there and ask a question - all four tools are live.
@@ -115,7 +115,7 @@ That is the whole setup. It indexes the repository, gets you a free account, reg
 **Every repository after that is the same command with no arguments at all:**
 
 ```bash
-cd ../another-repo && node /path/to/code-context/dist/cli.js install
+cd ../another-repo && node /path/to/supergrep/dist/cli.js install
 ```
 
 The stored key is found automatically. When the free credit runs out, `ask` says so and tells you how to add billing details and a card to the same account; `find` and plain `sql` keep working throughout.
@@ -125,7 +125,7 @@ The stored key is found automatically. When the free credit runs out, `ask` says
 On a machine with no account, `install` with no flags at all gives you the keyword tools - `find` and plain `sql` - with no account, no key and nothing uploaded:
 
 ```bash
-node /path/to/code-context/dist/cli.js install
+node /path/to/supergrep/dist/cli.js install
 ```
 
 Add `--local-only` to get that same local-only entry on a machine that does have an account.
@@ -137,13 +137,13 @@ Add `--local-only` to get that same local-only entry on a machine that does have
 Sign in once per machine instead. The key comes from a file or standard input, never from an argument - argv is readable by every process on the machine:
 
 ```bash
-node /path/to/code-context/dist/cli.js login --db https://host < keyfile
+node /path/to/supergrep/dist/cli.js login --db https://host < keyfile
 ```
 
 Or name the database and key explicitly, per repository:
 
 ```bash
-node /path/to/code-context/dist/cli.js install \
+node /path/to/supergrep/dist/cli.js install \
   --db https://host/<database> --api-key-file ~/.infino/key
 ```
 
@@ -151,7 +151,7 @@ node /path/to/code-context/dist/cli.js install \
 
 ## Indexing it yourself
 
-`install` indexes the repository for you and the MCP server keeps it current, so most of the time you never run an index by hand. When you want to - a first pass over a huge tree, a CI step, a corpus that is not a git repository - `index` is the command. (`cx` below is `node /path/to/code-context/dist/cli.js`.)
+`install` indexes the repository for you and the MCP server keeps it current, so most of the time you never run an index by hand. When you want to - a first pass over a huge tree, a CI step, a corpus that is not a git repository - `index` is the command. (`cx` below is `node /path/to/supergrep/dist/cli.js`.)
 
 ```bash
 cx index                      # bring the index up to date; incremental, full on first run
