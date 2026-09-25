@@ -29,8 +29,7 @@ complementary: MCP servers stack, so run both when you need both.
 ### The first index of a repo pays a one-time vector cost
 
 Keyword search is live in seconds, but the vector stage embeds every chunk
-once with a local model, which takes on the order of a minute or two per few
-thousand chunks on a laptop. It runs in the background and only happens once;
+once. It runs on the platform, in the background, and only happens once;
 incremental syncs afterward re-embed only changed files.
 
 ### Semantic ranking waits for vectors to be created
@@ -39,14 +38,12 @@ Until the vector stage finishes, search is keyword-ranked (BM25) and says so.
 That is a graceful degrade, not a failure, but meaning-only queries with no
 shared vocabulary are weaker until vectors land.
 
-### Retrieval quality depends on the local embedding model
+### Retrieval quality depends on the embedding model
 
-The default embedding model optimizes quality-per-minute on commodity
-hardware; a larger model would rank better but index much slower. The choice
-is documented in [the embedder eval](embedder-eval.md), and the model is
-configurable. The platform copy of the index (`--db`) is embedded by the
-platform's own model by default; `--embed-provider local` ships this
-machine's vectors there instead if that matters to you.
+The platform embeds with its own model by default. `--embed-provider local`
+embeds on this machine with a small local model and ships the vectors
+instead; that model optimizes quality-per-minute on commodity hardware, and
+the choice is documented in [the embedder eval](embedder-eval.md).
 
 ### The platform copy puts the network in the build
 

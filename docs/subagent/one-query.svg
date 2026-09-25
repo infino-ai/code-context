@@ -1,0 +1,52 @@
+<svg xmlns='http://www.w3.org/2000/svg' width='960' height='652' viewBox='0 0 960 652' font-family='-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif'>
+<rect width='960' height='652' fill='#ffffff'/>
+<text x='20' y='30' fill='#24292f' font-size='18' font-weight='600'>Search functions live inside SQL, so one statement asks a whole question</text>
+<text x='20' y='50' fill='#57606a' font-size='12'>The ranked searches are table-valued: a question that would take an agent six tool calls and a tally is one query.</text>
+<circle cx='40' cy='90' r='13' fill='#ffffff' stroke='#bc4c00' stroke-width='1.5'/>
+<text x='40' y='95' fill='#bc4c00' font-size='12' font-weight='600' text-anchor='middle'>1</text>
+<text x='66' y='95' fill='#57606a' font-size='12' font-weight='600'>AN AGENT ASKS A QUESTION</text>
+<text x='66' y='124' font-size='15' font-family='ui-monospace, SFMono-Regular, Menlo, Consolas, monospace'><tspan fill='#bc4c00' font-weight='600'>How many</tspan><tspan fill='#24292f'> </tspan><tspan fill='#bc4c00' font-weight='600'>errors last night</tspan><tspan fill='#24292f'> mention </tspan><tspan fill='#2da44e' font-weight='600'>disk full</tspan><tspan fill='#24292f'> or </tspan><tspan fill='#2f81f7' font-weight='600'>look like a capacity incident</tspan><tspan fill='#24292f'>?</tspan></text>
+<text x='66' y='146' font-size='15' font-family='ui-monospace, SFMono-Regular, Menlo, Consolas, monospace'><tspan fill='#8250df' font-weight='600'>Which service</tspan><tspan fill='#24292f'> had them, and </tspan><tspan fill='#bf3989' font-weight='600'>which team owns it</tspan><tspan fill='#24292f'>?</tspan></text>
+<circle cx='40' cy='187' r='13' fill='#ffffff' stroke='#bc4c00' stroke-width='1.5'/>
+<text x='40' y='192' fill='#bc4c00' font-size='12' font-weight='600' text-anchor='middle'>2</text>
+<text x='66' y='192' fill='#57606a' font-size='12' font-weight='600'>IT HIDES SIX JOBS</text>
+<rect x='66' y='208' width='280' height='62' rx='6' fill='#f6f8fa' stroke='#d0d7de'/>
+<rect x='66' y='208' width='280' height='3' fill='#bc4c00'/>
+<text x='80' y='235' fill='#bc4c00' font-size='14' font-weight='600' font-family='ui-monospace, SFMono-Regular, Menlo, Consolas, monospace'>count</text>
+<text x='80' y='255' fill='#57606a' font-size='12' font-family='ui-monospace, SFMono-Regular, Menlo, Consolas, monospace'>How many</text>
+<rect x='362' y='208' width='280' height='62' rx='6' fill='#f6f8fa' stroke='#d0d7de'/>
+<rect x='362' y='208' width='280' height='3' fill='#8250df'/>
+<text x='376' y='235' fill='#8250df' font-size='14' font-weight='600' font-family='ui-monospace, SFMono-Regular, Menlo, Consolas, monospace'>group</text>
+<text x='376' y='255' fill='#57606a' font-size='12' font-family='ui-monospace, SFMono-Regular, Menlo, Consolas, monospace'>Which service</text>
+<rect x='658' y='208' width='280' height='62' rx='6' fill='#f6f8fa' stroke='#d0d7de'/>
+<rect x='658' y='208' width='280' height='3' fill='#bf3989'/>
+<text x='672' y='235' fill='#bf3989' font-size='14' font-weight='600' font-family='ui-monospace, SFMono-Regular, Menlo, Consolas, monospace'>join</text>
+<text x='672' y='255' fill='#57606a' font-size='12' font-family='ui-monospace, SFMono-Regular, Menlo, Consolas, monospace'>which team owns it</text>
+<rect x='66' y='282' width='280' height='62' rx='6' fill='#f6f8fa' stroke='#d0d7de'/>
+<rect x='66' y='282' width='280' height='3' fill='#bc4c00'/>
+<text x='80' y='309' fill='#bc4c00' font-size='14' font-weight='600' font-family='ui-monospace, SFMono-Regular, Menlo, Consolas, monospace'>filter</text>
+<text x='80' y='329' fill='#57606a' font-size='12' font-family='ui-monospace, SFMono-Regular, Menlo, Consolas, monospace'>errors last night</text>
+<rect x='362' y='282' width='280' height='62' rx='6' fill='#f6f8fa' stroke='#d0d7de'/>
+<rect x='362' y='282' width='280' height='3' fill='#2da44e'/>
+<text x='376' y='309' fill='#2da44e' font-size='14' font-weight='600' font-family='ui-monospace, SFMono-Regular, Menlo, Consolas, monospace'>keyword search</text>
+<text x='376' y='329' fill='#57606a' font-size='12' font-family='ui-monospace, SFMono-Regular, Menlo, Consolas, monospace'>disk full</text>
+<rect x='658' y='282' width='280' height='62' rx='6' fill='#f6f8fa' stroke='#d0d7de'/>
+<rect x='658' y='282' width='280' height='3' fill='#2f81f7'/>
+<text x='672' y='309' fill='#2f81f7' font-size='14' font-weight='600' font-family='ui-monospace, SFMono-Regular, Menlo, Consolas, monospace'>semantic search</text>
+<text x='672' y='329' fill='#57606a' font-size='12' font-family='ui-monospace, SFMono-Regular, Menlo, Consolas, monospace'>capacity incident</text>
+<circle cx='40' cy='371' r='13' fill='#ffffff' stroke='#bc4c00' stroke-width='1.5'/>
+<text x='40' y='376' fill='#bc4c00' font-size='12' font-weight='600' text-anchor='middle'>3</text>
+<text x='66' y='376' fill='#57606a' font-size='12' font-weight='600'>ONE SQL STATEMENT RUNS ALL SIX</text>
+<rect x='66' y='392' width='874' height='240' rx='6' fill='#f6f8fa' stroke='#d0d7de'/>
+<text x='84' y='418' font-size='13.5' font-family='ui-monospace, SFMono-Regular, Menlo, Consolas, monospace' xml:space='preserve'><tspan fill='#24292f'>SELECT   </tspan><tspan fill='#bf3989' font-weight='600'>o.team</tspan><tspan fill='#24292f'>, </tspan><tspan fill='#8250df' font-weight='600'>h.service</tspan><tspan fill='#24292f'>, </tspan><tspan fill='#bc4c00' font-weight='600'>count(*) AS hits</tspan></text>
+<text x='84' y='439' font-size='13.5' font-family='ui-monospace, SFMono-Regular, Menlo, Consolas, monospace' xml:space='preserve'><tspan fill='#24292f'>FROM     hybrid_search(</tspan></text>
+<text x='84' y='460' font-size='13.5' font-family='ui-monospace, SFMono-Regular, Menlo, Consolas, monospace' xml:space='preserve'><tspan fill='#24292f'>           'logs', 'body', </tspan><tspan fill='#2da44e' font-weight='600'>'disk full'</tspan><tspan fill='#24292f'>,</tspan></text>
+<text x='84' y='481' font-size='13.5' font-family='ui-monospace, SFMono-Regular, Menlo, Consolas, monospace' xml:space='preserve'><tspan fill='#24292f'>           'embedding', </tspan><tspan fill='#2f81f7' font-weight='600'>{{q}}</tspan><tspan fill='#24292f'>, 1000</tspan></text>
+<text x='84' y='502' font-size='13.5' font-family='ui-monospace, SFMono-Regular, Menlo, Consolas, monospace' xml:space='preserve'><tspan fill='#24292f'>         ) AS h</tspan></text>
+<text x='84' y='523' font-size='13.5' font-family='ui-monospace, SFMono-Regular, Menlo, Consolas, monospace' xml:space='preserve'><tspan fill='#24292f'>JOIN     </tspan><tspan fill='#bf3989' font-weight='600'>owners o ON o.service = h.service</tspan></text>
+<text x='84' y='544' font-size='13.5' font-family='ui-monospace, SFMono-Regular, Menlo, Consolas, monospace' xml:space='preserve'><tspan fill='#24292f'>WHERE    </tspan><tspan fill='#bc4c00' font-weight='600'>h.level = 'error'</tspan></text>
+<text x='84' y='565' font-size='13.5' font-family='ui-monospace, SFMono-Regular, Menlo, Consolas, monospace' xml:space='preserve'><tspan fill='#24292f'>  AND    </tspan><tspan fill='#bc4c00' font-weight='600'>h.ts > now() - interval '24 hours'</tspan></text>
+<text x='84' y='586' font-size='13.5' font-family='ui-monospace, SFMono-Regular, Menlo, Consolas, monospace' xml:space='preserve'><tspan fill='#24292f'>GROUP BY </tspan><tspan fill='#8250df' font-weight='600'>o.team, h.service</tspan></text>
+<text x='84' y='607' font-size='13.5' font-family='ui-monospace, SFMono-Regular, Menlo, Consolas, monospace' xml:space='preserve'><tspan fill='#24292f'>ORDER BY hits DESC;</tspan></text>
+<text x='84' y='624' fill='#57606a' font-size='11'>{{q}} is the semantic part: the cloud embeds “capacity incident” and the whole statement runs as one pass over the index.</text>
+</svg>

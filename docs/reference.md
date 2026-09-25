@@ -44,16 +44,16 @@ server-side, so agents never handle raw vectors.
 `cx index --db` builds the local index and loads the same chunks into a
 platform database; every sync after it (the explicit `cx index`, or the
 server's auto-sync as queries arrive) applies the same diff to both, so they
-never drift. `find`, `search` and `sql` read the local copy; `ask` runs on
-the platform copy. Without `--db` the server is the local
-index alone, and nothing leaves the machine: no account, no key, no
-telemetry; embedding is a small local model downloaded once.
+never drift. `find` and plain `sql` read the local copy; `search`, a `sql`
+with a ranked search in it, and `ask` run on the platform copy, where every
+embedding is computed. Without `--db` the server is the local keyword index
+alone, and nothing leaves the machine: no account, no key, no telemetry.
 
 The keyword index commits first - about a second on a 3,000-chunk
-repository - so search works before any embedding model exists on the
-machine; vectors backfill in the background and hybrid ranking unlocks when
-they land. The local index lives in `.infino/` in the repository root (added
-to `.gitignore` on the first build): plain files you can copy or cache in CI.
+repository - so `find` works within seconds; the platform's vectors backfill
+in the background and semantic ranking unlocks when they land. The local
+index lives in `.infino/` in the repository root (added to `.gitignore` on
+the first build): plain files you can copy or cache in CI.
 
 ## Platform flags
 
@@ -151,9 +151,9 @@ stack.
   IVF vector indexes over a single copy of the data - queried in-process
   through the Node binding locally, and the same table on an Infino platform
   database for `ask`, written by the same builds and syncs.
-- **Embeddings:** a small local model for the local copy (chosen by a
-  [measured eval](embedder-eval.md)); the platform embeds its copy with its
-  own model unless `--embed-provider local`.
+- **Embeddings:** computed on the platform, with its own model, so the
+  compute-heavy stage never runs on your laptop; `--embed-provider local`
+  embeds on this machine and ships the vectors instead.
 - **Freshness:** incremental. A per-file state map (size/mtime prefilter,
   then content hash) means a sync re-chunks and re-embeds only the files that
   changed, in both places; the server auto-syncs as queries arrive.

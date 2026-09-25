@@ -1,0 +1,54 @@
+<svg xmlns='http://www.w3.org/2000/svg' width='960' height='291' viewBox='0 0 960 291' font-family='-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif'>
+<rect width='960' height='291' fill='#ffffff'/>
+<text x='20' y='30' fill='#24292f' font-size='18' font-weight='600'>LogDx-CI: diagnosing 35 CI failures from their logs</text>
+<text x='20' y='50' fill='#57606a' font-size='12'>A public benchmark of log reduction: each method cuts the log down, the same model diagnoses from what is left, and the benchmark's judge scores it.</text>
+<text x='20' y='65' fill='#57606a' font-size='12'>The other methods and their numbers are the benchmark's own. SuperGrep ranks the log's windows and keeps only the lines carrying the query's terms.</text>
+<text x='20' y='95' fill='#24292f' font-size='13' font-weight='600'>Diagnosis score, higher is better</text>
+<text x='20' y='126' fill='#24292f' font-size='13' font-weight='600'>hybrid grep + tail</text>
+<rect x='195' y='111' width='155' height='18' rx='3' fill='#8b949e'/>
+<text x='356' y='125' fill='#24292f' font-size='12' font-weight='600'>0.73</text>
+<text x='20' y='158' fill='#24292f' font-size='13' font-weight='600'>SuperGrep</text>
+<rect x='195' y='143' width='149' height='18' rx='3' fill='#2f81f7'/>
+<text x='350' y='157' fill='#24292f' font-size='12' font-weight='600'>0.70</text>
+<text x='20' y='190' fill='#24292f' font-size='13' font-weight='600'>hybrid grep + rtk + tail</text>
+<rect x='195' y='175' width='142' height='18' rx='3' fill='#8b949e'/>
+<text x='343' y='189' fill='#24292f' font-size='12' font-weight='600'>0.67</text>
+<text x='20' y='222' fill='#24292f' font-size='13' font-weight='600'>grep</text>
+<rect x='195' y='207' width='136' height='18' rx='3' fill='#8b949e'/>
+<text x='337' y='221' fill='#24292f' font-size='12' font-weight='600'>0.64</text>
+<text x='20' y='254' fill='#24292f' font-size='13' font-weight='600'>tail, 200 lines</text>
+<rect x='195' y='239' width='130' height='18' rx='3' fill='#8b949e'/>
+<text x='331' y='253' fill='#24292f' font-size='12' font-weight='600'>0.61</text>
+<text x='420' y='95' fill='#24292f' font-size='13' font-weight='600'>Context handed to the model</text>
+<text x='420' y='126' fill='#24292f' font-size='13' font-weight='600'></text>
+<rect x='420' y='111' width='38' height='18' rx='3' fill='#8b949e'/>
+<text x='464' y='125' fill='#24292f' font-size='12' font-weight='600'>19.8k tokens</text>
+<text x='420' y='158' fill='#24292f' font-size='13' font-weight='600'></text>
+<rect x='420' y='143' width='13' height='18' rx='3' fill='#2f81f7'/>
+<text x='439' y='157' fill='#24292f' font-size='12' font-weight='600'>6.8k tokens</text>
+<text x='420' y='190' fill='#24292f' font-size='13' font-weight='600'></text>
+<rect x='420' y='175' width='38' height='18' rx='3' fill='#8b949e'/>
+<text x='464' y='189' fill='#24292f' font-size='12' font-weight='600'>19.8k tokens</text>
+<text x='420' y='222' fill='#24292f' font-size='13' font-weight='600'></text>
+<rect x='420' y='207' width='170' height='18' rx='3' fill='#8b949e'/>
+<text x='596' y='221' fill='#24292f' font-size='12' font-weight='600'>88k tokens</text>
+<text x='420' y='254' fill='#24292f' font-size='13' font-weight='600'></text>
+<rect x='420' y='239' width='12' height='18' rx='3' fill='#8b949e'/>
+<text x='438' y='253' fill='#24292f' font-size='12' font-weight='600'>6.1k tokens</text>
+<text x='700' y='95' fill='#24292f' font-size='13' font-weight='600'>Score per 1k tokens of context</text>
+<text x='700' y='126' fill='#24292f' font-size='13' font-weight='600'></text>
+<rect x='700' y='111' width='68' height='18' rx='3' fill='#8b949e'/>
+<text x='774' y='125' fill='#24292f' font-size='12' font-weight='600'>0.037</text>
+<text x='700' y='158' fill='#24292f' font-size='13' font-weight='600'></text>
+<rect x='700' y='143' width='190' height='18' rx='3' fill='#2f81f7'/>
+<text x='896' y='157' fill='#24292f' font-size='12' font-weight='600'>0.103</text>
+<text x='700' y='190' fill='#24292f' font-size='13' font-weight='600'></text>
+<rect x='700' y='175' width='62' height='18' rx='3' fill='#8b949e'/>
+<text x='768' y='189' fill='#24292f' font-size='12' font-weight='600'>0.034</text>
+<text x='700' y='222' fill='#24292f' font-size='13' font-weight='600'></text>
+<rect x='700' y='207' width='13' height='18' rx='3' fill='#8b949e'/>
+<text x='719' y='221' fill='#24292f' font-size='12' font-weight='600'>0.007</text>
+<text x='700' y='254' fill='#24292f' font-size='13' font-weight='600'></text>
+<rect x='700' y='239' width='185' height='18' rx='3' fill='#8b949e'/>
+<text x='891' y='253' fill='#24292f' font-size='12' font-weight='600'>0.100</text>
+</svg>

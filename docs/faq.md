@@ -2,15 +2,17 @@
 
 ### What is SuperGrep?
 
-Retrieval for coding agents: four tools over an index kept in two
-places. `find`, `search` and `sql` run locally, over a ranked index that
-lives in plain files inside your repo, fusing keyword (BM25) and semantic
-search in one pass and exposing read-only SQL over the result. `ask`
-runs in the cloud, over the same index's platform copy, when a database
-is configured with `--db`. Either way the point is the same: an agent
-answers questions about the codebase, or delegates its exploration, without
-reading it file by file. The package, the CLI (`cx`) and the MCP server are
-still named `code-context`.
+A search engine for your coding agent: four tools over an index kept in two
+places. `find` and plain `sql` run on your machine, over a keyword index that
+lives in plain files inside your repo. Anything with meaning in it - `search`,
+a `sql` statement with a ranked search inside it, and `ask` - runs in the
+Infino cloud over the same index's platform copy, where every embedding is
+computed, so the heavy compute stays off your laptop. `ask` hands the
+question to SuperModel, our composite retrieval model, and returns the rows
+it found. Either way the point is the same: an agent answers questions about
+the codebase, or delegates its exploration, without reading it file by file.
+The package, the CLI (`cx`) and the MCP server are still named
+`code-context`.
 
 ### When should an agent use it instead of grep?
 
@@ -23,12 +25,12 @@ line, cited `path:line`, complete and unranked, with no file scanned.
 
 ### Does my code leave the machine?
 
-Not unless you ask it to. By default there are no accounts, no API keys, and
-no server: the embedding model is a small local model downloaded once from
-the public model hub, and after that everything runs offline. The one opt-in
-is `--db` (next question), which also keeps the index in a database you own
-on the Infino platform, so the platform's `ask` tool can run
-over it.
+Not unless you ask it to. With a local-only install there are no accounts, no
+API keys and no server: `find` and plain `sql` run offline over the keyword
+index. The opt-in is an account (`install --platform`, or `--db`, next
+question), which also keeps the index in a database you own on the Infino
+platform; that is where embeddings are computed and where `search`, semantic
+`sql` and `ask` run.
 
 ### Can the index also live on the Infino platform?
 
@@ -110,15 +112,16 @@ full coverage.
 
 ### What tools does the MCP server expose?
 
-Five, one per question: `find` (every line containing an exact string, cited
+Four, one per question: `find` (every line containing an exact string, cited
 `path:line` like `grep -n`; complete and unranked, the grep replacement),
 `search` (hybrid keyword + semantic retrieval, one ranked pass, hits carry
-chunk content with `path:line` ranges), and `sql` (read-only `SELECT`/`WITH`
+chunk content with `path:line` ranges), `sql` (read-only `SELECT`/`WITH`
 over the index, with the ranked search functions usable as table-valued
-relations so search composes with `GROUP BY`) all run locally, with no
-account needed. With `--db` and a platform database, `ask` (a question that
-spans the repository, answered as the rows the platform's loop retrieved
-rather than as prose) runs in the cloud over the same index's platform copy.
+relations so search composes with `GROUP BY`) and `ask` (a question that
+spans the repository, answered as the rows SuperModel retrieved rather than
+as prose). `find` and plain `sql` run on your machine with no account;
+`search`, a `sql` with a ranked search in it, and `ask` run in the cloud over
+the same index's platform copy.
 
 Every near-duplicate retrieval tool worsens an agent's tool selection, so
 each of the four earns its place by answering a question none of the others

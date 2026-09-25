@@ -8,37 +8,40 @@
 
 # SuperGrep
 
-**Retrieval for coding agents. The same answers, cheaper and faster, on every Claude model we measured.**
+**A search engine for your coding agent.** Point it at a repository and your agent stops reading files one at a time. It asks an index of the whole codebase - and of the logs, docs and issues around it - for exactly what it needs, and gets back cited lines, counts and rankings. The same answers, for less money and in less time, on every Claude model.
 
-Much of what a coding agent spends time on is reading files rather than reasoning about them. SuperGrep gives the agent an index of the repository and four tools over it, so the lookup, the fan-out and the fifty "go look at this" jobs a hard task spawns run as retrieval instead of as reading. No config needed. Your model keeps the reasoning, writes the answer, and decides when to use them.
+**[Try it live at supergrep.infino.ai](https://supergrep.infino.ai)** - put a question to a real codebase and watch the same model answer it with and without SuperGrep, side by side, with the bill for each.
 
-![SuperGrep: find, search and sql locally, ask in the cloud, one index in both places](docs/subagent/architecture.svg)
+![SuperGrep: find and plain sql on your machine, search, semantic sql and ask in the Infino cloud, one index in both places](docs/subagent/architecture.svg)
 
-**Four tools. Three run on your machine, one runs in the cloud, over one
-index kept in both places.**
+Four tools over one index, kept in two places. `find` and plain `sql` run on your machine, over the keyword index. Anything with meaning in it - `search`, a `sql` statement with a ranked search inside it, and `ask` - runs in the Infino cloud, where every embedding is computed, so the heavy compute stays off your laptop. Behind `ask` is **SuperModel**, our composite retrieval model: not a single trained model but a mixture of experts built into the retrieval layer, so several small models work the index at once and hand your model the rows they found. Your model keeps the reasoning, writes the answer, and decides when to use them. No configuration.
 
-| | tool | what it does |
-|---|---|---|
-| local | **`find`** | Every line containing an exact string, like `grep -n`, complete and unranked, with the repo-wide total and per-file counts. Tens of milliseconds from the index instead of a grep-and-read loop that pulls source into the model's context one file at a time. |
-| local | **`search`** | One ranked pass fusing exact keyword matching with semantic similarity, so it works whether or not you know the words. Hits carry the code, cited `path:line`. |
-| local | **`sql`** | Read-only SQL over the index. The ranked searches are table-valued relations, so "which files have the most code about X" is one query that ranks and tallies in a single pass. |
-| cloud | **`ask`** | A question that spans the repository, handed to a small language model that runs the investigation against the same index with deep context from it. It comes back as the rows it found, cited `path:line`, rather than as prose. Several asks run at once. |
+<details>
+<summary>The four tools, one line each - for the agent reading this</summary>
 
-The models behind `ask` are small on purpose. Deciding where to look next in a 256,000-line repository is retrieval work, and a small model with deep
-context from the index can do it at a fraction of the cost and fifty at a time. What it is not is a reasoning model: it executes search tasks and hands back rows, and your model writes the answer from them. That division was measured, and it is the one that wins.
+| tool | what it does |
+|---|---|
+| `find` | Every line containing an exact string, like `grep -n`: complete, unranked, with the repo-wide total and per-file counts. Tens of milliseconds from the index. |
+| `search` | One ranked pass fusing exact keyword matching with semantic similarity, so it works whether or not you know the words. Hits carry the code, cited `path:line`. |
+| `sql` | Read-only SQL over the index. The ranked searches are table-valued, so "which files have the most code about X" ranks and tallies in one query. |
+| `ask` | A question that spans the repository, handed to SuperModel, which runs the investigation against the index and returns the rows it found, cited `path:line`, rather than prose. Several asks run at once. |
 
-### The model chooses it on its own
+</details>
 
-Offered SuperGrep's four tools beside its own file tools, with no instruction to prefer either, every Claude model we measured reached for SuperGrep first on nearly every question, and made most of its calls through it. The same 36 questions as [the numbers below](#the-numbers), 2026-09-24:
+![Search functions live inside SQL, so one statement asks a whole question](docs/subagent/one-query.svg)
 
-| caller | calls over 36 questions | through SuperGrep | opened with a SuperGrep tool | the rest |
-|---|---|---|---|---|
-| Haiku | 89 | 58 (65%) | 29 of 36 | `Read` 22, `Glob` 5, `Grep` 4 |
-| Sonnet | 107 | **93 (87%)** | **35 of 36** | `Read` 12, `Glob` 2 |
-| Opus | 138 | 76 (55%) | 31 of 36 | `Bash` 40, `Read` 17, `Grep` 5 |
-| Fable | 239 | 201 (84%) | 34 of 36 | `Read` 30, `Bash` 7, `Grep` 1 |
+## What people use it for
 
-It uses the whole surface rather than settling on one tool. Sonnet's 93 calls were `ask` 42, `sql` 24, `find` 24 and `search` 3; Fable leaned on `find` (101) and `ask` (70). The calls that are not SuperGrep are mostly `Read`: the model reads a file *after* the index has told it which one, rather than instead of asking. That is the shape you want - the index does the finding, and the model still opens what it needs to quote. Opus is the exception worth knowing: it likes `Bash`, and spent 40 calls on it.
+- **Code review.** The reviewer's question is "what else calls this, and what breaks if it changes". `find` answers with every caller and the counts in one call, and `ask` reads the paths that matter, so the review is about the change rather than about finding it.
+- **Big explorations.** "How does X work end to end" spawns fifty look-ups. With SuperGrep they run as fifty asks in parallel against the index, instead of fifty subagents reading the tree into your bill.
+- **Several codebases at once.** Every local tool takes a repository path, so one session roams across every repo it touches - the service, the client, the shared library - without a checkout per question.
+- **Code, logs and issues together.** Index the logs, the test output and the issue export beside the source, and "why did this integration test start failing?" is one question over all of them.
+
+## Your model reaches for it on its own
+
+![Offered both, the model reaches for SuperGrep](docs/subagent/tool-choice.svg)
+
+The calls that are not SuperGrep are mostly `Read`: the model opens a file *after* the index has told it which one, rather than instead of asking. That is the shape you want - the index does the finding, and the model still opens what it needs to quote.
 
 ## Go beyond code - index your entire laptop or any corpus
 
@@ -48,27 +51,22 @@ and the same four tools run over all of it: `find` for an exact stack frame, `se
 run, `ask` for the question that spans several of them at once.
 
 That matters most where a frontier model is weakest. A log is the pathological case for a context window - large, repetitive, mostly irrelevant, and paid for
-again on every turn it stays in the transcript. An index collapses it to the spans that matter before the model sees any of it.
+again on every turn it stays in the transcript. An index collapses it to the spans that matter before the model sees any of it. On a public benchmark of CI-failure diagnosis, scored by the benchmark's own judge, that puts SuperGrep second on the score and first by a distance on score per token of context:
 
-On a scale somebody else set: **LogDx-CI**, a public benchmark of 35 CI-failure diagnoses scored by the benchmark's own judge (2026-09-20). Ranking a log's windows and returning only the lines that carry the query's terms scored **0.70 on 6.8k tokens of context**. The benchmark's own grep definition scores 0.64 on 88k tokens; the published leader's hybrid grep-and-tail scores 0.67 on 19.8k, and its stronger variant 0.73 on the same 19.8k. First on score per token, second on raw score, to a method that spends nearly three times the context.
+![LogDx-CI: diagnosis score, context handed to the model, and score per 1k tokens, by method](docs/subagent/logdx.svg)
 
-So "why did this integration test start failing?" is one question over source, recent logs, test output, stack traces and config - and the retrieval, the
-fan-out and the fifty parallel investigations are the part that is farmed out.
+For files that don't fit on your laptop - write them out to Parquet files in object storage and point SuperGrep at them without ever loading them onto your laptop ([how](#indexing-from-object-storage)). You can search them together with your code or laptop files using the same tools.
 
-For files that don't fit on your laptop - write them out to Parquet files in object storage and point SuperGrep at them without ever loading them onto your laptop ([how](#indexing-from-object-storage)). You can search them together with your code or laptop files using the same subagents.
+## What it saves
 
-## The numbers
+The same model answers the same 36 questions twice about a 256,000-line codebase: once with the file tools it ships with, once with SuperGrep added. A judge with the repository checked out verifies every claim against the code, without knowing which tools produced the answer; an answer is **fully correct** when every claim held and the whole question was answered. The bill is your total for the pass: your model's bill, subagents included, plus what the cloud tool charges.
 
-Real agent runs through the Claude Agent SDK, the same minimal prompt in every arm, on the [infino](https://github.com/infino-ai/infino)
-engine repository (about 256,000 lines of Rust the model has not memorized - which is what makes it a retrieval test at all: on a repository already in the
-model's weights there is nothing for retrieval to do). Thirty-six questions in five categories - aggregation (10), comprehension (6), by meaning (6), pinpoint (8), known file (6) - each put to the same model twice, measured 2026-09-24 on four Claude models:
+<details>
+<summary>How the runs were set up</summary>
 
-| arm | what the model has |
-|---|---|
-| file tools | Glob, Grep, Read, LS, Bash, and the Agent tool with Claude Code's built-in Explore subagent - stock Claude Code |
-| SuperGrep | the same, plus the four tools above |
+Real agent runs through the Claude Agent SDK, the same minimal prompt in every arm, on the [infino](https://github.com/infino-ai/infino) engine repository, measured 2026-09-24. Thirty-six questions in five categories: aggregation (10), comprehension (6), by meaning (6), pinpoint (8), known file (6). The file-tools arm is stock Claude Code: Glob, Grep, Read, LS, Bash, and the Agent tool with the built-in Explore subagent. The SuperGrep arm is the same plus the four tools above. The judge is Opus 5.5.
 
-A judge - Opus 5.5, with the repository checked out - checks every claim in each answer against the code, without knowing which tools produced it. An answer is **fully correct** when every claim held and the whole question was answered. The bill is your total for the pass: your model's bill, subagents included, plus what the cloud tool charges.
+</details>
 
 ![The same model with file tools and with SuperGrep, on four Claude models: bill, fully correct answers, time](docs/subagent/by-caller.svg)
 
@@ -77,6 +75,7 @@ A judge - Opus 5.5, with the repository checked out - checks every claim in each
 - **Cheaper on every caller.** Haiku 41% off the total bill, Sonnet 58%, Opus 26%, Fable 14%. The cloud tool's own charge is inside those totals.
 - **The quality gain is on the cheap model.** Haiku gets eight more fully correct answers with SuperGrep than without. On Sonnet, Opus and Fable the answers are level: the judge is itself a model, and graded four times the same answers came back with 19, 20, 17 and 23 claims it could not verify, so a difference under about six answers in 36 is noise, and those three are inside it.
 - **No runaway subagents.** Within a caller the typical question takes about as long either way. The gap is the tail, and the tail is Sonnet's: on about a third of questions Sonnet with file tools hands off to an Explore subagent that reads its way through the tree, at four to five times the cost and four times the time. Sonnet with SuperGrep answers the same question from one `ask` and a few `find`s - 2.4x cheaper and 2.1x faster over the pass, level on answers, and its slowest tenth of questions finish in 66 s instead of 206.
+- **On your own code the gap is wider.** These runs are on a public, open-source repository, because that is a test anyone can repeat - and the large models have seen it in training, which is a head start for reading files. On a private codebase the model has never seen, the index does more of the work, and the effect of SuperGrep is larger.
 
 ### Where it wins, and where it does not
 
@@ -119,11 +118,11 @@ That is the whole setup. It indexes the repository, gets you a free account, reg
 cd ../another-repo && node /path/to/code-context/dist/cli.js install
 ```
 
-The stored key is found automatically. When the free credit runs out, `ask` says so and tells you how to add billing details and a card to the same account; `find`, `search` and `sql` keep working throughout.
+The stored key is found automatically. When the free credit runs out, `ask` says so and tells you how to add billing details and a card to the same account; `find` and plain `sql` keep working throughout.
 
 ### Local tools only
 
-On a machine with no account, `install` with no flags at all gives you `find`, `search` and `sql` - no account, no key, nothing uploaded:
+On a machine with no account, `install` with no flags at all gives you the keyword tools - `find` and plain `sql` - with no account, no key and nothing uploaded:
 
 ```bash
 node /path/to/code-context/dist/cli.js install
