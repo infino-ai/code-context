@@ -11,13 +11,13 @@ Opus and Fable the answers come out level, inside the judge's own noise; the
 saving is the bill and the tail. Where SuperGrep does better on every model is
 the whole-corpus question - counts, rankings, every occurrence - because an
 index gives the total where grep gives the first forty matches. Where it does
-worse is "explain how X works end to end" and "find the code that does Y" on the
-larger models: a strong model reading whole files does those well, the agent's
-built-in Explore subagent is designed for exactly them, and most of the wrong
+worse is "where is X handled" and "where is this symbol" on the larger models:
+a strong model reading whole files finds a named thing well, the agent's
+built-in Explore subagent is designed for exactly that, and most of the wrong
 claims SuperGrep makes there say which code path calls which function. That
 gap is real. It does not mean answers will read worse in production, but it is
-worth knowing which questions to expect it on. The full tables, by caller and
-by category, are in the [README](../README.md#the-numbers).
+worth knowing which questions to expect it on. The figures, by caller and by
+kind of question, are in the [README](../README.md#the-numbers).
 
 ### It does not do structural code intelligence
 

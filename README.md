@@ -68,52 +68,31 @@ model's weights there is nothing for retrieval to do). Thirty-six questions in f
 | file tools | Glob, Grep, Read, LS, Bash, and the Agent tool with Claude Code's built-in Explore subagent - stock Claude Code |
 | SuperGrep | the same, plus the four tools above |
 
-**How to read the tables.** A judge - Opus 5.5, with the repository checked out - checks every claim in each answer against the code, without knowing which tools produced it. An answer is **fully correct** when every claim held and the whole question was answered. **Better / same / worse** counts the questions where the SuperGrep answer came out better than, the same as, or worse than the file-tools answer by the judge's grading. Cost is your total for the pass: your model's bill, subagents included, plus what the cloud tool charges.
+A judge - Opus 5.5, with the repository checked out - checks every claim in each answer against the code, without knowing which tools produced it. An answer is **fully correct** when every claim held and the whole question was answered. The bill is your total for the pass: your model's bill, subagents included, plus what the cloud tool charges.
 
-| caller | fully correct, SuperGrep | fully correct, file tools | better / same / worse | cost, SuperGrep | cost, file tools | median per question | p90 |
-|---|---|---|---|---|---|---|---|
-| Haiku | **23 of 36** | 15 of 36 | **12 / 19 / 5** | **$1.09** | $1.86 | 14 s vs 15 s | 36 s vs 42 s |
-| Sonnet | 16 of 36 | 18 of 36 | 8 / 18 / 10 | **$3.66** | $8.73 | 22 s vs 25 s | **66 s vs 206 s** |
-| Opus | 25 of 36 | 25 of 36 | 6 / 22 / 8 | **$4.68** | $6.32 | 18 s vs 22 s | 52 s vs 50 s |
-| Fable | 22 of 36 | 25 of 36 | 6 / 21 / 9 | **$16.69** | $19.36 | 30 s vs 37 s | 85 s vs 96 s |
-
-![Total bill per pass, by caller](docs/subagent/cost-by-caller.svg)
-
-![Blind judge, by caller](docs/subagent/verdict-by-caller.svg)
+![The same model with file tools and with SuperGrep, on four Claude models: bill, fully correct answers, time](docs/subagent/by-caller.svg)
 
 **Your mileage will vary with the model.** Three things held on every rerun since; the rest is the model's.
 
 - **Cheaper on every caller.** Haiku 41% off the total bill, Sonnet 58%, Opus 26%, Fable 14%. The cloud tool's own charge is inside those totals.
-- **The quality gain is on the cheap model.** Haiku gets eight more fully correct answers with SuperGrep than without, and does better on twelve questions to five worse. On Sonnet, Opus and Fable the answers are level: the judge is itself a model, and graded four times the same answers came back with 19, 20, 17 and 23 claims it could not verify, so a difference under about six questions in 36 is noise, and those three are inside it.
-- **No runaway subagents.** Within a caller the medians are close. The gap is the tail, and the tail is Sonnet's: on about a third of questions Sonnet with file tools hands off to an Explore subagent that reads its way through the tree, at four to five times the cost and four times the time. Sonnet with SuperGrep answers the same question from one `ask` and a few `find`s - 2.4x cheaper and 2.1x faster over the panel, level on answers, with a p90 of 66 s against 206.
+- **The quality gain is on the cheap model.** Haiku gets eight more fully correct answers with SuperGrep than without. On Sonnet, Opus and Fable the answers are level: the judge is itself a model, and graded four times the same answers came back with 19, 20, 17 and 23 claims it could not verify, so a difference under about six answers in 36 is noise, and those three are inside it.
+- **No runaway subagents.** Within a caller the typical question takes about as long either way. The gap is the tail, and the tail is Sonnet's: on about a third of questions Sonnet with file tools hands off to an Explore subagent that reads its way through the tree, at four to five times the cost and four times the time. Sonnet with SuperGrep answers the same question from one `ask` and a few `find`s - 2.4x cheaper and 2.1x faster over the pass, level on answers, and its slowest tenth of questions finish in 66 s instead of 206.
 
 ### Where it wins, and where it does not
 
-By category, better / same / worse than file tools:
+![Fully correct answers by kind of question, all four models together](docs/subagent/by-category.svg)
 
-| category (questions) | Haiku | Sonnet | Opus | Fable |
-|---|---|---|---|---|
-| aggregation - which files have the most X (10) | **7 / 2 / 1** | 2 / 5 / 3 | 1 / 7 / 2 | 2 / 4 / 4 |
-| comprehension - how does X work (6) | 2 / 4 / 0 | 2 / 3 / 1 | 3 / 2 / 1 | 0 / 5 / 1 |
-| by meaning - where is X handled (6) | 2 / 2 / 2 | 0 / 3 / 3 | 1 / 2 / 3 | 3 / 2 / 1 |
-| pinpoint - where is this symbol (8) | 0 / 6 / 2 | 2 / 3 / 3 | 0 / 6 / 2 | 1 / 5 / 2 |
-| known file - what does this file do (6) | 1 / 5 / 0 | 2 / 4 / 0 | 1 / 5 / 0 | 0 / 5 / 1 |
+**Whole-corpus facts are where it is built to win.** Counts, rankings, every occurrence, sizes, patterns across many files: grep on a checkout gives the first forty matches and an index gives the total. Haiku with file tools walked 26 tool calls to break the crate down by module and got it wrong. After `sql` was taught to refuse a ranking built on a search's small top k, the ten aggregation questions were rerun on 2026-09-25, and the fully correct answers came out **Haiku 7 to 0, Sonnet 4 to 1, Opus 8 to 5** over file tools.
 
-**Whole-corpus facts are where it is built to win.** Counts, rankings, every occurrence, sizes, patterns across many files: grep on a checkout gives the first forty matches and an index gives the total. Haiku with file tools walked 26 tool calls to break the crate down by module and got it wrong. After `sql` was taught to refuse a ranking built on a search's small top k, the ten aggregation questions were rerun on 2026-09-25: **Haiku 9 / 1 / 0, Sonnet 5 / 4 / 1, Opus 4 / 6 / 0**, with no question behind file tools on any of them.
-
-**Where it loses, the other side is reading the files.** "Explain how X works end to end" and "find the code that does Y" are a tie or a loss on every model except Haiku: a strong model reading whole files does those well, and the Explore subagent built into the agent is designed for exactly that kind of question. Most of the wrong claims SuperGrep makes there say which code path calls which function. That gap is real; the tools to close it are `find` on the name, and the model has to reach for it.
+**Where it loses, the other side is reading the files.** "Where is X handled" and "where is this symbol" come out behind on the larger models: a strong model reading whole files finds a named thing well, and the Explore subagent built into the agent is designed for exactly that kind of question. Most of the wrong claims SuperGrep makes there say which code path calls which function. That gap is real; the tool to close it is `find` on the name, and the model has to reach for it.
 
 ### A cheap caller gets close to an expensive one
 
 The comparison a buyer makes is not the same model with and without SuperGrep; it is the cheap model on the index against the strong model on file tools. The same 36 questions and the same judge:
 
-| pair | better / same / worse | fully correct, of 36 | cost per pass | median per question |
-|---|---|---|---|---|
-| Haiku + SuperGrep vs Opus + file tools | 7 / 19 / 10 | 23 vs 25 | **$1.09 vs $6.32** | **14 s vs 22 s** |
-| Haiku + SuperGrep vs Fable + file tools | 5 / 21 / 10 | 23 vs 25 | **$1.09 vs $19.36** | **14 s vs 37 s** |
-| Opus + SuperGrep vs Opus + file tools | 6 / 22 / 8 | 25 vs 25 | **$4.68 vs $6.32** | 18 s vs 22 s |
+![Haiku on SuperGrep against Opus and Fable on file tools: bill, fully correct answers, time](docs/subagent/cheap-vs-strong.svg)
 
-Haiku on the index sits two fully correct answers under Opus on files, at a sixth of the cost and two thirds of the median time: the same result on half the questions, a better one on one in five. Not "as good as" - and two of the three questions Haiku got mostly wrong were the top-k shape `sql` now refuses.
+Haiku on the index sits two fully correct answers under Opus and Fable on files, at a sixth and an eighteenth of the bill, in two thirds of Opus's time and under half of Fable's. Not "as good as" - and two of the three questions Haiku got mostly wrong were the top-k shape `sql` now refuses.
 
 ## Install
 
