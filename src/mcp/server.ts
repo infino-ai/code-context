@@ -414,6 +414,23 @@ export const SWEEP_TO_A_TOOL =
   "Be efficient: prefer few, well-chosen tool calls, and hand a sweep across many files to a tool " +
   "built for it rather than searching by hand.";
 
+/** Where a stated specific comes from: the row that holds it, never a row
+ * that only names it. Measured on the judged 36-question panel of
+ * 2026-09-24, every by-meaning loss on every caller was this one mistake:
+ * the mechanism and the place right, then a default read as 0.993 where the
+ * code says 0.99, a depth of 8 where it is 4, a sort order the function
+ * does not have, a test's call to a function cited as its definition. The
+ * model had made two to six asks and no read, because the sentences below
+ * told it a hit answers the question and a file is read only when a hit is
+ * truncated - which they still say; this is the one exception they need.
+ * Corpus-neutral on purpose: in a log the row that holds a failure is the
+ * lines where it happened, not the summary line that names it. */
+export const STATE_FROM_THE_ROW_THAT_HOLDS_IT =
+  "A number, an order, a step or a place you state must come from the row that holds it, not from a " +
+  "row that only names it. When a hit names the thing but does not hold it, fetch the rows that do " +
+  "before you state it: the definition's lines in code, the lines where it happened in a log, the " +
+  "record itself in a table.";
+
 /** The fan-out as a preference, not a permission. "Spawn several in
  * parallel for independent questions" said the parallel call was allowed;
  * the outer model kept asking one broad question and waiting, or walking
@@ -604,6 +621,8 @@ export function logIndexInstructions(agentTools: boolean, files: number, chunks:
     "with its own number in the file, so cite a place as path:line or path:start-end from those numbers and " +
     "only where the thing you name sits - never the hit's whole line range, which spans the window. " +
     CITE_EXACTLY +
+    " " +
+    STATE_FROM_THE_ROW_THAT_HOLDS_IT +
     " A 'partial' marker means files over the index cap were left out, so a missing match is not proof of absence."
   );
 }
@@ -1619,7 +1638,9 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
         "from those numbers and only where the thing you name sits - never the hit's whole line " +
         "range, which spans the chunk. " +
         CITE_EXACTLY +
-        " Read a file only for a hit marked truncated. " +
+        " " +
+        STATE_FROM_THE_ROW_THAT_HOLDS_IT +
+        " Read a file only for a hit marked truncated, or for the lines that hold a specific you are about to state. " +
         "Every tool takes an optional 'path' (an absolute repo root) to target another repository. " +
         "A 'partial' marker means files over the index cap were left out, so a missing match is not " +
         "proof of absence.") +

@@ -118,15 +118,20 @@ async function expectChunksText(s: Started): Promise<void> {
   expect(instructions).toContain("find, search, sql and ask cover every file in one call");
 }
 
-/** The two sentences the hosted loop's answer writer is told, word for word,
- * in whatever instructions a model reads: what a citation is, and what a sweep
- * is. Pinned as text so a rewording here is a decision, not a drift. */
+/** The sentences every model reads in whatever instructions it is given:
+ * what a citation is, what a sweep is, and where a stated specific comes
+ * from. Pinned as text so a rewording here is a decision, not a drift. */
 function expectSharedSentences(instructions: string): void {
   expect(instructions).toContain(
     "Cite the places your tool results gave you exactly as they gave them - the path and line numbers copied, never recalled or adjusted.",
   );
   expect(instructions).toContain(
     "Be efficient: prefer few, well-chosen tool calls, and hand a sweep across many files to a tool built for it rather than searching by hand.",
+  );
+  expect(instructions).toContain(
+    "A number, an order, a step or a place you state must come from the row that holds it, not from a row that only names it. " +
+      "When a hit names the thing but does not hold it, fetch the rows that do before you state it: the definition's lines in code, " +
+      "the lines where it happened in a log, the record itself in a table.",
   );
 }
 
