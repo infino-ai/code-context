@@ -1306,10 +1306,11 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
   // text's card and validation note.
   const platformTools = hosted !== null;
   const agentTools = platformTools && agentToolsEnabled();
-  // Whether `answer` rides beside `ask`. Off (CX_ANSWER_TOOL=0) the caller's
+  // Whether `answer` rides beside `ask`. Off, the default, the caller's
   // model writes the final answer from the rows itself, and the tool and its
   // routing line are both absent - for the same reason `ask` is taken out at
   // the source above: a line for a tool that is not there costs a turn.
+  // CX_ANSWER_TOOL=1 puts it back for measuring the two writers side by side.
   const answerTool = agentTools && answerToolEnabled();
   // The platform's own routes as tools the model calls (CX_API_TOOLS):
   // table_card, validate, cite. With them on, sql carries no card and no

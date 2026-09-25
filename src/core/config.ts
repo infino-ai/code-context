@@ -291,15 +291,16 @@ export function agentToolsEnabled(): boolean {
 }
 
 /** Whether the MCP server registers `answer` beside `ask` (CX_ANSWER_TOOL,
- * default on). Off, the model that called the tools writes the final answer
+ * default off). Off, the model that called the tools writes the final answer
  * itself from the rows they returned: `ask` stays, `answer` is neither
  * registered nor named in the instructions, and nothing tells the model
- * "never write the answer yourself". This is the shape the hosted lane had
- * before the tool existed, and it is kept so the two writers can be measured
- * against each other on one deployment. Says nothing when CX_AGENT_TOOLS is
- * off, which removes both tools. */
+ * "never write the answer yourself". That is the shipped shape: measured,
+ * the caller writing from the rows kept counts the platform's writer lost.
+ * On, the two writers can be measured against each other on one
+ * deployment. Says nothing when CX_AGENT_TOOLS is off, which removes both
+ * tools. */
 export function answerToolEnabled(): boolean {
-  return !OFF_VALUES.includes((process.env.CX_ANSWER_TOOL ?? "").toLowerCase());
+  return ON_VALUES.includes((process.env.CX_ANSWER_TOOL ?? "").toLowerCase());
 }
 
 /** Whether the MCP server offers the platform's own API routes as tools the

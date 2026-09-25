@@ -156,12 +156,14 @@ afterAll(() => {
   configureHosted(null);
 });
 
-describe("a table of another shape, described at startup", () => {
+describe("a table of another shape, described at startup, with answer switched on", () => {
   let s: Started;
   beforeAll(async () => {
+    process.env.CX_ANSWER_TOOL = "1";
     s = await start(describable(), "cx-rows-");
   });
   afterAll(async () => {
+    delete process.env.CX_ANSWER_TOOL;
     await stop(s);
   });
 

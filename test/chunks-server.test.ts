@@ -201,12 +201,14 @@ afterAll(() => {
   configureHosted(null);
 });
 
-describe("the chunks table with the platform up", () => {
+describe("the chunks table with the platform up, and answer switched on", () => {
   let s: Started;
   beforeAll(async () => {
+    process.env.CX_ANSWER_TOOL = "1";
     s = await start(up(), "cx-chunks-");
   });
   afterAll(async () => {
+    delete process.env.CX_ANSWER_TOOL;
     await stop(s);
   });
 
@@ -316,14 +318,12 @@ describe("the chunks table with CX_AGENT_TOOLS=0: the lane that hides ask", () =
   });
 });
 
-describe("the chunks table with CX_ANSWER_TOOL=0: the caller's model writes the answer", () => {
+describe("the chunks table by default: the caller's model writes the answer", () => {
   let s: Started;
   beforeAll(async () => {
-    process.env.CX_ANSWER_TOOL = "0";
     s = await start(up(), "cx-chunks-noanswer-");
   });
   afterAll(async () => {
-    delete process.env.CX_ANSWER_TOOL;
     await stop(s);
   });
 
@@ -567,10 +567,12 @@ describe("the chunks table with CX_SIBLING_TABLES: the tables a statement may jo
 describe("the chunks table with CX_ANSWER_DISPLAY=hook: the install wrote the hook", () => {
   let s: Started;
   beforeAll(async () => {
+    process.env.CX_ANSWER_TOOL = "1";
     process.env.CX_ANSWER_DISPLAY = "hook";
     s = await start(up(), "cx-chunks-hook-");
   });
   afterAll(async () => {
+    delete process.env.CX_ANSWER_TOOL;
     delete process.env.CX_ANSWER_DISPLAY;
     await stop(s);
   });
@@ -590,9 +592,11 @@ describe("the chunks table with CX_ANSWER_DISPLAY=hook: the install wrote the ho
 describe("the chunks table with the platform answering 503 at spawn", () => {
   let s: Started;
   beforeAll(async () => {
+    process.env.CX_ANSWER_TOOL = "1";
     s = await start(cold(), "cx-chunks-cold-");
   });
   afterAll(async () => {
+    delete process.env.CX_ANSWER_TOOL;
     await stop(s);
   });
 
