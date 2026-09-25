@@ -70,7 +70,7 @@ Real agent runs through the Claude Agent SDK, the same minimal prompt in every a
 
 ![The same model with file tools and with SuperGrep, on four Claude models: bill, fully correct answers, time](docs/subagent/by-caller.svg)
 
-**Your mileage will vary with the model.** Three things held on every rerun since; the rest is the model's.
+**Your mileage will vary with the model.** Three things hold across all four:
 
 - **Cheaper on every caller.** Haiku 41% off the total bill, Sonnet 58%, Opus 26%, Fable 14%. The cloud tool's own charge is inside those totals.
 - **Quality increases on the cheaper models.** Haiku gets eight more fully correct answers with SuperGrep than without. On Sonnet, Opus and Fable the answers are level: the judge is itself a model, and graded four times the same answers came back with 19, 20, 17 and 23 claims it could not verify, so a difference under about six answers in 36 is noise, and those three are inside it.
@@ -81,9 +81,9 @@ Real agent runs through the Claude Agent SDK, the same minimal prompt in every a
 
 ![Fully correct answers by kind of question, all four models together](docs/subagent/by-category.svg)
 
-**Whole-corpus facts are where it is built to win.** Counts, rankings, every occurrence, sizes, patterns across many files: grep on a checkout gives the first forty matches and an index gives the total. Haiku with file tools walked 26 tool calls to break the crate down by module and got it wrong. After `sql` was taught to refuse a ranking built on a search's small top k, the ten aggregation questions were rerun on 2026-09-25, and the fully correct answers came out **Haiku 7 to 0, Sonnet 4 to 1, Opus 8 to 5** over file tools.
+**Questions about the whole codebase are where it wins.** Counts, rankings, every occurrence, sizes, patterns across many files: grep on a checkout gives the first forty matches, and an index gives the total.
 
-**Where it loses, the other side is reading the files.** "Where is X handled" and "where is this symbol" come out behind on the larger models: a strong model reading whole files finds a named thing well, and the Explore subagent built into the agent is designed for exactly that kind of question. Most of the wrong claims SuperGrep makes there say which code path calls which function. That gap is real; the tool to close it is `find` on the name, and the model has to reach for it.
+**Where it loses, the other side is reading the files.** "Where is X handled" and "where is this symbol" come out behind on the larger models: a strong model reading whole files finds a named thing well, and the agent's built-in subagent is designed for exactly that kind of question. That gap is real.
 
 ### A cheap caller gets close to an expensive one
 
@@ -91,7 +91,7 @@ The comparison a buyer makes is not the same model with and without SuperGrep; i
 
 ![Haiku on SuperGrep against Opus and Fable on file tools: bill, fully correct answers, time](docs/subagent/cheap-vs-strong.svg)
 
-Haiku on the index sits two fully correct answers under Opus and Fable on files, at a sixth and an eighteenth of the bill, in two thirds of Opus's time and under half of Fable's. Not "as good as" - and two of the three questions Haiku got mostly wrong were the top-k shape `sql` now refuses.
+Haiku with SuperGrep gets within two correct answers of Opus and Fable reading the files, for a sixth of Opus's bill and an eighteenth of Fable's, in less time. Not as good, but close, at a fraction of the price.
 
 ## Install
 
