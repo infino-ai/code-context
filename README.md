@@ -91,7 +91,7 @@ The comparison a buyer makes is not the same model with and without SuperGrep; i
 
 ![Haiku on SuperGrep against Opus and Fable on file tools: bill, fully correct answers, time](docs/subagent/cheap-vs-strong.svg)
 
-Haiku with SuperGrep gets within two correct answers of Opus and Fable reading the files, for a sixth of Opus's bill and an eighteenth of Fable's, in less time. Not as good, but close, at a fraction of the price.
+The cheapest model with SuperGrep nearly matches the most expensive models without it: 23 correct answers to their 25, for $1.09 instead of $6.32 (Opus) or $19.36 (Fable).
 
 ## Install
 
