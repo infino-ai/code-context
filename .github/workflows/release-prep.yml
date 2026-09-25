@@ -61,17 +61,17 @@ jobs:
   prep:
     name: Classify, bump, and open the release PR
     runs-on: ubuntu-latest
-    if: github.repository == 'infino-ai/code-context'
+    if: github.repository == 'infino-ai/supergrep'
     timeout-minutes: 10
     steps:
-      - name: Mint release-App token scoped to code-context
+      - name: Mint release-App token scoped to supergrep
         id: token
         uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ vars.RELEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
           owner: infino-ai
-          repositories: code-context
+          repositories: supergrep
 
       # Full history: the gate and classifier need the release tags.
       - uses: actions/checkout@v7
