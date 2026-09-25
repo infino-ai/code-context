@@ -59,7 +59,7 @@ For files that don't fit on your laptop - write them out to Parquet files in obj
 
 ## What it saves
 
-The same model answers the same 36 questions twice about a 256,000-line codebase: once with the file tools it ships with, once with SuperGrep added. A judge with the repository checked out verifies every claim against the code, without knowing which tools produced the answer; an answer is **fully correct** when every claim held and the whole question was answered. The bill is your total for the pass: your model's bill, subagents included, plus what the cloud tool charges.
+The same model, the same 36 questions about a 256,000-line codebase, with and without SuperGrep. Every answer was checked against the code. **Fully correct** means every claim held and the whole question was answered. The bill is everything you pay: your model, its subagents, and SuperGrep.
 
 <details>
 <summary>How the runs were set up</summary>
@@ -70,9 +70,9 @@ Real agent runs through the Claude Agent SDK, the same minimal prompt in every a
 
 ![The same model with file tools and with SuperGrep, on four Claude models: bill, fully correct answers, time](docs/subagent/by-caller.svg)
 
-**Your mileage will vary with the model.** Three things hold across all four:
+**Your mileage will vary with the model.**
 
-- **Cheaper on every caller.** Haiku 41% off the total bill, Sonnet 58%, Opus 26%, Fable 14%. The cloud tool's own charge is inside those totals.
+- **Cheaper on every model.** Haiku 41% off the total bill, Sonnet 58%, Opus 26%, Fable 14%.
 - **Quality increases on the cheaper models.** Haiku gets eight more fully correct answers with SuperGrep than without. On Sonnet, Opus and Fable the answers are level: the judge is itself a model, and graded four times the same answers came back with 19, 20, 17 and 23 claims it could not verify, so a difference under about six answers in 36 is noise, and those three are inside it.
 - **No surprise bills.** On about a third of the questions, Sonnet with file tools sends a subagent off to read through the repository. That one question then costs four to five times as much and takes four times as long. With SuperGrep it asks the index instead. Over the 36 questions that is $3.66 against $8.73 and 20 minutes against 41, with the same number of correct answers.
 - **On your own code the gap is wider.** These runs are on a public, open-source repository, because that is a test anyone can repeat - and the large models have seen it in training, which is a head start for reading files. On a private codebase the model has never seen, the index does more of the work, and the effect of SuperGrep is larger.
@@ -81,17 +81,13 @@ Real agent runs through the Claude Agent SDK, the same minimal prompt in every a
 
 ![Fully correct answers by kind of question, all four models together](docs/subagent/by-category.svg)
 
-**Questions about the whole codebase are where it wins.** Counts, rankings, every occurrence, sizes, patterns across many files: grep on a checkout gives the first forty matches, and an index gives the total.
+It wins on questions about the whole codebase: counts, rankings, every occurrence. Grep gives the first forty matches; an index gives the total. It loses on finding one named thing with a large model, which reads whole files well.
 
-**Where it loses, the other side is reading the files.** "Where is X handled" and "where is this symbol" come out behind on the larger models: a strong model reading whole files finds a named thing well, and the agent's built-in subagent is designed for exactly that kind of question. That gap is real.
+### The cheapest model with SuperGrep against the most expensive without
 
-### A cheap caller gets close to an expensive one
+![Haiku with SuperGrep against Opus and Fable with file tools: bill, fully correct answers, time](docs/subagent/cheap-vs-strong.svg)
 
-The comparison a buyer makes is not the same model with and without SuperGrep; it is the cheap model on the index against the strong model on file tools. The same 36 questions and the same judge:
-
-![Haiku on SuperGrep against Opus and Fable on file tools: bill, fully correct answers, time](docs/subagent/cheap-vs-strong.svg)
-
-The cheapest model with SuperGrep nearly matches the most expensive models without it: 23 correct answers to their 25, for $1.09 instead of $6.32 (Opus) or $19.36 (Fable).
+23 correct answers to their 25, for $1.09 instead of $6.32 (Opus) or $19.36 (Fable).
 
 ## Install
 
