@@ -14,7 +14,7 @@
 
 ![SuperGrep: find and plain sql on your machine, search, semantic sql and ask in the Infino cloud, one index in both places](docs/subagent/architecture.svg)
 
-Four tools over one index, kept in two places. `find` and plain `sql` run on your machine, over the keyword index. Anything with meaning in it - `search`, a `sql` statement with a ranked search inside it, and `ask` - runs in the Infino cloud, where every embedding is computed, so the heavy compute stays off your laptop. Behind `ask` is **SuperModel**, our composite retrieval model: not a single trained model but a mixture of experts built into the retrieval layer, so several small models work the index at once and hand your model the rows they found. Your model keeps the reasoning, writes the answer, and decides when to use them. No configuration.
+Four tools over one index, kept in two places. `find` and plain `sql` run on your machine, over the keyword index. Anything with meaning in it - `search`, a `sql` statement with a ranked search inside it, and `ask` - runs in the Infino cloud, where every embedding is computed, so the heavy compute stays off your laptop. Behind `ask` is **SuperModel**, our composite retrieval model: not a single trained model but a mixture of experts built into the retrieval layer, so several small models work the index at once and hand your agent the rows they found. Your agent keeps the reasoning, writes the answer, and decides when to use them. No configuration.
 
 <details>
 <summary>The four tools, one line each - for the agent reading this</summary>
@@ -37,7 +37,7 @@ Four tools over one index, kept in two places. `find` and plain `sql` run on you
 - **Several codebases at once.** Every local tool takes a repository path, so one session roams across every repo it touches - the service, the client, the shared library - without a checkout per question.
 - **Code, logs and issues together.** Index the logs, the test output and the issue export beside the source, and "why did this integration test start failing?" is one question over all of them.
 
-## Your model reaches for it on its own
+## Your agent reaches for it on its own
 
 ![Offered both, the model reaches for SuperGrep](docs/subagent/tool-choice.svg)
 
