@@ -2,7 +2,7 @@
 <rect width='760' height='330' fill='#ffffff'/>
 <text x='20' y='30' fill='#24292f' font-size='18' font-weight='600'>Blind judge, by caller: SuperGrep arm against the same model with file tools</text>
 <text x='20' y='50' fill='#57606a' font-size='12'>Opus 5.5 judging every claim of 36 answer pairs against the code, without knowing which tools produced them.</text>
-<text x='20' y='65' fill='#57606a' font-size='12'>2026-09-24. Each bar is 36 questions: a better letter, the same letter, a worse letter.</text>
+<text x='20' y='65' fill='#57606a' font-size='12'>2026-09-24. Each bar is 36 questions: SuperGrep answer better, the same, or worse than the file-tools answer.</text>
 <text x='20' y='105' fill='#24292f' font-size='13' font-weight='600'>Haiku</text>
 <rect x='200' y='89' width='143' height='24' fill='#2da44e'/>
 <text x='271' y='106' fill='#ffffff' font-size='12' font-weight='600'>12</text>
@@ -32,9 +32,9 @@
 <rect x='523' y='221' width='107' height='24' fill='#cf222e'/>
 <text x='576' y='238' fill='#ffffff' font-size='12' font-weight='600'>9</text>
 <rect x='200' y='283' width='14' height='14' fill='#2da44e'/>
-<text x='220' y='294' fill='#57606a' font-size='12'>SuperGrep arm ahead</text>
+<text x='220' y='294' fill='#57606a' font-size='12'>SuperGrep better</text>
 <rect x='380' y='283' width='14' height='14' fill='#8b949e'/>
-<text x='400' y='294' fill='#57606a' font-size='12'>same letter</text>
+<text x='400' y='294' fill='#57606a' font-size='12'>same</text>
 <rect x='510' y='283' width='14' height='14' fill='#cf222e'/>
-<text x='530' y='294' fill='#57606a' font-size='12'>file-tools arm ahead</text>
+<text x='530' y='294' fill='#57606a' font-size='12'>file tools better</text>
 </svg>

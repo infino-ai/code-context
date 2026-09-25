@@ -4,14 +4,14 @@ SuperGrep is a ranked retrieval layer, not a do-everything code tool.
 
 ### Where a model reading the files does better
 
-A blind judge - Opus 5.5 with the repository checked out - grades the same
-thirty-six questions answered by the same model with SuperGrep's tools and
-with Claude Code's file tools, on four Claude models. On Sonnet, Opus and
-Fable the letters come out level, inside the judge's own noise; the saving is
-the bill and the tail. Where SuperGrep is ahead on every model is the
-whole-corpus question - counts, rankings, every occurrence - because an index
-gives the total where grep gives the first forty matches. Where it is behind
-is "explain how X works end to end" and "find the code that does Y" on the
+A judge - Opus 5.5 with the repository checked out - checks every claim in
+the same thirty-six questions answered by the same model with SuperGrep's
+tools and with Claude Code's file tools, on four Claude models. On Sonnet,
+Opus and Fable the answers come out level, inside the judge's own noise; the
+saving is the bill and the tail. Where SuperGrep does better on every model is
+the whole-corpus question - counts, rankings, every occurrence - because an
+index gives the total where grep gives the first forty matches. Where it does
+worse is "explain how X works end to end" and "find the code that does Y" on the
 larger models: a strong model reading whole files does those well, the agent's
 built-in Explore subagent is designed for exactly them, and most of the wrong
 claims SuperGrep makes there say which code path calls which function. That

@@ -27,26 +27,18 @@ index kept in both places.**
 The models behind `ask` are small on purpose. Deciding where to look next in a 256,000-line repository is retrieval work, and a small model with deep
 context from the index can do it at a fraction of the cost and fifty at a time. What it is not is a reasoning model: it executes search tasks and hands back rows, and your model writes the answer from them. That division was measured, and it is the one that wins.
 
-### Sonnet chooses it on its own
+### The model chooses it on its own
 
-When offered SuperGrep tools alongside its own file tools, **Sonnet chooses to use SuperGrep 76% of the time**, and
-its first choice is always SuperGrep in every category of question:
+Offered SuperGrep's four tools beside its own file tools, with no instruction to prefer either, every Claude model we measured reached for SuperGrep first on nearly every question, and made most of its calls through it. The same 36 questions as [the numbers below](#the-numbers), 2026-09-24:
 
-![What Sonnet reaches for first, by question type](docs/subagent/first-choice.svg)
-
-It uses the whole surface rather than settling on one tool. Every call it made across the thirty-six questions, in order of how often:
-
-| tool | calls | | tool | calls |
+| caller | calls over 36 questions | through SuperGrep | opened with a SuperGrep tool | the rest |
 |---|---|---|---|---|
-| **`find`** | 17 | | `Read` | 12 |
-| **`ask`** | 14 | | `Glob` | 4 |
-| **`sql`** | 11 | | `Grep` | 3 |
-| **`search`** | 11 | | `Bash` | 1 |
-| **`explore`** | 9 | | | |
+| Haiku | 89 | 58 (65%) | 29 of 36 | `Read` 22, `Glob` 5, `Grep` 4 |
+| Sonnet | 107 | **93 (87%)** | **35 of 36** | `Read` 12, `Glob` 2 |
+| Opus | 138 | 76 (55%) | 31 of 36 | `Bash` 40, `Read` 17, `Grep` 5 |
+| Fable | 239 | 201 (84%) | 34 of 36 | `Read` 30, `Bash` 7, `Grep` 1 |
 
-That run was taken while a fifth tool, `explore`, was still offered; it has since been removed, because several asks issued together answered the same
-questions faster and for less. Every SuperGrep tool is load-bearing, and the twenty calls that are not SuperGrep are mostly `Read`: it reads a file *after* the index has told it which one, rather than
-instead of asking. That is the shape you want - the index does the finding, and the model still opens what it needs to quote.
+It uses the whole surface rather than settling on one tool. Sonnet's 93 calls were `ask` 42, `sql` 24, `find` 24 and `search` 3; Fable leaned on `find` (101) and `ask` (70). The calls that are not SuperGrep are mostly `Read`: the model reads a file *after* the index has told it which one, rather than instead of asking. That is the shape you want - the index does the finding, and the model still opens what it needs to quote. Opus is the exception worth knowing: it likes `Bash`, and spent 40 calls on it.
 
 ## Go beyond code - index your entire laptop or any corpus
 
@@ -76,14 +68,14 @@ model's weights there is nothing for retrieval to do). Thirty-six questions in f
 | file tools | Glob, Grep, Read, LS, Bash, and the Agent tool with Claude Code's built-in Explore subagent - stock Claude Code |
 | SuperGrep | the same, plus the four tools above |
 
-**How to read the tables.** A blind judge - Opus 5.5, with the repository checked out - checks every claim in each answer against the code, without knowing which tools produced it. A fixed rule turns what it found into a letter: **A**, every claim held and the whole question was answered; **B**, one claim could not be checked; **C**, part of the question was missed, or one claim was wrong; **F**, mostly wrong. "Ahead / tied / behind" counts the questions where the SuperGrep answer got a better, the same, or a worse letter. Cost is your total for the pass: your model's bill, subagents included, plus what the cloud tool charges.
+**How to read the tables.** A judge - Opus 5.5, with the repository checked out - checks every claim in each answer against the code, without knowing which tools produced it. An answer is **fully correct** when every claim held and the whole question was answered. **Better / same / worse** counts the questions where the SuperGrep answer came out better than, the same as, or worse than the file-tools answer by the judge's grading. Cost is your total for the pass: your model's bill, subagents included, plus what the cloud tool charges.
 
-| caller | letters, SuperGrep | letters, file tools | ahead / tied / behind | cost, SuperGrep | cost, file tools | median per question | p90 |
+| caller | fully correct, SuperGrep | fully correct, file tools | better / same / worse | cost, SuperGrep | cost, file tools | median per question | p90 |
 |---|---|---|---|---|---|---|---|
-| Haiku | A 23, B 2, C 8, F 3 | A 15, B 1, C 19, F 1 | **12 / 19 / 5** | **$1.09** | $1.86 | 14 s vs 15 s | 36 s vs 42 s |
-| Sonnet | A 16, B 1, C 19 | A 18, B 3, C 13, F 2 | 8 / 18 / 10 | **$3.66** | $8.73 | 22 s vs 25 s | **66 s vs 206 s** |
-| Opus | A 25, B 1, C 10 | A 25, B 6, C 5 | 6 / 22 / 8 | **$4.68** | $6.32 | 18 s vs 22 s | 52 s vs 50 s |
-| Fable | A 22, B 4, C 10 | A 25, B 5, C 6 | 6 / 21 / 9 | **$16.69** | $19.36 | 30 s vs 37 s | 85 s vs 96 s |
+| Haiku | **23 of 36** | 15 of 36 | **12 / 19 / 5** | **$1.09** | $1.86 | 14 s vs 15 s | 36 s vs 42 s |
+| Sonnet | 16 of 36 | 18 of 36 | 8 / 18 / 10 | **$3.66** | $8.73 | 22 s vs 25 s | **66 s vs 206 s** |
+| Opus | 25 of 36 | 25 of 36 | 6 / 22 / 8 | **$4.68** | $6.32 | 18 s vs 22 s | 52 s vs 50 s |
+| Fable | 22 of 36 | 25 of 36 | 6 / 21 / 9 | **$16.69** | $19.36 | 30 s vs 37 s | 85 s vs 96 s |
 
 ![Total bill per pass, by caller](docs/subagent/cost-by-caller.svg)
 
@@ -92,12 +84,12 @@ model's weights there is nothing for retrieval to do). Thirty-six questions in f
 **Your mileage will vary with the model.** Three things held on every rerun since; the rest is the model's.
 
 - **Cheaper on every caller.** Haiku 41% off the total bill, Sonnet 58%, Opus 26%, Fable 14%. The cloud tool's own charge is inside those totals.
-- **The quality gain is on the cheap model.** Haiku gets eight more fully correct answers with SuperGrep than without, and is ahead on twelve questions to five behind. On Sonnet, Opus and Fable the letters are level: the judge is itself a model, and graded four times the same answers came back with 19, 20, 17 and 23 unverifiable claims, so a difference under about six questions in 36 is noise, and those three are inside it.
-- **No runaway subagents.** Within a caller the medians are close. The gap is the tail, and the tail is Sonnet's: on about a third of questions Sonnet with file tools hands off to an Explore subagent that reads its way through the tree, at four to five times the cost and four times the time. Sonnet with SuperGrep answers the same question from one `ask` and a few `find`s - 2.4x cheaper and 2.1x faster over the panel, level on letters, with a p90 of 66 s against 206.
+- **The quality gain is on the cheap model.** Haiku gets eight more fully correct answers with SuperGrep than without, and does better on twelve questions to five worse. On Sonnet, Opus and Fable the answers are level: the judge is itself a model, and graded four times the same answers came back with 19, 20, 17 and 23 claims it could not verify, so a difference under about six questions in 36 is noise, and those three are inside it.
+- **No runaway subagents.** Within a caller the medians are close. The gap is the tail, and the tail is Sonnet's: on about a third of questions Sonnet with file tools hands off to an Explore subagent that reads its way through the tree, at four to five times the cost and four times the time. Sonnet with SuperGrep answers the same question from one `ask` and a few `find`s - 2.4x cheaper and 2.1x faster over the panel, level on answers, with a p90 of 66 s against 206.
 
 ### Where it wins, and where it does not
 
-By category, ahead / tied / behind against file tools:
+By category, better / same / worse than file tools:
 
 | category (questions) | Haiku | Sonnet | Opus | Fable |
 |---|---|---|---|---|
@@ -115,13 +107,13 @@ By category, ahead / tied / behind against file tools:
 
 The comparison a buyer makes is not the same model with and without SuperGrep; it is the cheap model on the index against the strong model on file tools. The same 36 questions and the same judge:
 
-| pair | ahead / tied / behind | A's of 36 | cost per pass | median per question |
+| pair | better / same / worse | fully correct, of 36 | cost per pass | median per question |
 |---|---|---|---|---|
 | Haiku + SuperGrep vs Opus + file tools | 7 / 19 / 10 | 23 vs 25 | **$1.09 vs $6.32** | **14 s vs 22 s** |
 | Haiku + SuperGrep vs Fable + file tools | 5 / 21 / 10 | 23 vs 25 | **$1.09 vs $19.36** | **14 s vs 37 s** |
 | Opus + SuperGrep vs Opus + file tools | 6 / 22 / 8 | 25 vs 25 | **$4.68 vs $6.32** | 18 s vs 22 s |
 
-Haiku on the index sits two A's under Opus on files, at a sixth of the cost and two thirds of the median time: the same letter on half the questions, a better one on one in five. Not "as good as" - and two of Haiku's three F's were the top-k shape `sql` now refuses.
+Haiku on the index sits two fully correct answers under Opus on files, at a sixth of the cost and two thirds of the median time: the same result on half the questions, a better one on one in five. Not "as good as" - and two of the three questions Haiku got mostly wrong were the top-k shape `sql` now refuses.
 
 ## Install
 
