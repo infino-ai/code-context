@@ -1,0 +1,30 @@
+<svg xmlns='http://www.w3.org/2000/svg' width='760' height='400' viewBox='0 0 760 400' font-family='-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif'>
+<rect width='760' height='400' fill='#ffffff'/>
+<text x='20' y='30' fill='#24292f' font-size='18' font-weight='600'>Total bill per pass, by caller - your model bill plus the Infino charge</text>
+<text x='20' y='50' fill='#57606a' font-size='12'>The same 36 questions on the infino repo, the same model on both arms; one pass per arm.</text>
+<text x='20' y='65' fill='#57606a' font-size='12'>2026-09-24. File tools includes the model's own Explore subagents.</text>
+<text x='20' y='111' fill='#24292f' font-size='13' font-weight='600'>Haiku</text>
+<rect x='200' y='95' width='43' height='24' rx='4' fill='#8b949e'/>
+<text x='253' y='112' fill='#24292f' font-size='13' font-weight='600'>$1.86</text>
+<rect x='200' y='123' width='25' height='24' rx='4' fill='#2f81f7'/>
+<text x='235' y='140' fill='#24292f' font-size='13' font-weight='600'>$1.09</text>
+<text x='20' y='181' fill='#24292f' font-size='13' font-weight='600'>Sonnet</text>
+<rect x='200' y='165' width='203' height='24' rx='4' fill='#8b949e'/>
+<text x='413' y='182' fill='#24292f' font-size='13' font-weight='600'>$8.73</text>
+<rect x='200' y='193' width='85' height='24' rx='4' fill='#2f81f7'/>
+<text x='295' y='210' fill='#24292f' font-size='13' font-weight='600'>$3.66</text>
+<text x='20' y='251' fill='#24292f' font-size='13' font-weight='600'>Opus</text>
+<rect x='200' y='235' width='147' height='24' rx='4' fill='#8b949e'/>
+<text x='357' y='252' fill='#24292f' font-size='13' font-weight='600'>$6.32</text>
+<rect x='200' y='263' width='109' height='24' rx='4' fill='#2f81f7'/>
+<text x='319' y='280' fill='#24292f' font-size='13' font-weight='600'>$4.68</text>
+<text x='20' y='321' fill='#24292f' font-size='13' font-weight='600'>Fable</text>
+<rect x='200' y='305' width='450' height='24' rx='4' fill='#8b949e'/>
+<text x='660' y='322' fill='#24292f' font-size='13' font-weight='600'>$19.36</text>
+<rect x='200' y='333' width='388' height='24' rx='4' fill='#2f81f7'/>
+<text x='598' y='350' fill='#24292f' font-size='13' font-weight='600'>$16.69</text>
+<rect x='200' y='376' width='14' height='14' fill='#8b949e'/>
+<text x='220' y='387' fill='#57606a' font-size='12'>file tools</text>
+<rect x='320' y='376' width='14' height='14' fill='#2f81f7'/>
+<text x='340' y='387' fill='#57606a' font-size='12'>SuperGrep</text>
+</svg>

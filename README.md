@@ -8,9 +8,9 @@
 
 # SuperGrep
 
-**Retrieval subagents for Claude Sonnet. Up to 10x faster and 50% lower Anthropic bill.**
+**Retrieval for coding agents. The same answers, cheaper and faster, on every Claude model we measured.**
 
-Much of what Claude spends time on during agent sessions is reading files rather than reasoning about them. SuperGrep routes file operations to fast subagents running small language models (SLMs): the lookup, the fan-out, the fifty "go look at this" jobs a hard task spawns. No config needed. Sonnet keeps the reasoning and decides when to use them.
+Much of what a coding agent spends time on is reading files rather than reasoning about them. SuperGrep gives the agent an index of the repository and four tools over it, so the lookup, the fan-out and the fifty "go look at this" jobs a hard task spawns run as retrieval instead of as reading. No config needed. Your model keeps the reasoning, writes the answer, and decides when to use them.
 
 ![SuperGrep: find, search and sql locally, ask in the cloud, one index in both places](docs/subagent/architecture.svg)
 
@@ -19,13 +19,13 @@ index kept in both places.**
 
 | | tool | what it does |
 |---|---|---|
-| local | **`find`** | Every line containing an exact string, like `grep -n`, complete and unranked, with the repo-wide total and per-file counts. Tens of milliseconds from the index instead of a grep-and-read loop that pulls source into Sonnet's context one file at a time. |
+| local | **`find`** | Every line containing an exact string, like `grep -n`, complete and unranked, with the repo-wide total and per-file counts. Tens of milliseconds from the index instead of a grep-and-read loop that pulls source into the model's context one file at a time. |
 | local | **`search`** | One ranked pass fusing exact keyword matching with semantic similarity, so it works whether or not you know the words. Hits carry the code, cited `path:line`. |
 | local | **`sql`** | Read-only SQL over the index. The ranked searches are table-valued relations, so "which files have the most code about X" is one query that ranks and tallies in a single pass. |
 | cloud | **`ask`** | A question that spans the repository, handed to a small language model that runs the investigation against the same index with deep context from it. It comes back as the rows it found, cited `path:line`, rather than as prose. Several asks run at once. |
 
-The models are small on purpose. Deciding where to look next in a 256,000-line repository is retrieval work, and a small model with deep
-context from the index can do it at a fraction of the cost and fifty at a time. What it is not is a reasoning model: it is meant to execute search tasks, and it is where Sonnet's exploration, retrieval and fan-out go.
+The models behind `ask` are small on purpose. Deciding where to look next in a 256,000-line repository is retrieval work, and a small model with deep
+context from the index can do it at a fraction of the cost and fifty at a time. What it is not is a reasoning model: it executes search tasks and hands back rows, and your model writes the answer from them. That division was measured, and it is the one that wins.
 
 ### Sonnet chooses it on its own
 
@@ -56,8 +56,9 @@ and the same four tools run over all of it: `find` for an exact stack frame, `se
 run, `ask` for the question that spans several of them at once.
 
 That matters most where a frontier model is weakest. A log is the pathological case for a context window - large, repetitive, mostly irrelevant, and paid for
-again on every turn it stays in the transcript. An index collapses it to the spans that matter before Sonnet sees any of it. It is the same trade the cost
-table below measures on source code, on a corpus where the ratio is worse.
+again on every turn it stays in the transcript. An index collapses it to the spans that matter before the model sees any of it.
+
+On a scale somebody else set: **LogDx-CI**, a public benchmark of 35 CI-failure diagnoses scored by the benchmark's own judge (2026-09-20). Ranking a log's windows and returning only the lines that carry the query's terms scored **0.70 on 6.8k tokens of context**. The benchmark's own grep definition scores 0.64 on 88k tokens; the published leader's hybrid grep-and-tail scores 0.67 on 19.8k, and its stronger variant 0.73 on the same 19.8k. First on score per token, second on raw score, to a method that spends nearly three times the context.
 
 So "why did this integration test start failing?" is one question over source, recent logs, test output, stack traces and config - and the retrieval, the
 fan-out and the fifty parallel investigations are the part that is farmed out.
@@ -66,85 +67,61 @@ For files that don't fit on your laptop - write them out to Parquet files in obj
 
 ## The numbers
 
-Real agent runs through the Claude Agent SDK: `claude-sonnet-4-6`, the same minimal prompt in every arm, on the [infino](https://github.com/infino-ai/infino)
+Real agent runs through the Claude Agent SDK, the same minimal prompt in every arm, on the [infino](https://github.com/infino-ai/infino)
 engine repository (about 256,000 lines of Rust the model has not memorized - which is what makes it a retrieval test at all: on a repository already in the
-model's weights there is nothing for retrieval to do). Thirty-six questions in five
-categories, one pass per arm, all three arms on one build, measured 2026-09-07 - so the cost below and the judging further down score the same
-answers.
+model's weights there is nothing for retrieval to do). Thirty-six questions in five categories - aggregation (10), comprehension (6), by meaning (6), pinpoint (8), known file (6) - each put to the same model twice, measured 2026-09-24 on four Claude models:
 
-| arm | what Sonnet has |
+| arm | what the model has |
 |---|---|
-| Sonnet, file tools | Glob, Grep, Read, LS, Bash - stock Claude Code |
-| Sonnet + its Explore subagents | the same, plus the Agent tool with Claude Code's built-in Explore subagent |
-| Sonnet + SuperGrep | the same, plus all five tools |
+| file tools | Glob, Grep, Read, LS, Bash, and the Agent tool with Claude Code's built-in Explore subagent - stock Claude Code |
+| SuperGrep | the same, plus the four tools above |
 
-### Cost
+**How to read the tables.** A blind judge - Opus 5.5, with the repository checked out - checks every claim in each answer against the code, without knowing which tools produced it. A fixed rule turns what it found into a letter: **A**, every claim held and the whole question was answered; **B**, one claim could not be checked; **C**, part of the question was missed, or one claim was wrong; **F**, mostly wrong. "Ahead / tied / behind" counts the questions where the SuperGrep answer got a better, the same, or a worse letter. Cost is your total for the pass: your model's bill, subagents included, plus what the cloud tool charges.
 
-| arm | your Sonnet bill per pass (subagents included) | Infino charge | all-in | main-agent tokens | tool calls (inside subagents included) |
-|---|---|---|---|---|---|
-| Sonnet, file tools | $5.22 | - | $5.22 | 4,549k | 249 |
-| Sonnet + its Explore subagents | $7.35 | - | $7.35 | 1,918k | 355 |
-| Sonnet + SuperGrep | **$2.18** | $0.89 | **$3.07** | **1,086k** | **82** |
+| caller | letters, SuperGrep | letters, file tools | ahead / tied / behind | cost, SuperGrep | cost, file tools | median per question | p90 |
+|---|---|---|---|---|---|---|---|
+| Haiku | A 23, B 2, C 8, F 3 | A 15, B 1, C 19, F 1 | **12 / 19 / 5** | **$1.09** | $1.86 | 14 s vs 15 s | 36 s vs 42 s |
+| Sonnet | A 16, B 1, C 19 | A 18, B 3, C 13, F 2 | 8 / 18 / 10 | **$3.66** | $8.73 | 22 s vs 25 s | **66 s vs 206 s** |
+| Opus | A 25, B 1, C 10 | A 25, B 6, C 5 | 6 / 22 / 8 | **$4.68** | $6.32 | 18 s vs 22 s | 52 s vs 50 s |
+| Fable | A 22, B 4, C 10 | A 25, B 5, C 6 | 6 / 21 / 9 | **$16.69** | $19.36 | 30 s vs 37 s | 85 s vs 96 s |
 
-![Cost per pass](docs/subagent/cost-per-pass.svg)
+![Total bill per pass, by caller](docs/subagent/cost-by-caller.svg)
 
-![Main-agent tokens per pass](docs/subagent/tokens-per-pass.svg)
+![Blind judge, by caller](docs/subagent/verdict-by-caller.svg)
 
-![Tool calls per pass](docs/subagent/calls-per-pass.svg)
+**Your mileage will vary with the model.** Three things held on every rerun since; the rest is the model's.
 
-Against Sonnet's own Explore subagents, **your Sonnet bill falls 70%** - 3.4x lower - with 43% less main-agent context and under a quarter of the tool
-calls. With what the cloud tools cost you counted in, the **all-in bill falls 58%**, so better than half. Against plain file tools it is 2.4x on the Sonnet
-bill and 1.7x all-in.
+- **Cheaper on every caller.** Haiku 41% off the total bill, Sonnet 58%, Opus 26%, Fable 14%. The cloud tool's own charge is inside those totals.
+- **The quality gain is on the cheap model.** Haiku gets eight more fully correct answers with SuperGrep than without, and is ahead on twelve questions to five behind. On Sonnet, Opus and Fable the letters are level: the judge is itself a model, and graded four times the same answers came back with 19, 20, 17 and 23 unverifiable claims, so a difference under about six questions in 36 is noise, and those three are inside it.
+- **No runaway subagents.** Within a caller the medians are close. The gap is the tail, and the tail is Sonnet's: on about a third of questions Sonnet with file tools hands off to an Explore subagent that reads its way through the tree, at four to five times the cost and four times the time. Sonnet with SuperGrep answers the same question from one `ask` and a few `find`s - 2.4x cheaper and 2.1x faster over the panel, level on letters, with a p90 of 66 s against 206.
 
-**It earns its keep on fan-out.** The saving is not spread evenly across everything you ask: where it really pays is the hard task that spawns a fleet of "go
-look at this" jobs - that is where a fanning-out agent's bill actually goes, and it is the case SuperGrep is built for.
+### Where it wins, and where it does not
 
-### Quality
+By category, ahead / tied / behind against file tools:
 
-A blind judge - `claude-opus-5` with the repository checked out, both answers in random order - picks a winner per pair and counts the claims in
-each answer that the code does not support. It judges the answers from the runs in the cost table above, against each baseline in turn.
+| category (questions) | Haiku | Sonnet | Opus | Fable |
+|---|---|---|---|---|
+| aggregation - which files have the most X (10) | **7 / 2 / 1** | 2 / 5 / 3 | 1 / 7 / 2 | 2 / 4 / 4 |
+| comprehension - how does X work (6) | 2 / 4 / 0 | 2 / 3 / 1 | 3 / 2 / 1 | 0 / 5 / 1 |
+| by meaning - where is X handled (6) | 2 / 2 / 2 | 0 / 3 / 3 | 1 / 2 / 3 | 3 / 2 / 1 |
+| pinpoint - where is this symbol (8) | 0 / 6 / 2 | 2 / 3 / 3 | 0 / 6 / 2 | 1 / 5 / 2 |
+| known file - what does this file do (6) | 1 / 5 / 0 | 2 / 4 / 0 | 1 / 5 / 0 | 0 / 5 / 1 |
 
-**Against Sonnet with file tools**, 36 pairs:
+**Whole-corpus facts are where it is built to win.** Counts, rankings, every occurrence, sizes, patterns across many files: grep on a checkout gives the first forty matches and an index gives the total. Haiku with file tools walked 26 tool calls to break the crate down by module and got it wrong. After `sql` was taught to refuse a ranking built on a search's small top k, the ten aggregation questions were rerun on 2026-09-25: **Haiku 9 / 1 / 0, Sonnet 5 / 4 / 1, Opus 4 / 6 / 0**, with no question behind file tools on any of them.
 
-| category | pairs | SuperGrep wins | ties | file-tools wins | unsupported claims, file tools / SuperGrep |
-|---|---|---|---|---|---|
-| aggregation - which files have the most X | 10 | 3 | 1 | **6** | 39 / 73 |
-| comprehension - how does X work | 6 | 1 | 0 | **5** | 9 / 16 |
-| pinpoint - where is this symbol | 8 | **4** | 3 | 1 | 6 / 5 |
-| known file - what does this file do | 6 | 1 | 4 | 1 | 3 / 3 |
-| by meaning - where is X handled | 6 | 0 | 1 | **5** | 7 / 10 |
-| all | 36 | 9 | 9 | **18** | 64 / 107 |
+**Where it loses, the other side is reading the files.** "Explain how X works end to end" and "find the code that does Y" are a tie or a loss on every model except Haiku: a strong model reading whole files does those well, and the Explore subagent built into the agent is designed for exactly that kind of question. Most of the wrong claims SuperGrep makes there say which code path calls which function. That gap is real; the tools to close it are `find` on the name, and the model has to reach for it.
 
-![Blind judge per category, against file tools](docs/subagent/judge-vs-file-tools.svg)
+### A cheap caller gets close to an expensive one
 
-**Against Sonnet's own Explore subagents**, 35 pairs (one pair's judging hit
-its turn limit and is left out rather than counted):
+The comparison a buyer makes is not the same model with and without SuperGrep; it is the cheap model on the index against the strong model on file tools. The same 36 questions and the same judge:
 
-| category | pairs | SuperGrep wins | ties | Explore-subagent wins | unsupported claims, Explore / SuperGrep |
-|---|---|---|---|---|---|
-| aggregation - which files have the most X | 10 | 2 | 1 | **7** | 55 / 70 |
-| comprehension - how does X work | 5 | 0 | 0 | **5** | 6 / 11 |
-| pinpoint - where is this symbol | 8 | 3 | 2 | 3 | 5 / 5 |
-| known file - what does this file do | 6 | **2** | 4 | 0 | 3 / 2 |
-| by meaning - where is X handled | 6 | 0 | 0 | **6** | 6 / 12 |
-| all | 35 | 7 | 7 | **21** | 75 / 100 |
+| pair | ahead / tied / behind | A's of 36 | cost per pass | median per question |
+|---|---|---|---|---|
+| Haiku + SuperGrep vs Opus + file tools | 7 / 19 / 10 | 23 vs 25 | **$1.09 vs $6.32** | **14 s vs 22 s** |
+| Haiku + SuperGrep vs Fable + file tools | 5 / 21 / 10 | 23 vs 25 | **$1.09 vs $19.36** | **14 s vs 37 s** |
+| Opus + SuperGrep vs Opus + file tools | 6 / 22 / 8 | 25 vs 25 | **$4.68 vs $6.32** | 18 s vs 22 s |
 
-![Blind judge per category, against Explore subagents](docs/subagent/judge-vs-explore.svg)
-
-
-### Fanout
-
-When a question spawns several agents at once, with one exploration each. Of course, this always depends on workload so YMMV.
-
-**Ten at once: 10 of 10 in 31 s**, against Sonnet's ten Explore subagents at
-316 s. Ten times faster.
-
-**Fifty at once: 31 s**, against **1,218 s** for fifty Sonnet Explore
-subagents.[^fifty]
-
-![Parallel exploration](docs/subagent/fanout.svg)
-
-[^fifty]: From the measured time and token cost of one exploration.
+Haiku on the index sits two A's under Opus on files, at a sixth of the cost and two thirds of the median time: the same letter on half the questions, a better one on one in five. Not "as good as" - and two of Haiku's three F's were the top-k shape `sql` now refuses.
 
 ## Install
 
