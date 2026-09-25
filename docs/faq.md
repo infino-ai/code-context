@@ -2,8 +2,8 @@
 
 ### What is SuperGrep?
 
-A search engine for your coding agent: four tools over an index kept in two
-places. `find` and plain `sql` run on your machine, over a keyword index that
+Retrieval + inference offload for AI coding agents: four tools over an index
+kept in two places. `find` and plain `sql` run on your machine, over a keyword index that
 lives in plain files inside your repo. Anything with meaning in it - `search`,
 a `sql` statement with a ranked search inside it, and `ask` - runs in the
 Infino cloud over the same index's platform copy, where every embedding is

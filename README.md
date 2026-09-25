@@ -8,7 +8,7 @@
 
 # SuperGrep
 
-**A search engine for your coding agent.** Point it at a repository and your agent stops reading files one at a time. It asks an index of the whole codebase - and of the logs, docs and issues around it - for exactly what it needs, and gets back cited lines, counts and rankings. The same answers, for less money and in less time, on every Claude model.
+**Retrieval + inference offload for AI coding agents.** Point it at a repository and your agent stops reading files one at a time. It asks an index of the whole codebase - and of the logs, docs and issues around it - for exactly what it needs, and gets back cited lines, counts and rankings. The same accuracy for less money and in less time.
 
 **[Try it live at infino.ai/supergrep](https://infino.ai/supergrep)** - put a question to a real codebase and watch the same model answer it with and without SuperGrep, side by side, with the bill for each.
 
