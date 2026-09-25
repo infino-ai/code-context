@@ -1,6 +1,6 @@
 {
   "name": "@infino-ai/code-context",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "mcpName": "io.github.infino-ai/code-context",
   "description": "SuperGrep: retrieval subagents for Claude Sonnet. find/search/sql run locally over an index in plain files, no account needed; ask runs in the cloud over the same index's platform copy.",
   "license": "Apache-2.0",
@@ -51,15 +51,15 @@
     "prepack": "npm run build"
   },
   "dependencies": {
-    "@huggingface/transformers": "^4.2.0",
+    "@huggingface/transformers": "^4.3.0",
     "@infino-ai/infino": "^0.5.10",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@vscode/tree-sitter-wasm": "^0.3.1",
     "apache-arrow": "17.0.0",
     "commander": "^15.0.0",
-    "ignore": "^7.0.8",
+    "ignore": "^7.0.9",
     "undici": "^8.10.2",
-    "zod": "^4.5.4"
+    "zod": "^4.6.5"
   },
   "devDependencies": {
     "@types/node": "^26",

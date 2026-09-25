@@ -15,6 +15,14 @@
       "transport": {
         "type": "stdio"
       },
+      "packageArguments": [
+        {
+          "type": "positional",
+          "value": "mcp",
+          "valueHint": "subcommand",
+          "description": "Run the MCP server (stdio). Without it the package runs its CLI, not the server."
+        }
+      ],
       "environmentVariables": [
         {
           "name": "CX_ROOT",
