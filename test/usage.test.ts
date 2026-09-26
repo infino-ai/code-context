@@ -5,8 +5,11 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import {
   estTokens,
   newSession,
+  findEntry,
   searchEntry,
   sqlEntry,
+  subagentEntry,
+  withPlatform,
   formatReceipt,
   recordUsage,
   readUsage,
@@ -14,8 +17,12 @@ import {
   usageLogPath,
   recordHookEvent,
   currentSessionStats,
+  codeContextToolName,
+  promptStatsPath,
 } from "../src/core/usage.js";
 import type { SearchResult, SearchHit } from "../src/core/searcher.js";
+import type { RetrievalAgentResult, RetrievalAgentSpend } from "../src/core/retrieval-agent.js";
+import type { HostedDb, HostedCallInfo } from "../src/core/hosted.js";
 
 const hit = (path: string, content: string): SearchHit => ({
   path,
@@ -76,6 +83,67 @@ describe("search receipt", () => {
   });
 });
 
+describe("find receipt", () => {
+  const found = {
+    query: "x",
+    ignoreCase: false,
+    total: 3,
+    files: 1,
+    byFile: [{ path: "a.ts", count: 3 }],
+    truncated: true,
+    matches: [
+      { path: "a.ts", line: 3, text: "x = 1" },
+      { path: "a.ts", line: 9, text: "x = 2" },
+    ],
+  };
+
+  it("reports the repo-wide match count and the files, not just the lines returned", () => {
+    const line = formatReceipt(findEntry(found));
+    expect(line).toMatch(/^returned ~\d+ tokens \| 3 matches \/ 1 file$/);
+  });
+
+  it("records each match as a one-line region in the ledger", () => {
+    const entry = findEntry(found);
+    expect(entry.tool).toBe("find");
+    expect(entry.hits).toEqual([
+      { path: "a.ts", startLine: 3, endLine: 3 },
+      { path: "a.ts", startLine: 9, endLine: 9 },
+    ]);
+    expect(entry.matches).toBe(3);
+    expect(entry.wholeFileTokens).toBeUndefined();
+  });
+
+  it("prices the per-file counts in count mode, not the list it did not print", () => {
+    // Measured live at "~21.4k tokens" for 49 lines of counts, because the
+    // receipt was pricing the whole match list. The point of a receipt is that
+    // it is the thing that was returned.
+    const many = {
+      ...found,
+      total: 400,
+      files: 49,
+      byFile: Array.from({ length: 49 }, (_, i) => ({ path: `f${i}.ts`, count: 8 })),
+      matches: Array.from({ length: 400 }, (_, i) => ({
+        path: `f${i % 49}.ts`,
+        line: i,
+        text: "a fairly long matching line of source, as they tend to be",
+      })),
+    };
+    const counted = findEntry(many, true);
+    const listed = findEntry(many, false);
+    expect(counted.returnedTokens).toBeLessThan(listed.returnedTokens);
+    // The repo-wide total is still the total either way - it is what was
+    // counted, not what was printed.
+    expect(counted.matches).toBe(400);
+  });
+
+  it("claims no locations in count mode", () => {
+    // A per-file count is not a place to jump to, and putting one line number
+    // per file in the ledger would record a location the caller never saw.
+    const entry = findEntry(found, true);
+    expect(entry.hits).toBeUndefined();
+  });
+});
+
 describe("sql receipt", () => {
   it("reports row count and token estimate of the rows", () => {
     const line = formatReceipt(sqlEntry("SELECT 1", [{ path: "a.ts", lines: 12 }, { path: "b.ts", lines: 8 }]));
@@ -88,6 +156,105 @@ describe("sql receipt", () => {
     expect(session.queries).toBe(1);
     expect(line).not.toMatch(/to read those files whole/);
     expect(line).toMatch(/invoked 1x this session/);
+  });
+});
+
+describe("ask receipt", () => {
+  const answered: RetrievalAgentResult = {
+    question: "which files?",
+    sql: "SELECT path, COUNT(*) AS n FROM token_match('chunks','content','compaction') GROUP BY path",
+    hits: [{ path: "src/a.ts", startLine: 10, endLine: 30, content: "export function a() {\n}" }],
+    rows: [{ path: "src/a.ts", n: 3 }],
+    hitsTotal: 1,
+    rowsTotal: 1,
+    turns: 4,
+  };
+  const spend: RetrievalAgentSpend = { modelTokens: 12_555 };
+
+  it("counts the statement, hits and rows as what was returned, records the places, and the loop's spend", () => {
+    const entry = subagentEntry(answered, spend);
+    expect(entry.tool).toBe("ask");
+    expect(entry.query).toBe("which files?");
+    expect(entry.returnedTokens).toBe(estTokens(JSON.stringify({ sql: answered.sql, hits: answered.hits, rows: answered.rows })));
+    expect(entry.hits).toEqual([{ path: "src/a.ts", startLine: 10, endLine: 30 }]);
+    expect(entry.rows).toBe(1);
+    expect(entry.agentTurns).toBe(4);
+    expect(entry.agentInferenceTokens).toBe(12_555);
+    // The ledger points at places; the code does not leak into it.
+    expect(JSON.stringify(entry)).not.toContain("export function a");
+  });
+
+  it("prints the returned tokens, the hits and rows, the turns, and the inference tokens the platform metered", () => {
+    const line = formatReceipt(subagentEntry(answered, spend));
+    expect(line).toMatch(/^returned ~\d+ tokens \| 1 hit \/ 1 row \| 4 turns \| 12\.6k inference tokens$/);
+  });
+
+  it("singularizes one turn and accumulates into the session", () => {
+    const session = newSession();
+    const line = formatReceipt(subagentEntry({ ...answered, turns: 1 }, spend), session);
+    expect(line).toMatch(/\| 1 turn \|/);
+    expect(line).toMatch(/invoked 1x this session/);
+    expect(session.queries).toBe(1);
+  });
+
+  it("counts a no-answer result by the facts it still carries", () => {
+    const { sql: _none, ...noStatement } = answered;
+    const entry = subagentEntry({ ...noStatement, error: "the retrieval agent ran out of turns - the hits and rows below are what it retrieved before stopping" }, spend);
+    expect(entry.returnedTokens).toBe(estTokens(JSON.stringify({ hits: answered.hits, rows: answered.rows })));
+  });
+
+  it("round-trips through the ledger", () => {
+    const dir = mkdtempSync(join(tmpdir(), "cx-agent-ledger-"));
+    try {
+      recordUsage(dir, subagentEntry(answered, spend));
+      const [entry] = readUsage(dir);
+      expect(entry.tool).toBe("ask");
+      expect(entry.agentTurns).toBe(4);
+      expect(entry.agentInferenceTokens).toBe(12_555);
+      expect(entry.hits).toEqual([{ path: "src/a.ts", startLine: 10, endLine: 30 }]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("records that the platform ranked the facts, and only then", () => {
+    expect(subagentEntry(answered, spend)).not.toHaveProperty("agentRanked");
+    const ranked = subagentEntry({ ...answered, coverage: { rowsTotal: 20, rowsReturned: 1, truncated: true, ranked: true } }, spend);
+    expect(ranked.agentRanked).toBe(true);
+  });
+
+  it("records who wrote an answer on the platform and how long it took, and only when one was written", () => {
+    expect(subagentEntry(answered, spend, "answer")).not.toHaveProperty("agentWriter");
+    const written = subagentEntry(
+      { ...answered, answer: "the text", coverage: { rowsTotal: 2, rowsReturned: 2, truncated: false, answer: { model: "qwen-3.8-27b", ms: 1068 } } },
+      spend,
+      "answer",
+    );
+    expect(written.agentWriter).toBe("qwen-3.8-27b");
+    expect(written.agentWriteMs).toBe(1068);
+  });
+
+  it("records nothing about the platform's costs beyond the one metered number", () => {
+    const entry = subagentEntry(answered, spend) as Record<string, unknown>;
+    for (const gone of ["agentCalls", "agentPromptTokens", "agentCompletionTokens", "agentRung", "agentModel"]) expect(entry).not.toHaveProperty(gone);
+  });
+});
+
+describe("withPlatform (hosted telemetry on the ledger entry)", () => {
+  /** A stand-in for the platform client: only `lastCall` is read. */
+  const hostedWith = (info: HostedCallInfo | null): HostedDb => ({ lastCall: () => info }) as unknown as HostedDb;
+
+  it("attaches the answering call's round trip and metered tokens, and nothing else", () => {
+    const info: HostedCallInfo = { op: "bm25_search", status: 200, rttMs: 12.5, retries: 1, readTokens: 0.05 };
+    const entry = withPlatform(sqlEntry("SELECT 1", [{ a: 1 }]), { hosted: hostedWith(info) });
+    expect(entry.platform).toEqual({ rttMs: 12.5, readTokens: 0.05 });
+    // The receipt the model sees is unchanged by the telemetry.
+    expect(formatReceipt(entry)).toBe(formatReceipt(sqlEntry("SELECT 1", [{ a: 1 }])));
+  });
+
+  it("leaves a local entry untouched, and a hosted one before any call", () => {
+    expect(withPlatform(sqlEntry("SELECT 1", []), {}).platform).toBeUndefined();
+    expect(withPlatform(sqlEntry("SELECT 1", []), { hosted: hostedWith(null) }).platform).toBeUndefined();
   });
 });
 
@@ -165,5 +332,58 @@ describe("prompt telemetry (hooks)", () => {
 
   it("returns null when nothing is recorded", () => {
     expect(currentSessionStats(dir)).toBeNull();
+  });
+
+  it("counts code-context calls by tool and the first tool of each prompt", () => {
+    // Prompt 1 opens with find and also uses sql; prompt 2 opens with Grep
+    // (a non-code-context tool, forwarded by a widened matcher) and then
+    // reaches search; prompt 3 opens with find. Selection is the first call.
+    submit("s1");
+    recordHookEvent(dir, { hook_event_name: "PostToolUse", session_id: "s1", tool_name: "mcp__code-context__find" });
+    recordHookEvent(dir, { hook_event_name: "PostToolUse", session_id: "s1", tool_name: "mcp__code-context__sql" });
+    submit("s1");
+    otherCall("s1"); // Grep
+    cxCall("s1"); // search
+    submit("s1");
+    recordHookEvent(dir, { hook_event_name: "PostToolUse", session_id: "s1", tool_name: "mcp__code-context__find" });
+    const s = currentSessionStats(dir);
+    expect(s?.cxCallsByTool).toEqual({ find: 2, sql: 1, search: 1 });
+    expect(s?.firstToolByPrompt).toEqual({ find: 2, Grep: 1 });
+    // The non-code-context call is not an invocation, and the prompt it
+    // opened still counts as one that used code-context (search came later).
+    expect(s?.cxCalls).toBe(4);
+    expect(s?.promptsWithCx).toBe(3);
+  });
+
+  it("names a tool from a renamed server variant by its short name", () => {
+    submit("s1");
+    recordHookEvent(dir, { hook_event_name: "PostToolUse", session_id: "s1", tool_name: "mcp__code-context-dev__search" });
+    expect(currentSessionStats(dir)?.cxCallsByTool).toEqual({ search: 1 });
+    expect(currentSessionStats(dir)?.firstToolByPrompt).toEqual({ search: 1 });
+  });
+
+  it("loads a stats file written before the per-tool fields existed", () => {
+    writeFileSync(
+      promptStatsPath(dir),
+      JSON.stringify({
+        old: { sessionId: "old", startedAt: "2026-01-01T00:00:00Z", lastAt: "2026-01-01T00:00:00Z", prompts: 2, cxCalls: 1, promptsWithCx: 1, curPromptUsedCx: false },
+      }),
+    );
+    // A new event on the old session adds the fields rather than tripping on their absence.
+    recordHookEvent(dir, { hook_event_name: "UserPromptSubmit", session_id: "old" });
+    cxCall("old");
+    const s = currentSessionStats(dir);
+    expect(s?.prompts).toBe(3);
+    expect(s?.cxCallsByTool).toEqual({ search: 1 });
+    expect(s?.firstToolByPrompt).toEqual({ search: 1 });
+  });
+});
+
+describe("codeContextToolName", () => {
+  it("strips the server prefix however the server was named", () => {
+    expect(codeContextToolName("mcp__code-context__find")).toBe("find");
+    expect(codeContextToolName("mcp__code-context-dev__sql")).toBe("sql");
+    expect(codeContextToolName("mcp__code_context_local__search")).toBe("search");
+    expect(codeContextToolName("Grep")).toBe("Grep");
   });
 });

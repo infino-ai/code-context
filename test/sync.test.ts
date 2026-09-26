@@ -181,3 +181,71 @@ describe("syncRepo", () => {
     expect(rowCount).toBeGreaterThan(0); // original files remain
   });
 });
+
+// --- duplicate content (a second checkout of the same repository) --------------
+//
+// The shape this exists for: an agent worktree under .claude/worktrees/ is a
+// full copy of the tree, so most files appear twice with byte-identical
+// content. Chunking both doubles the index and returns every hit twice.
+
+describe("duplicate content is indexed once, under the shallowest path", () => {
+  let dupRoot: string;
+  let dupDir: string;
+  let dupDb: ReturnType<typeof connect>;
+  const dupOpts = () => ({ root: dupRoot, db: dupDb, indexDirPath: dupDir, embedder: fakeEmbedder });
+
+  const SHARED = "export function sharedThing() { return 'pangolin'; }\n";
+  const canonicalPath = "src/app.ts";
+  const copyPath = ".claude/worktrees/wt-a/src/app.ts";
+
+  const hitPaths = (term: string): string[] =>
+    (
+      dupDb.querySql(
+        `SELECT path FROM bm25_search('chunks','content','${term}',50)`,
+      ) as Array<{ path: string }>
+    ).map((r) => r.path);
+
+  beforeAll(async () => {
+    dupRoot = mkdtempSync(join(tmpdir(), "cx-dup-"));
+    dupDir = join(dupRoot, ".infino");
+    mkdirSync(join(dupRoot, "src"), { recursive: true });
+    mkdirSync(join(dupRoot, ".claude", "worktrees", "wt-a", "src"), { recursive: true });
+    writeFileSync(join(dupRoot, canonicalPath), SHARED);
+    writeFileSync(join(dupRoot, copyPath), SHARED);
+    // A file the branch actually changed: different content, so it is its own
+    // record and must be indexed under its own path.
+    writeFileSync(join(dupRoot, ".claude", "worktrees", "wt-a", "src", "only.ts"), "export const branchOnly = 'quetzal';\n");
+    dupDb = connect(dupDir);
+  });
+
+  afterAll(() => {
+    rmSync(dupRoot, { recursive: true, force: true });
+  });
+
+  it("chunks the shared file once, under the main checkout's path", async () => {
+    const stats = await indexRepo(dupOpts());
+    expect(stats.duplicateFiles).toBe(1);
+    expect(hitPaths("pangolin")).toEqual([canonicalPath]);
+  });
+
+  it("still indexes the file the branch actually changed", () => {
+    expect(hitPaths("quetzal")).toEqual([".claude/worktrees/wt-a/src/only.ts"]);
+  });
+
+  it("promotes the surviving copy when the canonical path is deleted", async () => {
+    // The case a per-path diff gets wrong. Deleting src/app.ts removes the
+    // rows it owned, but the content still exists in the worktree - and that
+    // copy is byte-identical to what it always was, so a per-path diff sees
+    // it as unchanged and never chunks it. The content would vanish from the
+    // index while a copy of the file sat in the tree.
+    unlinkSync(join(dupRoot, canonicalPath));
+    const outcome = await syncRepo(dupOpts());
+    expect(outcome.action).toBe("synced");
+
+    expect(hitPaths("pangolin")).toEqual([copyPath]);
+  });
+
+  it("no-ops once the promotion has settled", async () => {
+    expect((await syncRepo(dupOpts())).action).toBe("noop");
+  });
+});

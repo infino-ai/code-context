@@ -15,9 +15,11 @@ import { ensureIndexed, type EnsureDeps } from "../src/mcp/ensure.js";
 const makeCtx = (): RepoCtx => ({
   root: "/repo",
   dir: "/repo/.infino",
+  target: "/repo/.infino",
   db: {} as unknown as Connection,
   lastSyncCheck: 0,
   mutation: null,
+  completion: null,
 });
 
 const STATS: IndexStats = {
@@ -114,6 +116,47 @@ describe("ensureIndexed", () => {
     };
     const res = await ensureIndexed(ctx, deps);
     expect(res).toEqual({ needsIndex: true });
+  });
+
+  it("awaits an async getHandle", async () => {
+    const ctx = makeCtx();
+    let builds = 0;
+    const deps: EnsureDeps = {
+      autoIndexEnabled: false,
+      getHandle: async (c) => handleFor(c),
+      build: () => ((builds++), Promise.resolve(STATS)),
+    };
+    const res = await ensureIndexed(ctx, deps);
+    expect("handle" in res && res.handle.root).toBe("/repo");
+    expect(builds).toBe(0);
+  });
+
+  it("reports needsIndex from an async getHandle that resolves null with auto-index off", async () => {
+    const ctx = makeCtx();
+    const deps: EnsureDeps = {
+      autoIndexEnabled: false,
+      getHandle: async () => null,
+      build: () => Promise.resolve(STATS),
+    };
+    expect(await ensureIndexed(ctx, deps)).toEqual({ needsIndex: true });
+  });
+
+  it("builds for a repo with a platform client like any other - the build writes both places", async () => {
+    const ctx: RepoCtx = { ...makeCtx(), hosted: {} as unknown as RepoCtx["hosted"] };
+    let indexed = false;
+    let builds = 0;
+    const deps: EnsureDeps = {
+      autoIndexEnabled: true,
+      getHandle: (c) => (indexed ? handleFor(c) : null),
+      build: () => {
+        builds++;
+        indexed = true;
+        return Promise.resolve(STATS);
+      },
+    };
+    const res = await ensureIndexed(ctx, deps);
+    expect(builds).toBe(1);
+    expect("handle" in res && res.autoIndexed).toEqual(STATS);
   });
 
   it("propagates a build failure to the caller", async () => {

@@ -1,0 +1,38 @@
+<svg xmlns='http://www.w3.org/2000/svg' width='760' height='425' viewBox='0 0 760 425' font-family='-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif'>
+<rect width='760' height='425' fill='#ffffff'/>
+<text x='20' y='30' fill='#24292f' font-size='18' font-weight='600'>Where it wins and where it does not, by kind of question</text>
+<text x='20' y='50' fill='#57606a' font-size='12'>The same 36 questions and the same judge; each category summed over Haiku, Sonnet, Opus and Fable. 2026-09-24.</text>
+<text x='20' y='95' fill='#24292f' font-size='13' font-weight='600'>Fully correct answers, all four models together</text>
+<text x='20' y='137' fill='#24292f' font-size='13' font-weight='600'>which files have the most X (aggregation)</text>
+<text x='20' y='151' fill='#57606a' font-size='11'>40 answers</text>
+<rect x='350' y='111' width='115' height='18' rx='3' fill='#8b949e'/>
+<text x='471' y='125' fill='#24292f' font-size='12' font-weight='600'>14 of 40</text>
+<rect x='350' y='133' width='156' height='18' rx='3' fill='#2f81f7'/>
+<text x='512' y='147' fill='#24292f' font-size='12' font-weight='600'>19 of 40</text>
+<text x='20' y='193' fill='#24292f' font-size='13' font-weight='600'>how does X work (comprehension)</text>
+<text x='20' y='207' fill='#57606a' font-size='11'>24 answers</text>
+<rect x='350' y='167' width='137' height='18' rx='3' fill='#8b949e'/>
+<text x='493' y='181' fill='#24292f' font-size='12' font-weight='600'>10 of 24</text>
+<rect x='350' y='189' width='205' height='18' rx='3' fill='#2f81f7'/>
+<text x='561' y='203' fill='#24292f' font-size='12' font-weight='600'>15 of 24</text>
+<text x='20' y='249' fill='#24292f' font-size='13' font-weight='600'>where is X handled (by meaning)</text>
+<text x='20' y='263' fill='#57606a' font-size='11'>24 answers</text>
+<rect x='350' y='223' width='205' height='18' rx='3' fill='#8b949e'/>
+<text x='561' y='237' fill='#24292f' font-size='12' font-weight='600'>15 of 24</text>
+<rect x='350' y='245' width='150' height='18' rx='3' fill='#2f81f7'/>
+<text x='506' y='259' fill='#24292f' font-size='12' font-weight='600'>11 of 24</text>
+<text x='20' y='305' fill='#24292f' font-size='13' font-weight='600'>where is this symbol (pinpoint)</text>
+<text x='20' y='319' fill='#57606a' font-size='11'>32 answers</text>
+<rect x='350' y='279' width='256' height='18' rx='3' fill='#8b949e'/>
+<text x='612' y='293' fill='#24292f' font-size='12' font-weight='600'>25 of 32</text>
+<rect x='350' y='301' width='195' height='18' rx='3' fill='#2f81f7'/>
+<text x='551' y='315' fill='#24292f' font-size='12' font-weight='600'>19 of 32</text>
+<text x='20' y='361' fill='#24292f' font-size='13' font-weight='600'>what does this file do (known file)</text>
+<text x='20' y='375' fill='#57606a' font-size='11'>24 answers</text>
+<rect x='350' y='335' width='260' height='18' rx='3' fill='#8b949e'/>
+<text x='616' y='349' fill='#24292f' font-size='12' font-weight='600'>19 of 24</text>
+<rect x='350' y='357' width='301' height='18' rx='3' fill='#2f81f7'/>
+<text x='657' y='371' fill='#24292f' font-size='12' font-weight='600'>22 of 24</text>
+<rect x='350' y='395' width='14' height='14' fill='#8b949e'/><text x='370' y='406' fill='#57606a' font-size='12'>file tools</text>
+<rect x='470' y='395' width='14' height='14' fill='#2f81f7'/><text x='490' y='406' fill='#57606a' font-size='12'>SuperGrep</text>
+</svg>

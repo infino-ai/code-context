@@ -2,12 +2,64 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: Copyright The Infino Authors
 //
-// code-context / cx - local code search for AI coding agents.
+// SuperGrep, package/CLI/MCP server code-context / cx - retrieval subagents
+// for Claude Sonnet: three tools over a local code index, two more over the
+// same index's platform copy.
+//
+// Configuration is command-line flags. The platform knobs are flags on the two
+// commands that write or serve the platform table (`index`, `mcp`); they are
+// resolved once, here, into the settings every layer reads (config.ts). The
+// API key is the one value that is never a flag - argv is visible to every
+// process on the machine - so it comes from a file (--api-key-file) or the
+// INFINO_API_KEY environment variable.
 
 import { Command } from "commander";
-import { indexCmd } from "./commands/index-cmd.js";
-import { searchCmd, sqlCmd, statusCmd, usageCmd } from "./commands/query-cmds.js";
-import { DEFAULT_SEARCH_K } from "./core/config.js";
+import { indexCmd, type IndexCmdOptions } from "./commands/index-cmd.js";
+import { installCmd, type InstallCmdOptions } from "./commands/install-cmd.js";
+import { hookCmd, type HookCmdOptions } from "./commands/hook-cmd.js";
+import { loginCmd, type LoginCmdOptions } from "./commands/login-cmd.js";
+import { findCmd, searchCmd, sqlCmd, statusCmd, usageCmd } from "./commands/query-cmds.js";
+import { savingsCmd } from "./commands/savings-cmd.js";
+import {
+  DEFAULT_SEARCH_K,
+  DEFAULT_FIND_LIMIT,
+  MAX_FIND_LIMIT,
+  API_KEY_ENV,
+  DEFAULT_DB_TIMEOUT_MS,
+  DEFAULT_DB_COLD_START_SECS,
+  DEFAULT_SUBAGENT_K,
+  DEFAULT_SUBAGENT_MAX_TURNS,
+  DEFAULT_SUBAGENT_MAX_WALL_SECS,
+  DEFAULT_CAPS,
+  configureHosted,
+  hostedSettingsFromFlags,
+  type HostedFlags,
+} from "./core/config.js";
+
+/** The flags that name the platform database and tune the client, on the
+ * commands that write the platform table (`index`) or serve it (`mcp`): where
+ * the database is, how to authenticate, who fills the table's vectors, and the
+ * two request budgets. */
+function hostedOptions(command: Command): Command {
+  return command
+    .option("--db <url>", "platform database that also holds this repository's index, https://host/<database> (plain http only for localhost)")
+    .option("--api-key-file <path>", `file holding the API key for --db (default: the ${API_KEY_ENV} environment variable)`)
+    .option(
+      "--embed-provider <platform|local>",
+      "who fills the platform table's vectors: platform (default; its own model, server-side) or local (this machine's model, vectors shipped)",
+    )
+    .option("--db-timeout-ms <n>", `per-request timeout for --db (default ${DEFAULT_DB_TIMEOUT_MS})`)
+    .option("--cold-start-secs <n>", `how long to wait out a cold database or a starting embedder (default ${DEFAULT_DB_COLD_START_SECS})`);
+}
+
+/** Resolve and install the platform settings from a command's parsed flags. */
+function applyHosted(flags: HostedFlags): void {
+  configureHosted(hostedSettingsFromFlags(flags));
+}
+
+/** Published version of this package. `cx install` pins it into the `npx`
+ * entry it writes, so a client resolves the same build on every start. */
+const CLI_VERSION = "0.5.1";
 
 const program = new Command();
 
@@ -16,38 +68,82 @@ program
   .description(
     "Local code search for AI coding agents - an index in plain files under .infino/.\n" +
       "Keyword search seconds after `cx index`; semantic and hybrid search when vectors\n" +
-      "finish backfilling; SQL with relevance-ranked aggregation over the whole repo.",
+      "finish backfilling; SQL with relevance-ranked aggregation over the whole repo.\n" +
+      "With --db the same index is also kept on an Infino database in the cloud, where the\n" +
+      "ask tool runs.",
   )
-  .version("0.1.4")
+  .version(CLI_VERSION)
   .addHelpText(
     "after",
     `
 Examples:
   cx index                            index the current repo (keyword search is live in seconds)
+  cx find "parse_config"              every line containing it, path:line - like grep -n
   cx search "parse_config"            exact terms and meaning, one ranked pass
   cx search "where is auth handled"   works when you don't know the words
   cx sql "SELECT path, SUM(end_line - start_line + 1) AS lines \\
           FROM bm25_search('chunks','content','vector index', 300) \\
           GROUP BY path ORDER BY lines DESC LIMIT 10"
-  cx mcp                              serve the MCP tools (search/sql/reindex) over stdio`,
+  cx mcp                              serve the three local MCP tools (find/search/sql) over stdio
+  cx login --db https://host < key    store this machine's account once (key at mode 600)
+  cx install                          write the MCP entry into .mcp.json - with an account stored,
+                                      this also registers the repo's database and enables all four
+                                      tools, with no flags and no key in the config
+  cx install --db https://host/<database> --api-key-file ~/.infino/key
+                                      the same, naming the database and key explicitly instead
+  cx index --db https://host/<database> --api-key-file ~/.infino/key
+                                      index the repo locally AND load it into the platform database
+  cx mcp --db https://host/<database> --api-key-file ~/.infino/key
+                                      serve find/search/sql over the local index, plus ask over
+                                      the platform copy; every sync updates both`,
   );
 
 program
-  .command("index")
-  .description("bring the index up to date (incremental; full build on first run)")
-  .argument("[path]", "repo root to index")
-  .option("--full", "force a full rebuild instead of an incremental sync")
-  .option("-w, --watch", "keep watching the tree and sync on changes")
-  .option("--no-embed", "keyword index only - skip the vector stage")
-  .option("--max-files <n>", "cap on files indexed (default 20000)")
-  .option("--json", "machine-readable stats")
-  .action(indexCmd);
+  .command("find")
+  .description("every line containing an exact string, like grep -n: complete and unranked")
+  .argument("<text>", "the exact text to find, as it appears in the code")
+  .option("-i, --ignore-case", "match regardless of letter case")
+  .option("-c, --count", "print matching lines per file instead of the lines, like grep -c")
+  .option("--defines", "only lines inside a definition of the text - where it is declared, not every use")
+  .option("--under <prefix>", "only matches under this repo-relative path prefix; the total and per-file counts then describe that subtree")
+  .option("--limit <n>", `maximum matching lines to print (default ${DEFAULT_FIND_LIMIT}, max ${MAX_FIND_LIMIT})`)
+  .option("--json", "machine-readable output")
+  .option("-C, --path <dir>", "repo root (default: current directory)")
+  .action(findCmd);
+
+hostedOptions(
+  program
+    .command("index")
+    .description("bring the index up to date (incremental; full build on first run); with --db, the platform table too")
+    .argument("[path]", "repo root to index")
+    .option("--full", "force a full rebuild instead of an incremental sync")
+    .option("-w, --watch", "keep watching the tree and sync on changes")
+    .option("--no-embed", "keyword index only - skip the vector stage")
+    .option("--max-files <n>", `cap on files indexed - a tree over it indexes partially and says so (default ${DEFAULT_CAPS.maxFiles})`)
+    .option("--no-ignore", "index gitignored files and directories too (or CX_NO_IGNORE=1, which cx mcp also honours)")
+    .option(
+      "--include <glob>",
+      "re-admit one gitignored path instead of all of them; repeatable (or CX_INCLUDE as a comma-separated list). A .cxignore file excludes from search without touching git, and needs no flag",
+      (v: string, acc: string[]) => [...acc, v],
+      [] as string[],
+    )
+    .option("--json", "machine-readable stats"),
+)
+  .option(
+    "--analyzer <ascii_lower|standard>",
+    "FTS analyzer the platform table is created with (default ascii_lower: splits code identifiers on . _ and ::)",
+  )
+  .action(async (path: string | undefined, opts: IndexCmdOptions & HostedFlags) => {
+    applyHosted(opts);
+    await indexCmd(path, opts);
+  });
 
 program
   .command("search")
   .description("find code: exact terms and meaning in one ranked pass")
   .argument("<query>", "what you're looking for")
   .option("-k <n>", "maximum hits", String(DEFAULT_SEARCH_K))
+  .option("--lines", "each hit as only the lines carrying the query's words, with two lines of context, instead of the whole chunk")
   .option("--json", "machine-readable output")
   .option("-C, --path <dir>", "repo root (default: current directory)")
   .action(searchCmd);
@@ -68,7 +164,7 @@ program
 
 program
   .command("status")
-  .description("show what the index holds and how fresh it is")
+  .description("show what the index holds and how fresh it is (and the platform table, when one was loaded)")
   .option("--json", "machine-readable output")
   .option("--hook", "one-line output for a SessionStart hook (silent when unindexed)")
   .option("-C, --path <dir>", "repo root (default: current directory)")
@@ -86,12 +182,84 @@ program
   .action(usageCmd);
 
 program
-  .command("mcp")
-  .description("serve the MCP tools (search / sql / reindex) over stdio")
+  .command("savings")
+  .description("what the index served, and what reading those files whole would have cost instead")
+  .option("--rate <dollars-per-million>", "price the tokens at your model's rate (no money is shown without it)")
+  .option("--json", "machine-readable output")
   .option("-C, --path <dir>", "repo root (default: current directory)")
-  .action(async (opts: { path?: string }) => {
+  .action(savingsCmd);
+
+program
+  .command("login")
+  .description("store this machine's Infino account once, so nothing after it needs a flag")
+  .option("--db <url>", "the platform to sign in to, https://host")
+  .option("--api-key-file <path>", "file holding the API key (default: read it from standard input)")
+  .option("--console-url <url>", "where a human manages billing on this platform, shown when the account runs out of credit")
+  .option("--show", "report the stored account and change nothing")
+  .option("--logout", "forget the stored key (the platform URL is kept: it is not a secret)")
+  .addHelpText(
+    "after",
+    `
+The key is never an argument - argv is readable by every process on this
+machine - so it comes from a file or from standard input:
+
+  cx login --db https://host < keyfile
+  pbpaste | cx login --db https://host
+  cx login --db https://host --api-key-file ~/Downloads/key.txt
+
+It is stored at mode 600 and used automatically from then on: \`cx install\`
+in any repository needs no flags, and no config file ever names a key.`,
+  )
+  .action(async (opts: LoginCmdOptions) => {
+    await loginCmd(opts);
+  });
+
+hostedOptions(
+  program
+    .command("install")
+    .description("write this server's MCP entry into a client config (default: .mcp.json in the repo root)")
+    .option("--config <path>", "client config to write instead of <root>/.mcp.json (any file with an mcpServers object)")
+    .option("--name <name>", "name of the server entry (default code-context)")
+    .option("--local", "force an entry that runs this build, when the default would write npx")
+    .option("--npx", "force an npx entry pinned to this version, when the default would run this build")
+    .option("--local-only", "write a local-tools-only entry even when this machine has an account")
+    .option("--yes", "agree to uploading this repository's contents without being asked (for scripts with no terminal)")
+    .option("--platform <url>", "platform to ask for a free account on a first install, https://host (or CX_PLATFORM_URL)")
+    .option("--uninstall", "remove the server entry instead of writing it")
+    .option("--dry-run", "print the entry that would be written and change nothing")
+    .option("-C, --path <dir>", "repo root (default: current directory)"),
+).action(async (opts: InstallCmdOptions) => {
+  await installCmd(opts, CLI_VERSION);
+});
+
+hostedOptions(
+  program
+    .command("mcp")
+    .description("serve the MCP tools (find / search / sql) over stdio; with --db, also ask over the platform table")
+    .option("-C, --path <dir>", "repo root (default: current directory)"),
+)
+  .option("--subagent-max-turns <n>", `turn cap for one ask call (default ${DEFAULT_SUBAGENT_MAX_TURNS})`)
+  .option("--subagent-max-wall-secs <n>", `wall-clock cap for one ask call, in seconds (default ${DEFAULT_SUBAGENT_MAX_WALL_SECS})`)
+  .option("--subagent-k <n>", `facts one ask call asks for and returns (default ${DEFAULT_SUBAGENT_K}, search's k)`)
+  .action(async (opts: { path?: string } & HostedFlags) => {
+    applyHosted(opts);
     const { serveMcp } = await import("./mcp/server.js");
     await serveMcp(opts.path);
+  });
+
+program
+  .command("hook")
+  .description(
+    "(run by Claude Code) a hook `cx install` wrote: `hook answer` shows the answer tool's result to you directly; " +
+      "`hook answer-input` hands the tool what the model said while it worked, from the session transcript; " +
+      "`hook answer-stop` sends the model back for the answer call when it retrieved and stopped without one; " +
+      "`hook answer-due` reminds the model, as each retrieval returns, that the writer has the rows and it should not write the answer itself",
+  )
+  .argument("<event>", "which hook: answer | answer-input | answer-stop | answer-due")
+  .option("--chunk <i>", "which chunk of the answer this entry shows (from 1)")
+  .option("--chunks <n>", "how many chunks the answer is shown in")
+  .action((event: string, opts: HookCmdOptions) => {
+    hookCmd(event, opts);
   });
 
 program.parseAsync().catch((err: Error) => {

@@ -1,7 +1,23 @@
-# Tradeoffs and honest limits
+# Tradeoffs
 
-code-context is a ranked retrieval layer, not a do-everything code tool. The
-honest boundaries:
+SuperGrep is a ranked retrieval layer, not a do-everything code tool. 
+
+### Where a model reading the files does better
+
+A judge - Opus 5.5 with the repository checked out - checks every claim in
+the same thirty-six questions answered by the same model with SuperGrep's
+tools and with Claude Code's file tools, on four Claude models. On Sonnet,
+Opus and Fable the answers come out level, inside the judge's own noise; the
+saving is the bill and the tail. Where SuperGrep does better on every model is
+the whole-corpus question - counts, rankings, every occurrence - because an
+index gives the total where grep gives the first forty matches. Where it does
+worse is "where is X handled" and "where is this symbol" on the larger models:
+a strong model reading whole files finds a named thing well, the agent's
+built-in Explore subagent is designed for exactly that, and most of the wrong
+claims SuperGrep makes there say which code path calls which function. That
+gap is real. It does not mean answers will read worse in production, but it is
+worth knowing which questions to expect it on. The figures, by caller and by
+kind of question, are in the [README](../README.md#the-numbers).
 
 ### It does not do structural code intelligence
 
@@ -10,52 +26,50 @@ symbol-precise references. It ranks and retrieves content and aggregates by
 relevance. Tools that resolve structure (LSP servers, graph indexes) are
 complementary: MCP servers stack, so run both when you need both.
 
-### It does not beat grep on pinpoint lookups
-
-Naming the one file a known symbol lives in is a single grep's job. There the
-index does not save tokens: a grep returns one matching line, while ranked
-search returns chunks that carry their content. That content is what pays off
-on "how does X work" and whole-repo questions, and it is dead weight when all
-you need is a path. Adding code-context does not reduce accuracy on
-localization; it just does not win on cost there. Both are measured in the
-[benchmark](benchmark.md).
-
 ### The first index of a repo pays a one-time vector cost
 
 Keyword search is live in seconds, but the vector stage embeds every chunk
-once with a local model, which takes on the order of a minute or two per few
-thousand chunks on a laptop. It runs in the background and only happens once;
+once. It runs on the platform, in the background, and only happens once;
 incremental syncs afterward re-embed only changed files.
 
-### Semantic ranking waits for vectors
+### Semantic ranking waits for vectors to be created
 
 Until the vector stage finishes, search is keyword-ranked (BM25) and says so.
 That is a graceful degrade, not a failure, but meaning-only queries with no
 shared vocabulary are weaker until vectors land.
 
-### Retrieval quality depends on the local embedding model
+### Retrieval quality depends on the embedding model
 
-The default embedding model optimizes quality-per-minute on commodity
-hardware; a larger model would rank better but index much slower. The choice
-is documented in [the embedder eval](embedder-eval.md), and the model is
-configurable.
+The platform embeds with its own model by default. `--embed-provider local`
+embeds on this machine with a small local model and ships the vectors
+instead; that model optimizes quality-per-minute on commodity hardware, and
+the choice is documented in [the embedder eval](embedder-eval.md).
 
-### It is built for largely append-and-edit source trees
+### The platform copy puts the network in the build
 
-The index is a derived artifact you rebuild from the working tree, not a
-system of record. It is read-only through queries; you never mutate it
-through SQL. Rebuild it with `cx index`.
+With `--db` every build and every sync also writes the platform table, over
+HTTPS, and a database that is not yet ready is retried for a bounded time
+(`--cold-start-secs`) before the client gives up. `find`, `search` and `sql`
+never wait on it - they read the local index - but a sync is not done until
+both sides have the diff, and a platform failure is reported and retried by
+the next sync rather than papered over. What you get in exchange is the
+`ask` tool, which runs on the platform and returns the facts it retrieved
+instead of the coding agent crawling the repo itself.
+
 
 ### Very large or hostile repos
 
 Indexing scales roughly linearly with the tree. Pathological files (parser
 stress fixtures, generated blobs) fall back to fixed-window chunking under a
 per-parse deadline so a single file cannot stall a run. Practical caps
-(`CX_MAX_FILES`, `CX_MAX_FILE_BYTES`) bound the work; see the
-[benchmark](benchmark.md) for indexing-at-scale timings.
+(`CX_MAX_FILES`, `CX_MAX_FILE_BYTES`) bound the work.
 
 When a tree exceeds the file cap the index is partial, and it says so rather
-than pretending to be complete: `search` and `sql` results carry a `partial`
-marker (files skipped and the cap in effect), and `cx status` reports it. That
-turns "no match" into "no match in the indexed subset" - raise `CX_MAX_FILES`
-and re-index for full coverage.
+than pretending to be complete: `cx index` warns on the build and on every
+sync while the tree is over the cap, `find`, `search` and `sql` results carry a
+`partial` marker (files skipped and the cap in effect), and `cx status`
+reports it. That turns "no match" into "no match in the indexed subset" - raise
+`CX_MAX_FILES` and re-index for full coverage. Or leave the corpus where it is:
+write it out as parquet and have the platform build the index next to it in
+object storage, with nothing indexed on your machine and no cap to raise
+([instructions](../README.md#indexing-from-object-storage)).

@@ -1,21 +1,379 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: Copyright The Infino Authors
 //
-// Paths, environment, and tuning constants shared by the CLI and MCP server.
+// Paths, tuning constants, and the hosted settings shared by the CLI and MCP server.
 
+import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { parseHostedUrl, DEFAULT_TIMEOUT_MS, DEFAULT_COLD_START_SECS, type HostedTarget } from "./hosted.js";
+import { isAnalyzer, type Analyzer } from "./analyzer.js";
+import { keyFilePath, readStoredKey } from "./keystore.js";
 
-/** Directory name of the on-disk index, created in the repo root. */
+/** Directory name of the on-disk index, created in the repo root: the local
+ * catalog, the two manifests, the file state, the usage ledger and build
+ * spills. */
 export const INDEX_DIR_NAME = ".infino";
+
+// --- the platform database -----------------------------------------------------------
+//
+// A platform database (--db <url>) holds the same repository's chunks table
+// beside the local index, reached over HTTPS: every build and sync writes
+// both, and the `ask` tool reads it. Its settings are
+// command-line flags: the CLI parses them once into a HostedSettings
+// (hostedSettingsFromFlags) and installs it with configureHosted(); every
+// layer below reads that object through the accessor functions. Nothing here
+// reads the environment except the API key, the one value that must never be
+// an argument - argv is visible to every process on the machine - so it comes
+// from a file named by --api-key-file, from INFINO_API_KEY, or from this
+// machine's own stored account (keystore.ts), in that order.
+
+/** The environment variable holding the bearer key when --api-key-file is not
+ * given. The engine's remote binding, the ask harness and the platform all
+ * read this one name, so code-context does too. It is only ever read into a
+ * HostedTarget - never logged or echoed. */
+export const API_KEY_ENV = "INFINO_API_KEY";
+
+/** Default per-request timeout: the client's own default, so the two cannot
+ * drift apart (the rationale lives with it). */
+export const DEFAULT_DB_TIMEOUT_MS = DEFAULT_TIMEOUT_MS;
+
+/** Default cold-start budget: likewise the client's own default. */
+export const DEFAULT_DB_COLD_START_SECS = DEFAULT_COLD_START_SECS;
+
+/** Default turn cap for `ask`: a few search turns and a statement.
+ * Measured against 8: half the inner tokens per call and a much shorter tail
+ * for the same rate of empty results - the outer agent, not the inner loop,
+ * decides how far to go. */
+export const DEFAULT_SUBAGENT_MAX_TURNS = 4;
+
+/** Default wall clock for `ask`, in seconds. */
+export const DEFAULT_SUBAGENT_MAX_WALL_SECS = 120;
+
+/** Spellings that turn a boolean env flag off (`CX_AUTO_INDEX=0`, ...). */
+const OFF_VALUES = ["0", "false", "no"];
+/** The spellings that switch a default-off setting on. */
+const ON_VALUES = ["1", "true", "yes"];
+
+/** Who fills the platform table's vectors: `platform` (its embedding column
+ * is filled and queried server-side with the platform's own model) or `local`
+ * (the in-process model's vectors, shipped with the rows). The default is
+ * `platform` - point at a database and the whole system works with nothing
+ * else set. The local index always embeds locally; this never applies to it. */
+export type EmbedProvider = "local" | "platform";
+
+/** The default provider for the platform table. */
+export const DEFAULT_HOSTED_EMBED_PROVIDER: EmbedProvider = "platform";
+
+export interface SubagentSettings {
+  /** Turn cap for one loop (the platform lowers a value above its own cap). */
+  maxTurns: number;
+  /** Wall clock for one loop, in seconds (likewise capped server-side). */
+  maxWallSecs: number;
+  /** Facts asked for and kept per call (the platform caps a value above its own). */
+  k: number;
+}
+
+/** Everything the platform database is configured with, resolved and
+ * validated once. */
+export interface HostedSettings {
+  target: HostedTarget;
+  embedProvider: EmbedProvider;
+  /** Per-request wall clock, in milliseconds. */
+  timeoutMs: number;
+  /** How long retryable "not ready yet" answers are re-issued before giving
+   * up, in seconds. */
+  coldStartSecs: number;
+  /** The FTS analyzer the platform table's content index is created with,
+   * when --analyzer named one. Absent, a build keeps the analyzer the table
+   * already has (or HOSTED_DEFAULT_ANALYZER for a first load) and a sync
+   * asks for nothing - only an explicit, differing request forces a rebuild. */
+  analyzer?: Analyzer;
+  subagent: SubagentSettings;
+}
+
+/** The platform flags as commander parses them: camelCase of `--db`,
+ * `--api-key-file`, `--embed-provider`, `--db-timeout-ms`, `--cold-start-secs`,
+ * `--analyzer`, `--subagent-max-turns`, `--subagent-max-wall-secs`,
+ * `--subagent-k`. Every value is the raw string; validation is here, in one
+ * place, so a bad value is an error at startup and not on the first call. */
+export interface HostedFlags {
+  db?: string;
+  apiKeyFile?: string;
+  embedProvider?: string;
+  dbTimeoutMs?: string;
+  coldStartSecs?: string;
+  analyzer?: string;
+  subagentMaxTurns?: string;
+  subagentMaxWallSecs?: string;
+  subagentK?: string;
+}
+
+/** The flags that mean nothing without --db, by their command-line spelling. */
+const HOSTED_ONLY_FLAGS: Array<[keyof HostedFlags, string]> = [
+  ["apiKeyFile", "--api-key-file"],
+  ["embedProvider", "--embed-provider"],
+  ["dbTimeoutMs", "--db-timeout-ms"],
+  ["coldStartSecs", "--cold-start-secs"],
+  ["analyzer", "--analyzer"],
+  ["subagentMaxTurns", "--subagent-max-turns"],
+  ["subagentMaxWallSecs", "--subagent-max-wall-secs"],
+  ["subagentK", "--subagent-k"],
+];
+
+/** A positive-integer flag value, or its default when the flag was not given.
+ * A value that is not a positive integer is an error - a NaN timeout would
+ * disable the timeout. */
+function positiveIntFlag(flag: string, raw: string | undefined, fallback: number): number {
+  if (raw === undefined || raw === "") return fallback;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n <= 0) throw new Error(`${flag} must be a positive integer, got "${raw}"`);
+  return n;
+}
+
+/** A positive-integer flag that has no default: absent when not given. */
+function optionalPositiveIntFlag(flag: string, raw: string | undefined): number | undefined {
+  if (raw === undefined || raw === "") return undefined;
+  return positiveIntFlag(flag, raw, 0);
+}
+
+/** Resolve the platform settings from the command line, or null when --db was
+ * not given (no platform database: the local index alone).
+ *
+ * The key comes from the first of three sources that has one, most explicit
+ * first: `--api-key-file`, then INFINO_API_KEY in `env`, then this machine's
+ * stored account (`~/.infino/key`, written by `cx login`). The store is last
+ * so a flag or an environment variable always wins - a CI job or a one-off
+ * against another platform must not silently pick up the developer's own
+ * account - and it exists at all so that, once signed in, nothing has to name
+ * a key again: `cx install` in a new repository is one command with no flags.
+ *
+ * A database with no key from any of the three is refused here rather than
+ * failing on the first request. Any other platform flag without --db is a
+ * usage error rather than a silently ignored option. */
+export function hostedSettingsFromFlags(
+  flags: HostedFlags,
+  env: NodeJS.ProcessEnv = process.env,
+  storedKey: () => string | undefined = readStoredKey,
+): HostedSettings | null {
+  if (flags.db === undefined || flags.db === "") {
+    const stray = HOSTED_ONLY_FLAGS.find(([key]) => flags[key] !== undefined);
+    if (stray) throw new Error(`${stray[1]} needs --db <url>: it configures the platform database`);
+    return null;
+  }
+  const { baseUrl, database } = parseHostedUrl(flags.db);
+  const apiKey =
+    flags.apiKeyFile !== undefined
+      ? readFileSync(flags.apiKeyFile, "utf8").trim()
+      : (env[API_KEY_ENV] ?? storedKey() ?? "");
+  if (apiKey.length === 0) {
+    throw new Error(
+      `--db needs a key, and this machine has none: run \`cx login --db ${baseUrl}\` to store one ` +
+        `(it goes in ${keyFilePath()}, mode 600), or pass --api-key-file <path>, or set ${API_KEY_ENV}`,
+    );
+  }
+  const providerRaw = (flags.embedProvider ?? DEFAULT_HOSTED_EMBED_PROVIDER).toLowerCase();
+  if (providerRaw !== "local" && providerRaw !== "platform") {
+    throw new Error(`--embed-provider must be "platform" or "local", got "${flags.embedProvider}"`);
+  }
+  if (flags.analyzer !== undefined && !isAnalyzer(flags.analyzer)) {
+    throw new Error(`--analyzer must be "ascii_lower" or "standard", got "${flags.analyzer}"`);
+  }
+  return {
+    target: { baseUrl, database, apiKey },
+    embedProvider: providerRaw,
+    timeoutMs: positiveIntFlag("--db-timeout-ms", flags.dbTimeoutMs, DEFAULT_DB_TIMEOUT_MS),
+    coldStartSecs: positiveIntFlag("--cold-start-secs", flags.coldStartSecs, DEFAULT_DB_COLD_START_SECS),
+    ...(flags.analyzer !== undefined ? { analyzer: flags.analyzer } : {}),
+    subagent: {
+      maxTurns: positiveIntFlag("--subagent-max-turns", flags.subagentMaxTurns, DEFAULT_SUBAGENT_MAX_TURNS),
+      maxWallSecs: positiveIntFlag("--subagent-max-wall-secs", flags.subagentMaxWallSecs, DEFAULT_SUBAGENT_MAX_WALL_SECS),
+      k: positiveIntFlag("--subagent-k", flags.subagentK, DEFAULT_SUBAGENT_K),
+    },
+  };
+}
+
+/** The process-wide platform settings: installed once by the CLI at startup
+ * (null when no --db was given), read by every layer through the accessors
+ * below. There is no "hosted mode": the local index is always the one `find`,
+ * `search` and `sql` read, and these settings name the platform database
+ * that holds the same repository's chunks table for the `ask` tool. Every
+ * build and every sync writes both, so the two are one index in two
+ * places. */
+let hosted: HostedSettings | null = null;
+
+export function configureHosted(settings: HostedSettings | null): void {
+  hosted = settings;
+}
+
+export function hostedSettings(): HostedSettings | null {
+  return hosted;
+}
+
+/** Whether a platform database is configured (--db). */
+export function isHosted(): boolean {
+  return hosted !== null;
+}
+
+/** The platform target, or null when none is configured. The key travels only
+ * inside the returned object; callers log `hostedLabel(target)`, never the
+ * target. */
+export function hostedTarget(): HostedTarget | null {
+  return hosted?.target ?? null;
+}
+
+/** Who fills the platform table's embedding column: the --embed-provider
+ * setting, `platform` by default. The local index always embeds with the
+ * local model; this never applies to it. */
+export function embedProvider(): EmbedProvider {
+  return hosted?.embedProvider ?? DEFAULT_HOSTED_EMBED_PROVIDER;
+}
+
+/** The loggable name of a platform database: `https://host/<database>`, no key. */
+export function hostedLabel(target: { baseUrl: string; database: string }): string {
+  return `${target.baseUrl.replace(/\/+$/, "")}/${target.database}`;
+}
+
+/** The platform client's tuning, in the shape HostedOptions takes. */
+export function hostedClientOptions(): { timeoutMs: number; coldStartSecs: number } {
+  return {
+    timeoutMs: hosted?.timeoutMs ?? DEFAULT_DB_TIMEOUT_MS,
+    coldStartSecs: hosted?.coldStartSecs ?? DEFAULT_DB_COLD_START_SECS,
+  };
+}
+
+/** The analyzer --analyzer asked for the platform table's `content` index, or
+ * undefined when the flag was not given: then a build keeps the analyzer the
+ * table already has (HOSTED_DEFAULT_ANALYZER for a first load) and a sync
+ * asks for nothing. The indexer sends the value it settles on to the platform
+ * explicitly and records it in the platform manifest. */
+export function hostedAnalyzer(): Analyzer | undefined {
+  return hosted?.analyzer;
+}
+
+export function subagentMaxTurns(): number {
+  return hosted?.subagent.maxTurns ?? DEFAULT_SUBAGENT_MAX_TURNS;
+}
+
+export function subagentMaxWallSecs(): number {
+  return hosted?.subagent.maxWallSecs ?? DEFAULT_SUBAGENT_MAX_WALL_SECS;
+}
+
+/** Facts one ask call asks for and keeps (--subagent-k). */
+export function subagentK(): number {
+  return hosted?.subagent.k ?? DEFAULT_SUBAGENT_K;
+}
+
+/** Whether a first query on an unindexed repo builds the index (CX_AUTO_INDEX,
+ * default on). A build writes both the local index and, when a platform
+ * database is configured, its chunks table: the two are one index in two
+ * places and are never allowed to differ. */
+export function autoIndexEnabled(): boolean {
+  return !OFF_VALUES.includes((process.env.CX_AUTO_INDEX ?? "").toLowerCase());
+}
+
+/** Whether queries re-sync the index against the working tree (CX_AUTO_SYNC,
+ * default on). A sync applies the same diff to the local index and to the
+ * platform table when one is configured - deletes and appends to both at
+ * once - so the two stay in step. */
+export function autoSyncEnabled(): boolean {
+  return !OFF_VALUES.includes((process.env.CX_AUTO_SYNC ?? "").toLowerCase());
+}
+
+/** Whether the MCP server registers the platform's `ask` when a platform
+ * database is configured (CX_AGENT_TOOLS, default on). Off, it is neither
+ * registered nor named in the server's instructions. A lane that hides it
+ * through the SDK's disallowedTools removes it from the model's tool list but
+ * not from those instructions, and a line for a tool that is not there made
+ * the caller try it and lose the turn to the refusal; this switch takes the
+ * line out at the source. */
+export function agentToolsEnabled(): boolean {
+  return !OFF_VALUES.includes((process.env.CX_AGENT_TOOLS ?? "").toLowerCase());
+}
+
+/** Whether the MCP server registers `answer` beside `ask` (CX_ANSWER_TOOL,
+ * default off). Off, the model that called the tools writes the final answer
+ * itself from the rows they returned: `ask` stays, `answer` is neither
+ * registered nor named in the instructions, and nothing tells the model
+ * "never write the answer yourself". That is the shipped shape: measured,
+ * the caller writing from the rows kept counts the platform's writer lost.
+ * On, the two writers can be measured against each other on one
+ * deployment. Says nothing when CX_AGENT_TOOLS is off, which removes both
+ * tools. */
+export function answerToolEnabled(): boolean {
+  return ON_VALUES.includes((process.env.CX_ANSWER_TOOL ?? "").toLowerCase());
+}
+
+/** Whether the MCP server offers the platform's own API routes as tools the
+ * model calls itself (CX_API_TOOLS, default off): `table_card`, `validate`
+ * and `cite`. On, `sql` hands back rows alone - no card in its text, no
+ * verdict on its result - so the model reads the table's shape, checks a
+ * result against the question, and checks its answer's citations by
+ * choosing to, the way a caller driving its own retrieval against the
+ * platform would. Off is the measured default: the card and the verdict
+ * ride inside `sql`, because a check the model may call is a check it
+ * declined when it was offered (the card tool, 2026-09-11). The owner,
+ * 2026-09-23: "can we offer the full set of tools we built ... but without
+ * hydrate and sub_agent ... let me see what happens." */
+export function apiToolsEnabled(): boolean {
+  return ON_VALUES.includes((process.env.CX_API_TOOLS ?? "").toLowerCase());
+}
+
+/** Hosted tables beside the primary that `sql` may join (CX_SIBLING_TABLES,
+ * comma-separated, default none). Named, the server reads each one's schema
+ * at startup and puts it in the sql tool's text with the primary's, and
+ * every sql statement runs on the platform, where a JOIN across them is one
+ * call - the local index holds the primary table alone. Built 2026-09-24
+ * for a demo corpus of code, issues and test logs (the owner: "cross corpus
+ * questions that would need joins to work well so we can show a competitive
+ * advantage"). */
+export function siblingTables(): string[] {
+  return (process.env.CX_SIBLING_TABLES ?? "")
+    .split(",")
+    .map((name) => name.trim())
+    .filter(Boolean);
+}
+
+/** What the model is told about the siblings beyond their columns - the
+ * keys that join them, in the deployment's words (CX_SIBLING_NOTES). The
+ * schema says what the columns are; only the corpus knows which ones match. */
+export function siblingNotes(): string {
+  return (process.env.CX_SIBLING_NOTES ?? "").trim();
+}
+
+/** The table this client builds when nothing overrides the name: the one
+ * table a process owns. A process whose `CX_TABLE` names anything else is a
+ * search-only process over a table something else loaded (see TABLE), and
+ * the MCP server refuses to build or sync against it on its own. */
+export const DEFAULT_TABLE = "chunks";
 
 /** The one table every tool reads. Stable across index stages: the staged
  * (keyword-only) build and the final (hybrid) build use the same name, so
- * SQL written against `chunks` keeps working as vectors arrive. */
-export const TABLE = "chunks";
+ * SQL written against `chunks` keeps working as vectors arrive.
+ *
+ * `CX_TABLE` overrides it, which is how a second corpus is reached on a
+ * database that already holds one. A hydrate job loaded the OpenSearch
+ * checkout into `chunks_opensearch` on the same database as the infino
+ * corpus, because a second DATABASE needs provisioning this key cannot do;
+ * the table name is therefore the only thing that distinguishes them. Every
+ * reader derives from this constant — including the tool text, which
+ * interpolates it rather than writing "chunks" — so the override reaches the
+ * SQL examples the model is shown as well as the queries the client runs.
+ *
+ * Unset it and nothing changes. Set it and remember that `cx index` DROPS and
+ * recreates whatever it names, so it belongs on a search-only process: the
+ * MCP server never auto-builds or auto-syncs a table the override names, only
+ * an explicit `cx index` does. */
+export const TABLE = process.env.CX_TABLE?.trim() || DEFAULT_TABLE;
 
 /** Manifest file inside the index dir - the product's own record of what the
- * index holds (the engine ignores foreign files in its catalog root). */
+ * local index holds (the engine ignores foreign files in its catalog root). */
 export const MANIFEST_NAME = "codecontext.json";
+
+/** The platform table's manifest, beside the local one in the same index
+ * dir: what the chunks table on the configured database holds, as loaded
+ * from this machine. Two files because the two tables share nothing but the
+ * directory - a local rebuild must not read as a platform reload. */
+export const PLATFORM_MANIFEST_NAME = "platform.json";
 
 /** Resolve the repo root a command operates on. */
 export function resolveRoot(path?: string): string {
@@ -34,8 +392,16 @@ export interface IndexCaps {
   maxFileBytes: number;
 }
 
+/** The file cap is not a memory bound - chunks spool to an on-disk NDJSON
+ * spill and vectors to a packed-f32 one, so no stage holds the tree at once.
+ * It is a stop on the wrong target: an `index` aimed at a home directory or at
+ * `/` would otherwise read and embed everything it can reach, for hours, and
+ * only say so afterwards. Half a million files is past any repository and past
+ * a laptop's own code, logs and docs, so a corpus somebody meant to index goes
+ * in whole - and a tree that does reach the cap now says so on every build and
+ * every sync, with the number to raise. */
 export const DEFAULT_CAPS: IndexCaps = {
-  maxFiles: Number(process.env.CX_MAX_FILES ?? 20000),
+  maxFiles: Number(process.env.CX_MAX_FILES ?? 500_000),
   maxFileBytes: Number(process.env.CX_MAX_FILE_BYTES ?? 1024 * 1024),
 };
 
@@ -57,3 +423,23 @@ export const EMBED_MAX_CHARS = Number(process.env.CX_EMBED_MAX_CHARS ?? 8000);
 /** Default number of search hits. Configurable per call (the `k` tool param /
  * CLI `-k`) and via CX_SEARCH_K for config/CI-level defaults. */
 export const DEFAULT_SEARCH_K = Number(process.env.CX_SEARCH_K ?? 10);
+
+/** Default number of facts one `ask` call asks for and returns: as many
+ * as a search returns, so an ask result costs the outer agent what a
+ * search does. The platform retrieves and ranks more than this before
+ * answering; `hitsTotal` says what was cut. */
+export const DEFAULT_SUBAGENT_K = DEFAULT_SEARCH_K;
+
+/** Hard cap on matching lines in one `find` result. At roughly fifty tokens
+ * per returned line (path, line number, text) this is about 25k tokens: a
+ * large tool result, but one a session survives, where an unbounded find of
+ * a ubiquitous term could return a hundred thousand lines. A cut list still
+ * carries the full total and the per-file counts. */
+export const MAX_FIND_LIMIT = 500;
+
+/** Default number of matching lines `find` returns when the caller passes no
+ * limit: the cap itself, so the cut only ever lands on a flood, never on a
+ * real answer (the largest measured lookup needed about 300 lines). The
+ * result's `total` and `byFile` are complete either way. Configurable per call
+ * (the `limit` tool param / CLI `--limit`) and via CX_FIND_LIMIT. */
+export const DEFAULT_FIND_LIMIT = Number(process.env.CX_FIND_LIMIT ?? MAX_FIND_LIMIT);

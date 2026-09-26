@@ -29,12 +29,19 @@ export interface Chunk {
   scope?: string;
 }
 
-/** A definition site found in the AST: where it starts and how to name it. */
+/** A definition site found in the AST: where it starts, where it ends, and
+ * how to name it. `endRow` is what makes a continuation chunk nameable - see
+ * `spanMeta`. Absent for the span builders with no AST (markdown headings, log
+ * records), where a definition has no extent to speak of. */
 interface DefSite {
   row: number; // 0-based
+  endRow?: number; // 0-based, inclusive
   name: string;
   kind: string;
   scope: string;
+  /** A definition worth NAMING but not worth breaking a chunk at - see
+   * [`NAME_ONLY_TYPES`]. Excluded from the break rows, kept for the symbol. */
+  nameOnly?: boolean;
 }
 
 /** The text we embed / index for a chunk: a compact, deterministic context
@@ -73,9 +80,35 @@ const OVERLAP_LINES = 10;
 // Files larger than this skip tree-sitter (parse cost) and use fixed windows.
 const PARSE_CAP_BYTES = 512 * 1024;
 
+// --- log-family record boundaries --------------------------------------------
+//
+// A log's unit is a record, and a record is often many lines: the message, then
+// the stack trace under it. Fixed windows cut at line 60 whatever is there, so
+// a trace gets split across two chunks and neither one holds the frame plus the
+// message that explains it. That is the pathological case for retrieval - the
+// query names the exception and the answer needs the frames.
+//
+// So logs get their own break rows, exactly as markdown does: break at record
+// starts and let `packSegments` group them, which never splits a segment unless
+// it alone exceeds MAX_LINES. A record and its trace stay together.
+
+/** Line shapes that begin a new record. A leading timestamp is the dominant
+ * signal across formats; a leading level covers the ones that print no time. */
+const LOG_RECORD_START =
+  /^\s{0,3}(?:[[(<]\s*)?(?:\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}|\d{2}:\d{2}:\d{2}[.,]?\d*\b|[A-Z][a-z]{2}\s{1,2}\d{1,2}\s\d{2}:\d{2}:\d{2}|(?:TRACE|DEBUG|INFO|WARN|WARNING|ERROR|FATAL|PANIC|CRITICAL)\b)/;
+
+/** The level named in a record's first line, used as the chunk's symbol so a
+ * hit says what it is and `sql` can filter on it. */
+const LOG_LEVEL = /\b(TRACE|DEBUG|INFO|WARN|WARNING|ERROR|FATAL|PANIC|CRITICAL)\b/;
+
+/** Characters of a record's first line scanned for a level: a level appears in
+ * the prefix, and scanning a whole 4 MB single-line record would not. */
+const LOG_LEVEL_SCAN_CHARS = 200;
+
 // Extension → language tag. Doubles as the indexing allowlist.
 const EXT_LANG: Record<string, string> = {
   md: "md", mdx: "md", rst: "rst", txt: "txt", adoc: "adoc", tex: "tex",
+  log: "log", jsonl: "jsonl", ndjson: "jsonl", out: "log", err: "log",
   ts: "ts", tsx: "tsx", js: "js", jsx: "js", mjs: "js", cjs: "js",
   py: "py", pyi: "py", rs: "rs", go: "go", java: "java", rb: "rb",
   c: "c", h: "c", cpp: "cpp", hpp: "cpp", cc: "cpp", hh: "cpp", cs: "cs",
@@ -179,6 +212,7 @@ const DEF_TYPES: Record<string, Set<string>> = {
   ]),
   // Shell: break at function definitions (scripts are otherwise flat).
   bash: new Set(["function_definition"]),
+  // (name-only kinds live in NAME_ONLY_TYPES below, not here)
   // CSS: break at each rule set and at-rule block; packSegments coalesces
   // small rules into windows, so this doesn't over-fragment.
   css: new Set([
@@ -190,6 +224,43 @@ const DEF_TYPES: Record<string, Set<string>> = {
   powershell: new Set(["function_statement", "class_statement"]),
 };
 DEF_TYPES.tsx = DEF_TYPES.typescript;
+
+// Node types that NAME a chunk without breaking one.
+//
+// `find(defines: true)` keeps a match only where the chunk's `symbol` column
+// lists the name, and the column is built from the definitions above. Those
+// are all the kinds worth starting a new chunk at, which left constants,
+// statics and type aliases out of the column entirely — so `defines` returned
+// nothing for any of them. Measured 2026-09-10 on the pinpoint question that
+// asks for every `std::env::var` read: the model narrowed to eleven
+// consecutive constant names with `defines: true`, got `0 matches / 0 files`
+// on every one, abandoned the tool and finished the question with three shell
+// greps. Confirmed against the index: `API_KEY_ENV` and `SHAPE_ENV` appear in
+// chunk text and zero times in a symbol column, where `pack_partition` and
+// `SuperfileReader` appear in both.
+//
+// They are separate from DEF_TYPES rather than added to it because these are
+// the same list to two consumers: the rows drive chunk break points and the
+// names build the symbol. A file opening with twenty `const` declarations
+// would fragment into twenty chunks, which is a worse bug than the one being
+// fixed. Marked `nameOnly` and filtered out of the break rows, so chunk
+// boundaries are byte-identical and only the symbol column gains entries.
+const NAME_ONLY_TYPES: Record<string, Set<string>> = {
+  rust: new Set(["const_item", "static_item", "type_item", "union_item"]),
+  typescript: new Set(["lexical_declaration", "variable_declaration"]),
+  javascript: new Set(["lexical_declaration", "variable_declaration"]),
+  go: new Set(["const_declaration", "var_declaration"]),
+  java: new Set(["field_declaration"]),
+  "c-sharp": new Set(["field_declaration", "property_declaration"]),
+  cpp: new Set(["declaration", "type_definition"]),
+  python: new Set([]),
+  ruby: new Set([]),
+  php: new Set(["const_declaration", "property_declaration"]),
+  bash: new Set([]),
+  css: new Set([]),
+  powershell: new Set([]),
+};
+NAME_ONLY_TYPES.tsx = NAME_ONLY_TYPES.typescript;
 
 // The runtime and grammars ship together in @vscode/tree-sitter-wasm (CJS),
 // so the parser ABI always matches the grammar builds.
@@ -218,12 +289,39 @@ let parser: TSParser | null = null;
 
 // Adversarial inputs (parser stress fixtures, generated code) can abort the
 // WASM runtime, and a post-abort runtime is undefined behavior - sometimes
-// every later call throws fast, sometimes it busy-loops. Count failures and
-// permanently fall back to fixed windows once the runtime looks unhealthy;
-// losing syntactic cuts on the tail of a hostile corpus is fine, hanging
+// every later call throws fast, sometimes it busy-loops. So there is a
+// breaker: past a run of failures, stop parsing and take fixed windows for the
+// rest. Losing syntactic cuts on the tail of a hostile corpus is fine, hanging
 // an index run is not.
+//
+// The breaker counts CONSECUTIVE failures, not cumulative ones, and that
+// distinction is the whole point. A cumulative count latches: twenty bad files
+// scattered through a large tree would disable syntactic chunking for every
+// file after them, so a workspace with a handful of parser fixtures in it
+// would quietly index tens of thousands of source files as fixed windows -
+// measured on a real 8,752-file workspace, where exactly twenty aborts were
+// enough to trip it. Twenty in a row means the runtime is broken; twenty
+// spread out means twenty bad files. A success resets the run.
+let consecutiveParseFailures = 0;
+const MAX_CONSECUTIVE_PARSE_FAILURES = 20;
+
+/** Files whose parse failed this run, and whether the breaker ever tripped.
+ * Reported by the indexer rather than kept here: a file chunked by fixed
+ * windows instead of its syntax has coarser boundaries and no symbol, which
+ * degrades every search over it, and a run that degrades has to say so. The
+ * WASM runtime also prints its own `Aborted()` to stderr on the way out, with
+ * no path and no count - these are what make that legible. */
 let parseFailures = 0;
-const MAX_PARSE_FAILURES = 20;
+let parseBreakerTripped = false;
+
+/** Read the parse-failure tally and reset it for the next run. */
+export function takeParseFailures(): { failures: number; breakerTripped: boolean } {
+  const taken = { failures: parseFailures, breakerTripped: parseBreakerTripped };
+  parseFailures = 0;
+  parseBreakerTripped = false;
+  consecutiveParseFailures = 0;
+  return taken;
+}
 
 function getRuntime() {
   if (!runtime) {
@@ -259,7 +357,10 @@ function getLanguage(grammar: string): Promise<unknown | null> {
 async function syntacticDefs(lang: string, content: string): Promise<DefSite[] | undefined> {
   const grammar = TS_GRAMMAR[lang];
   if (!grammar || content.length > PARSE_CAP_BYTES) return undefined;
-  if (parseFailures >= MAX_PARSE_FAILURES) return undefined;
+  if (consecutiveParseFailures >= MAX_CONSECUTIVE_PARSE_FAILURES) {
+    parseBreakerTripped = true;
+    return undefined;
+  }
   const language = await getLanguage(grammar);
   if (!language) return undefined;
   try {
@@ -276,11 +377,14 @@ async function syntacticDefs(lang: string, content: string): Promise<DefSite[] |
     });
     if (!tree) return undefined;
     const defs = DEF_TYPES[grammar];
+    const nameOnly = NAME_ONLY_TYPES[grammar] ?? new Set<string>();
     const sites: DefSite[] = [];
-    collectDefs(tree.rootNode, defs, [], sites, 0);
+    collectDefs(tree.rootNode, defs, nameOnly, [], sites, 0);
+    consecutiveParseFailures = 0; // the runtime is healthy again
     return sites.sort((a, b) => a.row - b.row);
   } catch {
     parseFailures++;
+    consecutiveParseFailures++;
     parser = null; // a failed parser instance is not trusted again
     return undefined;
   }
@@ -289,15 +393,51 @@ async function syntacticDefs(lang: string, content: string): Promise<DefSite[] |
 // Depth cap keeps this to module/class/method level, not local closures.
 const MAX_DEPTH = 6;
 
-function collectDefs(node: TSNode, defs: Set<string>, scope: string[], sites: DefSite[], depth: number): void {
+function collectDefs(
+  node: TSNode,
+  defs: Set<string>,
+  nameOnly: Set<string>,
+  scope: string[],
+  sites: DefSite[],
+  depth: number,
+): void {
   if (depth > MAX_DEPTH) return;
   for (const child of node.namedChildren) {
+    // A name-only kind is recorded and then left alone: it names the chunk it
+    // sits in, it does not start one, and nothing inside a constant or a type
+    // alias is a definition worth scoping under it.
+    if (nameOnly.has(child.type) && !defs.has(child.type)) {
+      const name = nameOf(child);
+      if (name) {
+        sites.push({
+          row: child.startPosition.row,
+          endRow: child.endPosition.row,
+          name,
+          kind: kindOf(child.type),
+          scope: scope.join(" › "),
+          nameOnly: true,
+        });
+      }
+      continue;
+    }
     if (defs.has(child.type)) {
       const name = nameOf(child);
-      sites.push({ row: child.startPosition.row, name, kind: kindOf(child.type), scope: scope.join(" › ") });
-      collectDefs(child, defs, name ? [...scope, name] : scope, sites, depth + 1);
+      sites.push({
+        row: child.startPosition.row,
+        // The definition's true last line, which the grammar already knows.
+        // Without it a chunk that holds only part of a large definition has
+        // nothing to name itself by, and the model reports the chunk's own
+        // end as the definition's - measured on this corpus as "truncates
+        // run_compaction_job to 709 of 809", where 709 is a chunk boundary
+        // and the function runs to 809.
+        endRow: child.endPosition.row,
+        name,
+        kind: kindOf(child.type),
+        scope: scope.join(" › "),
+      });
+      collectDefs(child, defs, nameOnly, name ? [...scope, name] : scope, sites, depth + 1);
     } else {
-      collectDefs(child, defs, scope, sites, depth + 1);
+      collectDefs(child, defs, nameOnly, scope, sites, depth + 1);
     }
   }
 }
@@ -327,6 +467,14 @@ function kindOf(type: string): string {
   if (/method/.test(type)) return "method";
   if (/function/.test(type)) return "function";
   if (/rule_set|keyframes|media/.test(type)) return "rule";
+  // The name-only kinds. `const` before `static` and both before the generic
+  // declaration, since C++ reaches this with a bare `declaration`.
+  if (/const/.test(type)) return "const";
+  if (/static/.test(type)) return "static";
+  if (/type_item|type_definition|type_alias/.test(type)) return "type";
+  if (/union/.test(type)) return "union";
+  if (/property/.test(type)) return "property";
+  if (/field|lexical_declaration|variable_declaration|^declaration$/.test(type)) return "value";
   return "def";
 }
 
@@ -401,18 +549,125 @@ function markdownDefs(lines: string[]): DefSite[] {
   return sites;
 }
 
-/** The primary symbol/kind/scope for a chunk: the definition sites that *start*
- * within the chunk's line range. A continuation window of a large definition
- * has none, and that's fine - it just carries no symbol. */
+/** Log family: break at record starts, so a record and the stack trace under it
+ * stay in one chunk.
+ *
+ * `jsonl` is the easy half - one record per line, and no line is a
+ * continuation, so every non-blank line is a break and `packSegments` groups
+ * whole records up to the target size. Plain logs are the interesting half: a
+ * line is a record start when it opens with a timestamp or a level, and
+ * everything else - indented frames, `at ...`, `Caused by:`, a bare traceback
+ * header - is a continuation of the record above it, which is exactly what
+ * keeps a trace attached to its message.
+ *
+ * A file with no recognisable record start yields no sites, and `chunkFile`
+ * falls back to fixed windows the way it does for an unparsed source file. */
+function logDefs(lines: string[], lang: string): DefSite[] {
+  const sites: DefSite[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.trim() === "") continue;
+    if (lang !== "jsonl" && !LOG_RECORD_START.test(line)) continue;
+    const level = line.slice(0, LOG_LEVEL_SCAN_CHARS).match(LOG_LEVEL);
+    sites.push({
+      row: i,
+      // The level is the one part of a record worth carrying as a symbol: it is
+      // what a reader filters on, and it is absent often enough that guessing
+      // something else would be noise.
+      name: level ? level[1].toUpperCase() : "",
+      kind: "record",
+      scope: "",
+    });
+  }
+  return sites;
+}
+
+/** How a symbol says it is only PART of the definition it names, and where the
+ * whole thing lives: `run_compaction_job (603-809, part)`. Carried in the
+ * symbol column rather than a new one, so nothing downstream needs a schema
+ * change to read it. */
+function partOf(name: string, def: DefSite): string {
+  return `${name} (${def.row + 1}-${(def.endRow ?? def.row) + 1}, part)`;
+}
+
+/** The primary symbol/kind/scope for a chunk.
+ *
+ * A chunk where definitions START is named by them, as before. A chunk that is
+ * only a CONTINUATION of a larger definition used to carry nothing — "and
+ * that's fine, it just carries no symbol" — which measured at 17% of chunks
+ * and 20% of the indexed characters on this corpus, and 73% of those are also
+ * over the embedder's window. A model handed sixty anonymous lines opening
+ * `fts_cfg,` cannot say what it read, so it reports the only numbers it has:
+ * the window's. That is what the judge sees as "misplaces probe_pointer's
+ * range (218-251 vs the real 252-283)" and "off-by-two line spans", which
+ * together were 8 of 9 losses.
+ *
+ * So a continuation is named by the innermost definition that encloses it,
+ * marked as a part and carrying that definition's true span — which is also
+ * exactly what a reassembly query needs in order to ask for the rest. */
 function spanMeta(defs: DefSite[], startLine: number, endLine: number): Partial<Chunk> | undefined {
   const inSpan = defs.filter((d) => d.row + 1 >= startLine && d.row + 1 <= endLine);
-  if (inSpan.length === 0) return undefined;
-  const names = [...new Set(inSpan.map((d) => d.name).filter(Boolean))];
+  if (inSpan.length > 0) {
+    const names = [
+      ...new Set(
+        inSpan
+          .map((d) => (d.name && d.endRow != null && d.endRow + 1 > endLine ? partOf(d.name, d) : d.name))
+          .filter(Boolean),
+      ),
+    ];
+    return {
+      symbol: names.join(", ").slice(0, 120) || undefined,
+      kind: inSpan[0].kind,
+      scope: inSpan[0].scope || undefined,
+    };
+  }
+  // Nothing starts here: the innermost definition that spans the chunk. Sorted
+  // by start row so the last match is the innermost — an `impl` encloses the
+  // `fn` that encloses the window, and the `fn` is what a citation needs.
+  const enclosing = defs
+    .filter((d) => d.endRow != null && d.row + 1 < startLine && d.endRow + 1 >= endLine && d.name)
+    .sort((a, b) => a.row - b.row)
+    .at(-1);
+  if (!enclosing) return undefined;
   return {
-    symbol: names.join(", ").slice(0, 120) || undefined,
-    kind: inSpan[0].kind,
-    scope: inSpan[0].scope || undefined,
+    symbol: partOf(enclosing.name, enclosing).slice(0, 120),
+    kind: enclosing.kind,
+    scope: enclosing.scope || undefined,
   };
+}
+
+/** A line that documents or annotates the definition below it rather than
+ * standing on its own: Rust doc comments and attributes, block-comment bodies,
+ * JS/TS decorators, Python comments and decorators. */
+const DOC_OR_ATTR_LINE = /^\s*(\/\/\/|\/\/!|\/\*|\*|#\[|@\w|#(?!!)\s)/;
+
+/** Break rows for code, moved up so a definition's chunk carries its own doc
+ * comment. Breaking at the signature line leaves the `///` block in the
+ * PREVIOUS chunk: measured over five of the engine's own source files, 318 of
+ * 568 documented definitions (56%) were split that way. One of them is
+ * `load_materialized_rows`, whose doc block says "Currently a test-only
+ * helper" four lines above a signature that started a new chunk — so a search
+ * hit on the body could not show the warning, and an answer built on that hit
+ * described it as the live ingest path. The same split separates a definition
+ * from the defaults its doc block states, which is the other thing those
+ * answers got wrong.
+ *
+ * Only the BREAK moves. The def's own row is untouched, so `spanMeta` still
+ * attributes the symbol to the chunk that holds its signature. The walk stops
+ * at a blank line, at anything that is not a doc/attribute line, and at
+ * another definition's row, so it can never swallow the definition above. */
+function breakRowsCarryingDocs(lines: string[], defs: DefSite[]): number[] {
+  // Name-only definitions never become break points, so a block of constants
+  // does not fragment into one chunk each. They stay in `defs` for the symbol
+  // column and are filtered here, which is the whole reason the two are
+  // separate sets.
+  const breaking = defs.filter((d) => !d.nameOnly);
+  const defRows = new Set(breaking.map((d) => d.row));
+  return breaking.map((d) => {
+    let row = d.row;
+    while (row > 0 && !defRows.has(row - 1) && DOC_OR_ATTR_LINE.test(lines[row - 1] ?? "")) row--;
+    return row;
+  });
 }
 
 export async function chunkFile(path: string, content: string): Promise<Chunk[]> {
@@ -432,9 +687,21 @@ export async function chunkFile(path: string, content: string): Promise<Chunk[]>
   if (lang === "md") {
     defs = markdownDefs(lines);
     spans = packSegments(lines, defs.map((d) => d.row));
+  } else if (lang === "log" || lang === "jsonl") {
+    // No grammar for either, so tree-sitter has nothing to offer; record
+    // boundaries are the structure. With none found, fall through to windows.
+    defs = logDefs(lines, lang);
+    spans = defs.length > 0 ? packSegments(lines, defs.map((d) => d.row)) : fixedWindows(lines, 1);
   } else {
     defs = await syntacticDefs(lang, content);
-    spans = defs && defs.length > 0 ? packSegments(lines, defs.map((d) => d.row)) : fixedWindows(lines, 1);
+    // Only a BREAKING definition justifies syntactic spans. A file that is
+    // nothing but constants has definitions to name chunks by and none to cut
+    // them at, and it falls back to fixed windows exactly as it did before
+    // those constants were recorded.
+    spans =
+      defs && defs.some((d) => !d.nameOnly)
+        ? packSegments(lines, breakRowsCarryingDocs(lines, defs))
+        : fixedWindows(lines, 1);
   }
 
   const chunks: Chunk[] = [];

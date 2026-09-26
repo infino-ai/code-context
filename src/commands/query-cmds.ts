@@ -1,14 +1,20 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: Copyright The Infino Authors
 //
-// `cx search` / `cx sql` / `cx status` - the query commands.
+// `cx find` / `cx search` / `cx sql` / `cx status` / `cx usage` - the query commands.
+//
+// Every query command reads the local index (openIndex). `cx status` also
+// reports the platform table when this machine has loaded one - its manifest
+// sits beside the local one in the index dir.
 
-import { openIndex, NoIndexError } from "../core/context.js";
+import { openIndex, NoIndexError, type IndexHandle } from "../core/context.js";
 import { indexDir, resolveRoot } from "../core/config.js";
 import { createEmbedder, embedderInfo } from "../core/embedder.js";
-import { search, runSql, jsonify } from "../core/searcher.js";
+import { readPlatformManifest, type Manifest } from "../core/manifest.js";
+import { find, search, runSql, jsonify } from "../core/searcher.js";
 import {
   receiptEnabled,
+  findEntry,
   searchEntry,
   sqlEntry,
   formatReceipt,
@@ -27,16 +33,90 @@ function die(err: unknown): never {
   process.exit(1);
 }
 
-export interface SearchCmdOptions {
-  k: string;
+export interface FindCmdOptions {
+  ignoreCase?: boolean;
+  /** Per-file counts instead of the matching lines, like `grep -c`. */
+  count?: boolean;
+  /** Only lines inside a definition of the text, not every occurrence. */
+  defines?: boolean;
+  /** Only matches under this repo-relative path prefix. */
+  under?: string;
+  limit?: string;
   json?: boolean;
   path?: string;
 }
 
+/** `cx find` - every line containing the exact text, printed `path:line: text`
+ * the way `grep -n` does, so it drops into the same habits and pipelines. */
+export async function findCmd(text: string, opts: FindCmdOptions): Promise<void> {
+  try {
+    const handle = openIndex(opts.path);
+    // `find` rejects a non-integer, so `--limit abc` is an error rather than an
+    // empty listing; the raw string is converted here and validated there.
+    const result = await find(handle, text, {
+      ignoreCase: opts.ignoreCase,
+      defines: opts.defines,
+      under: opts.under,
+      limit: opts.limit === undefined ? undefined : Number(opts.limit),
+    });
+    if (receiptEnabled()) {
+      // `--count` prints the per-file counts and not the match list, so the
+      // receipt prices those.
+      const entry = findEntry(result, opts.count === true);
+      recordUsage(handle.dir, entry);
+      console.error(dim(formatReceipt(entry)));
+    }
+    if (opts.json) {
+      console.log(jsonify(result, true));
+      return;
+    }
+    if (result.partial) console.error(yellow(`warning: ${result.partial.note}`));
+    if (opts.count) {
+      for (const f of result.byFile) console.log(`${cyan(f.path)}${dim(":")} ${f.count}`);
+    } else {
+      for (const m of result.matches) console.log(`${cyan(m.path)}${dim(`:${m.line}:`)} ${m.text}`);
+      if (result.truncated) {
+        console.error(yellow(`showing ${result.matches.length} of ${result.total} matches - raise --limit to see more`));
+      }
+    }
+    if (result.definedFrom !== undefined && result.total < result.definedFrom) {
+      console.error(dim(`${result.total} defining of ${result.definedFrom} matching lines - drop --defines for all of them`));
+    }
+    if (result.under) {
+      console.error(dim(`scoped to ${result.under}/ - the total and per-file counts describe that subtree, not the repository`));
+    }
+    if (result.total === 0) {
+      console.error(
+        yellow(
+          opts.defines
+            ? "no definitions - drop --defines to see where it is used"
+            : result.under
+              ? `no matches under ${result.under}/ - drop --under to search the whole repository`
+              : "no matches",
+        ),
+      );
+    }
+  } catch (err) {
+    die(err);
+  }
+}
+
+export interface SearchCmdOptions {
+  k: string;
+  /** Each hit as the lines carrying the query's words, with context, not the chunk. */
+  lines?: boolean;
+  json?: boolean;
+  path?: string;
+}
+
+/** How many lines of a whole-chunk hit the CLI prints; a hit already cut to
+ * its matching lines (`--lines`) prints whole, since those lines are the point. */
+const CLI_HIT_PREVIEW_LINES = 5;
+
 export async function searchCmd(query: string, opts: SearchCmdOptions): Promise<void> {
   try {
     const handle = openIndex(opts.path);
-    const result = await search(handle, createEmbedder(), query, Number(opts.k));
+    const result = await search(handle, createEmbedder(), query, Number(opts.k), { lines: opts.lines });
     if (receiptEnabled()) {
       const entry = searchEntry(result, handle.root);
       recordUsage(handle.dir, entry);
@@ -52,7 +132,8 @@ export async function searchCmd(query: string, opts: SearchCmdOptions): Promise<
       console.log(
         `${bold(String(i + 1) + ".")} ${cyan(h.path)}${dim(`:${h.startLine}-${h.endLine}`)} ${dim(`(${result.ranking} ${h.score.toFixed(3)})`)}`,
       );
-      console.log(`  ${h.content.split("\n").slice(0, 5).join("\n  ")}\n`);
+      const shown = opts.lines ? h.content.split("\n") : h.content.split("\n").slice(0, CLI_HIT_PREVIEW_LINES);
+      console.log(`  ${shown.join("\n  ")}\n`);
     });
     if (result.hits.length === 0) console.error(yellow("no hits"));
   } catch (err) {
@@ -98,8 +179,8 @@ export interface StatusCmdOptions {
   path?: string;
 }
 
-export function statusCmd(opts: StatusCmdOptions): void {
-  let handle;
+export async function statusCmd(opts: StatusCmdOptions): Promise<void> {
+  let handle: IndexHandle;
   try {
     handle = openIndex(opts.path);
   } catch (err) {
@@ -107,16 +188,19 @@ export function statusCmd(opts: StatusCmdOptions): void {
     die(err);
   }
   const m = handle.manifest;
+  const platform = readPlatformManifest(handle.dir);
   if (opts.hook) {
     console.log(
       `code-context index: ${fmtCount(m.chunks)} chunks from ${fmtCount(m.files)} files, ` +
         `vectors ${m.vectors}, indexed ${fmtAge(m.indexedAt)}. ` +
-        `MCP tools: search (terms + meaning), sql (aggregation), reindex (after big edits).`,
+        `MCP tools: find (exact text, every occurrence), search (terms + meaning), sql (aggregation)` +
+        (platform ? `, ask (one retrieval as rows over the platform copy)` : "") +
+        `; the index re-syncs on every query.`,
     );
     return;
   }
   if (opts.json) {
-    console.log(JSON.stringify(m, null, 2));
+    console.log(JSON.stringify(platform ? { ...m, platform } : m, null, 2));
     return;
   }
   console.log(`${bold("code-context")} - ${handle.root}`);
@@ -128,7 +212,7 @@ export function statusCmd(opts: StatusCmdOptions): void {
       ),
     );
   }
-  console.log(`  vectors    ${m.vectors}${m.embedder ? dim(`  (${m.embedder.provider} ${m.embedder.model}, ${m.embedder.dim}d)`) : ""}`);
+  console.log(`  vectors    ${m.vectors}${embedderNote(m)}`);
   console.log(`  indexed    ${fmtAge(m.indexedAt)}${dim(` (keyword ${fmtMs(m.indexMs)}${m.embedMs ? `, vectors ${fmtMs(m.embedMs)}` : ""})`)}`);
   const langs = Object.entries(m.languages)
     .sort((a, b) => b[1] - a[1])
@@ -137,6 +221,19 @@ export function statusCmd(opts: StatusCmdOptions): void {
     .join(" · ");
   if (langs) console.log(`  languages  ${langs}`);
   console.log(dim(`  embedder   ${embedderInfo()}`));
+  // The platform table this machine loaded, when there is one: the same
+  // index in another place, so only what can differ is shown - its counts,
+  // its vectors and when it was last written.
+  if (platform) {
+    console.log(`  platform   ${fmtCount(platform.chunks)} chunks from ${fmtCount(platform.files)} files, vectors ${platform.vectors}${embedderNote(platform)}, written ${fmtAge(platform.indexedAt)}`);
+  }
+}
+
+/** ` (provider model, Nd)` for a recorded embedder; empty when none. A
+ * platform-embedded column has no client-known width, so the `d` suffix
+ * prints only for a recorded one. */
+function embedderNote(m: Manifest): string {
+  return m.embedder ? dim(`  (${m.embedder.provider} ${m.embedder.model}${m.embedder.dim !== undefined ? `, ${m.embedder.dim}d` : ""})`) : "";
 }
 
 export interface UsageCmdOptions {
@@ -151,6 +248,15 @@ export interface UsageCmdOptions {
 }
 
 const truncate = (s: string, n: number): string => (s.length > n ? s.slice(0, n - 3) + "..." : s);
+
+/** `find 4 · Grep 2 · Read 1`, most first; empty string when there is nothing. */
+function countsLine(counts: Record<string, number> | undefined): string {
+  if (!counts) return "";
+  return Object.entries(counts)
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([name, n]) => `${name} ${n}`)
+    .join(" · ");
+}
 
 /** `cx usage` - the local ledger of what queries went through the index and a
  * compact summary of what each returned. Read straight off `.infino/usage.jsonl`,
@@ -187,7 +293,7 @@ export async function usageCmd(opts: UsageCmdOptions): Promise<void> {
     return;
   }
   if (entries.length === 0 && (!session || session.prompts === 0)) {
-    console.error(yellow("no usage recorded yet - run `cx search`/`cx sql` here, or query via the MCP server"));
+    console.error(yellow("no usage recorded yet - run `cx find`/`cx search`/`cx sql` here, or query via the MCP server"));
     return;
   }
 
@@ -202,6 +308,12 @@ export async function usageCmd(opts: UsageCmdOptions): Promise<void> {
     const used = Math.min(session.promptsWithCx, session.prompts);
     const calls = `${session.cxCalls} call${session.cxCalls === 1 ? "" : "s"}`;
     console.log(dim(`  this session: code-context used in ${used} of ${session.prompts} prompts (${calls})`));
+    // Which door, and what the agent reached for first: the two numbers that
+    // say whether the tool surface steers as intended.
+    const byTool = countsLine(session.cxCallsByTool);
+    if (byTool) console.log(dim(`  by tool: ${byTool}`));
+    const first = countsLine(session.firstToolByPrompt);
+    if (first) console.log(dim(`  first tool of a prompt: ${first}`));
   }
   console.log("");
 
@@ -210,11 +322,39 @@ export async function usageCmd(opts: UsageCmdOptions): Promise<void> {
     const clock = new Date(e.ts).toLocaleTimeString("en-US", { hour12: false });
     const tool = e.tool.padEnd(6);
     const q = cyan(`"${truncate(e.query, 52)}"`);
-    if (e.tool === "search") {
+    if (e.table !== undefined && (e.tool === "search" || e.tool === "find")) {
+      // Rows of a hosted table (the MCP server's CX_REMOTE_SEARCH against a
+      // table that is not the chunks table): the places are row keys with no
+      // line span, so they print bare, and there are no files to count.
+      const hits = e.hits ?? [];
+      console.log(
+        `${dim(clock)}  ${bold(tool)}  ${q}  ${dim(`-> ${e.matches ?? hits.length} rows of ${e.table} | ~${fmtTokens(e.returnedTokens)} tok${e.ranking ? ` | ${e.ranking}` : ""}`)}`,
+      );
+      const keys = hits.slice(0, 5).map((h) => h.path);
+      if (keys.length) console.log(green(`            ${keys.join("  ")}${hits.length > 5 ? dim(`  (+${hits.length - 5} more)`) : ""}`));
+    } else if (e.tool === "search") {
       const hits = e.hits ?? [];
       const files = new Set(hits.map((h) => h.path)).size;
       console.log(
         `${dim(clock)}  ${bold(tool)}  ${q}  ${dim(`-> ${hits.length} hits / ${files} files | ~${fmtTokens(e.returnedTokens)} tok | ${e.ranking ?? "?"}`)}`,
+      );
+      const locs = hits.slice(0, 5).map((h) => `${h.path}:${h.startLine}-${h.endLine}`);
+      if (locs.length) console.log(green(`            ${locs.join("  ")}${hits.length > 5 ? dim(`  (+${hits.length - 5} more)`) : ""}`));
+    } else if (e.tool === "find") {
+      // A find match is one line, so cite it as path:line; the count is the
+      // repo-wide total, which can exceed the lines that were returned.
+      const hits = e.hits ?? [];
+      const files = new Set(hits.map((h) => h.path)).size;
+      console.log(
+        `${dim(clock)}  ${bold(tool)}  ${q}  ${dim(`-> ${e.matches ?? hits.length} matches / ${files} files | ~${fmtTokens(e.returnedTokens)} tok`)}`,
+      );
+      const locs = hits.slice(0, 5).map((h) => `${h.path}:${h.startLine}`);
+      if (locs.length) console.log(green(`            ${locs.join("  ")}${hits.length > 5 ? dim(`  (+${hits.length - 5} more)`) : ""}`));
+    } else if (e.tool === "ask" || e.tool === "subagent" || e.tool === "explore") {
+      // What the platform's agent retrieved, and what it spent getting there.
+      const hits = e.hits ?? [];
+      console.log(
+        `${dim(clock)}  ${bold(tool)}  ${q}  ${dim(`-> ${hits.length} hits / ${e.rows ?? 0} rows | ${e.agentTurns ?? 0} turns | ~${fmtTokens(e.returnedTokens)} tok`)}`,
       );
       const locs = hits.slice(0, 5).map((h) => `${h.path}:${h.startLine}-${h.endLine}`);
       if (locs.length) console.log(green(`            ${locs.join("  ")}${hits.length > 5 ? dim(`  (+${hits.length - 5} more)`) : ""}`));

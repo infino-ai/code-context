@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: Copyright The Infino Authors
 //
-// Embedding is local, always: a transformers.js model downloaded once on
+// Embedding is local by default: a transformers.js model downloaded once on
 // first use - no API key, no per-query network, code never leaves the
 // machine. Chunks and queries embed with the SAME model so they align.
 //
@@ -18,12 +18,17 @@
 //                             ever embedded and never shrink, so bulk work
 //                             runs where exit() can give the memory back.
 //
+// Both constructors embed the LOCAL index. Who fills the platform table's
+// vectors (--embed-provider: the platform's own model by default, or these
+// vectors shipped) is the indexer's business; nothing here changes with it.
+//
 // CX_EMBED_MODEL / CX_EMBED_DTYPE exist for development and evaluation (see
 // docs/embedder-eval.md) and are deliberately undocumented product surface.
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { createInterface, type Interface } from "node:readline";
 import { fileURLToPath } from "node:url";
+import { embedProvider } from "./config.js";
 
 export const LOCAL_MODEL_DEFAULT = "Xenova/all-MiniLM-L6-v2";
 const MODEL = process.env.CX_EMBED_MODEL ?? LOCAL_MODEL_DEFAULT;
@@ -86,7 +91,18 @@ function getPipe() {
   return pipe;
 }
 
-export function createEmbedder(): Embedder {
+/** The in-process embedder. The local index is always embedded here; who
+ * fills the platform table's vectors (--embed-provider) is the indexer's
+ * business, not this one's. Nullable in the signature for callers that run
+ * without vectors (CX_NO_EMBED, --no-embed). */
+export function createEmbedder(): Embedder | null {
+  return createLocalEmbedder();
+}
+
+/** The in-process pipeline, unconditionally. The child-process embedder falls
+ * back to this when its worker cannot start, so it must not go through the
+ * provider switch again. */
+function createLocalEmbedder(): Embedder {
   let knownDim: number | undefined;
   const embedToFloat32 = async (texts: string[]) => {
     const extractor = await getPipe();
@@ -144,7 +160,7 @@ interface WorkerOk {
  * the memory back on dispose(). Falls back to the in-process embedder if the
  * child can't start (missing dist worker when running from source, exotic
  * node setups) - indexing never fails over process plumbing. */
-export function createIndexingEmbedder(): Embedder {
+export function createIndexingEmbedder(): Embedder | null {
   let child: ChildProcess | null = null;
   let lines: Interface | null = null;
   let pending: Array<{ resolve: (line: string) => void; reject: (err: Error) => void }> = [];
@@ -225,7 +241,7 @@ export function createIndexingEmbedder(): Embedder {
           `code-context: embed worker unavailable (${(err as Error).message}); embedding in-process\n`,
         );
         await stopChild();
-        fallback = createEmbedder();
+        fallback = createLocalEmbedder();
         return fallback.embedToFloat32!(texts);
       }
     }
@@ -279,7 +295,12 @@ export function createIndexingEmbedder(): Embedder {
   };
 }
 
-/** Human-readable description of the embedder, for status output. */
+/** Human-readable description of the local embedder, for status output. */
 export function embedderInfo(): string {
   return `local ${MODEL} (no key, no network)`;
+}
+
+/** Human-readable description of who fills the platform table's vectors. */
+export function platformEmbedderInfo(): string {
+  return embedProvider() === "platform" ? "platform (server-side)" : `local ${MODEL}, vectors shipped`;
 }

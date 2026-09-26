@@ -57,6 +57,77 @@ describe("chunkFile", () => {
     }
   });
 
+  it("keeps a definition's doc comment in the chunk that holds its signature", async () => {
+    // Breaking at the signature line put the doc block in the PREVIOUS chunk.
+    // Measured over five of the engine's own source files, that split 318 of
+    // 568 documented definitions (56%) - including one whose doc block reads
+    // "Currently a test-only helper" four lines above a signature that started
+    // a new chunk, so a hit on the body could not show the warning and an
+    // answer built on it called the helper a live path. Doc blocks are also
+    // where defaults are stated, which is the other thing those answers got
+    // wrong. Each function here is ~18 lines against TARGET_LINES 60, so the
+    // packer must break between them.
+    const fns = Array.from(
+      { length: 8 },
+      (_, i) =>
+        `/** What f${i} does.\n *  The default is ${i * 10}.\n */\nexport function f${i}() {\n${"  // body\n".repeat(14)}  return ${i};\n}`,
+    ).join("\n");
+    const chunks = await chunkFile("mod.ts", fns);
+    expect(chunks.length).toBeGreaterThan(1);
+    for (let i = 0; i < 8; i++) {
+      const holding = chunks.find((c) => c.content.includes(`export function f${i}()`));
+      expect(holding, `f${i} lands in a chunk`).toBeDefined();
+      expect(holding!.content, `f${i} carries its own doc block`).toContain(`What f${i} does.`);
+      expect(holding!.content, `f${i} carries the default from its doc block`).toContain(
+        `The default is ${i * 10}.`,
+      );
+    }
+    // Only the break moved: the definition's own row is unchanged, so the
+    // symbol is still attributed to the chunk holding its signature.
+    expect(chunks.some((c) => c.symbol)).toBe(true);
+    // Line ranges still tile the file without gaps or overlap.
+    expect(chunks[0].startLine).toBe(1);
+    for (let i = 1; i < chunks.length; i++) {
+      expect(chunks[i].startLine).toBe(chunks[i - 1].endLine + 1);
+    }
+  });
+
+  it("names a continuation chunk by the definition that encloses it", async () => {
+    // A definition over MAX_LINES is split into fixed windows, and those
+    // windows used to carry no symbol at all - 17% of chunks and 20% of the
+    // indexed characters on the engine's own source. A model handed an
+    // anonymous window reports the only line numbers it has, the window's,
+    // which is the judge's "misplaces probe_pointer's range (218-251 vs the
+    // real 252-283)". Every chunk now names what it is part of, and carries
+    // the definition's true span - which is what a reassembly query needs.
+    const body = Array.from({ length: 200 }, (_, i) => `  const step${i} = ${i};`).join("\n");
+    const src = `export function hugeMechanism() {\n${body}\n}\n`;
+    const chunks = await chunkFile("big.ts", src);
+    expect(chunks.length).toBeGreaterThan(2);
+    // The definition ends on the file's last brace, so every chunk is either
+    // its opening or a part of it, and none is anonymous.
+    const anonymous = chunks.filter((c) => !c.symbol);
+    expect(anonymous, "no chunk of a split definition is anonymous").toEqual([]);
+    // Continuations say they are parts, and give the whole definition's span.
+    const parts = chunks.filter((c) => c.symbol?.includes(", part)"));
+    expect(parts.length).toBeGreaterThan(0);
+    const defEnd = src.trimEnd().split("\n").length;
+    const span = `(1-${defEnd}, part)`;
+    for (const p of parts) {
+      expect(p.symbol, "a part names the definition and its true extent").toContain("hugeMechanism");
+      expect(p.symbol, `the span is the definition's, not the window's: ${p.symbol}`).toContain(span);
+    }
+    // The point of it: at least one part ends well before the definition does
+    // and still reports the definition's end, which is the number a citation
+    // needs and the window could never supply.
+    const early = parts.filter((p) => p.endLine < defEnd);
+    expect(early.length, "some part ends before the definition").toBeGreaterThan(0);
+    for (const p of early) {
+      expect(p.symbol).toContain(`-${defEnd},`);
+      expect(p.symbol).not.toContain(`-${p.endLine},`);
+    }
+  });
+
   it("cuts bash, css, and powershell at definition boundaries", async () => {
     const cases = [
       { path: "script.sh", re: /^f\d\(\) \{/, code: Array.from({ length: 6 }, (_, i) => `f${i}() {\n${"  echo body\n".repeat(15)}}`).join("\n") },
@@ -135,6 +206,45 @@ describe("chunkFile", () => {
     expect(scoped).toBeDefined();
   });
 
+  /** A constant is named in the symbol column, and does not break a chunk.
+   *
+   * `find(defines: true)` keeps a match only where the chunk's symbol column
+   * lists the name, so a kind missing from that column is invisible to the
+   * flag. Constants, statics and type aliases were all missing. Measured
+   * 2026-09-10 on the pinpoint question asking for every `std::env::var`
+   * read: the model narrowed to eleven constant names with `defines: true`,
+   * got `0 matches / 0 files` on all eleven, gave up on the tool and finished
+   * with three shell greps.
+   *
+   * The second half of the assertion is the part that could regress
+   * silently. Naming these kinds by adding them to the break set would
+   * fragment a block of constants into one chunk each, which is worse than
+   * the bug. They must name a chunk without starting one. */
+  it("names a const without breaking a chunk at it", async () => {
+    const consts = [0, 1, 2, 3, 4, 5].map((n) => `const K${n}: u64 = ${n};`).join("\n");
+    const body = `${"    step();\n".repeat(40)}`;
+    const src = `${consts}\n\nfn only_fn() {\n${body}}\n`;
+    const chunks = await chunkFile("c.rs", src);
+
+    const names = chunks.flatMap((c) => (c.symbol ?? "").split(",").map((s) => s.trim()));
+    for (const n of ["K0", "K3", "K5"]) {
+      expect(names, `${n} is named so defines can see it`).toContain(n);
+    }
+    // Six constants on six consecutive lines must not become six chunks: the
+    // block sits in whichever chunk covers line 1.
+    const holding = chunks.filter((c) => c.startLine <= 6 && c.endLine >= 1);
+    expect(holding.length, `the const block is not fragmented: ${chunks.map((c) => `${c.startLine}-${c.endLine}`).join(" ")}`).toBe(1);
+    // And the function still breaks, so real definitions are unaffected.
+    expect(names).toContain("only_fn");
+  });
+
+  it("names a type alias, which defines could not see either", async () => {
+    const src = `type Rows = Vec<u8>;\n\nfn f() {\n${"    x();\n".repeat(40)}}\n`;
+    const chunks = await chunkFile("t.rs", src);
+    const names = chunks.flatMap((c) => (c.symbol ?? "").split(",").map((s) => s.trim()));
+    expect(names).toContain("Rows");
+  });
+
   it("carries the markdown heading as symbol, nested under its parent", async () => {
     const md = ["# Title", ...Array(70).fill("text"), "## Second", ...Array(10).fill("more")].join("\n");
     const chunks = await chunkFile("doc.md", md);
@@ -147,6 +257,69 @@ describe("chunkFile", () => {
   it("leaves symbol unset for fixed-window (unparsed) chunks", async () => {
     const content = Array.from({ length: 150 }, (_, i) => `line ${i}`).join("\n");
     const chunks = await chunkFile("data.toml", content);
+    expect(chunks.every((c) => c.symbol === undefined)).toBe(true);
+  });
+
+  it("keeps a log record and the stack trace under it in one chunk", async () => {
+    // The case fixed windows get wrong: the query names the exception and the
+    // answer needs the frames, so a cut between them costs the answer.
+    const trace = (n: number) =>
+      [
+        `2026-09-08T14:${String(n).padStart(2, "0")}:00.123Z ERROR api.gateway request failed`,
+        "java.lang.IllegalStateException: pool exhausted",
+        ...Array.from({ length: 24 }, (_, f) => `\tat com.infino.Pool.acquire(Pool.java:${f + 1})`),
+        "Caused by: java.net.SocketTimeoutException: connect timed out",
+      ].join("\n");
+    const log = [0, 1, 2, 3].map(trace).join("\n") + "\n";
+
+    const chunks = await chunkFile("var/log/api.log", log);
+    // Every chunk that holds the exception line also holds frames from it, and
+    // no chunk starts mid-trace.
+    const holding = chunks.filter((c) => c.content.includes("pool exhausted"));
+    expect(holding.length).toBeGreaterThan(0);
+    for (const c of holding) {
+      expect(c.content).toContain("at com.infino.Pool.acquire");
+      expect(c.content).toContain("Caused by:");
+    }
+    for (const c of chunks) {
+      expect(c.content.trimStart().startsWith("at com.infino")).toBe(false);
+    }
+  });
+
+  it("carries the log level as the chunk's symbol", async () => {
+    const log = [
+      "2026-09-08T14:00:00Z INFO api.gateway listening on 9110",
+      "2026-09-08T14:00:01Z ERROR api.gateway mint failed",
+      "  dispatch failure",
+    ].join("\n");
+    const chunks = await chunkFile("api.log", log);
+    expect(chunks[0].lang).toBe("log");
+    // Both records land in one chunk at this size, so the symbol names both
+    // levels found in it - what a reader filters on.
+    expect(chunks[0].symbol).toContain("ERROR");
+  });
+
+  it("never splits a jsonl record across chunks", async () => {
+    // One record per line and no continuations, so every line is a boundary
+    // and a chunk is always a whole number of records.
+    const rows = Array.from(
+      { length: 200 },
+      (_, i) => JSON.stringify({ ts: `2026-09-08T14:00:${String(i % 60).padStart(2, "0")}Z`, level: "info", seq: i }),
+    );
+    const chunks = await chunkFile("events.ndjson", rows.join("\n") + "\n");
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const c of chunks) {
+      for (const line of c.content.split("\n")) {
+        if (line.trim() === "") continue;
+        expect(() => JSON.parse(line)).not.toThrow();
+      }
+    }
+  });
+
+  it("falls back to fixed windows for a log with no recognisable records", async () => {
+    const content = Array.from({ length: 150 }, (_, i) => `unstructured blather ${i}`).join("\n");
+    const chunks = await chunkFile("weird.log", content);
+    expect(chunks.length).toBeGreaterThan(1);
     expect(chunks.every((c) => c.symbol === undefined)).toBe(true);
   });
 });

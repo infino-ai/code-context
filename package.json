@@ -2,15 +2,15 @@
   "name": "@infino-ai/code-context",
   "version": "0.5.1",
   "mcpName": "io.github.infino-ai/code-context",
-  "description": "Local code search for AI coding agents: a CLI and MCP server with hybrid keyword + semantic search and SQL relevance-ranked aggregation over an index that lives in plain files. No accounts, no keys, no server.",
+  "description": "SuperGrep: retrieval subagents for Claude Sonnet. find/search/sql run locally over an index in plain files, no account needed; ask runs in the cloud over the same index's platform copy.",
   "license": "Apache-2.0",
-  "homepage": "https://github.com/infino-ai/code-context#readme",
+  "homepage": "https://github.com/infino-ai/supergrep#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/infino-ai/code-context.git"
+    "url": "git+https://github.com/infino-ai/supergrep.git"
   },
   "bugs": {
-    "url": "https://github.com/infino-ai/code-context/issues"
+    "url": "https://github.com/infino-ai/supergrep/issues"
   },
   "keywords": [
     "code-search",
@@ -39,7 +39,7 @@
     "dist"
   ],
   "engines": {
-    "node": ">=20"
+    "node": ">=22.19.0"
   },
   "publishConfig": {
     "access": "public"
@@ -55,8 +55,10 @@
     "@infino-ai/infino": "^0.5.10",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@vscode/tree-sitter-wasm": "^0.3.1",
+    "apache-arrow": "17.0.0",
     "commander": "^15.0.0",
     "ignore": "^7.0.9",
+    "undici": "^8.10.2",
     "zod": "^4.6.5"
   },
   "devDependencies": {

@@ -1,0 +1,144 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: Copyright The Infino Authors
+//
+// The account key on disk. Two things matter and neither is negotiable: the
+// file is only readable by its owner - on every write, including a rewrite of
+// a file that already existed with looser permissions - and the key's value
+// never appears in a message, a log line or a thrown error.
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  accountDir,
+  accountFilePath,
+  keyFilePath,
+  readStoredAccount,
+  readStoredKey,
+  removeStoredKey,
+  writeStoredAccount,
+  writeStoredKey,
+} from "../src/core/keystore.js";
+
+const KEY = "inf_0123456789abcdef_deadbeefdeadbeefdeadbeefdeadbeef";
+
+let dir: string;
+let warnings: string[];
+
+beforeEach(() => {
+  dir = join(mkdtempSync(join(tmpdir(), "cx-keystore-")), "account");
+  process.env.CX_ACCOUNT_DIR = dir;
+  warnings = [];
+  vi.spyOn(console, "error").mockImplementation((m: unknown) => {
+    warnings.push(String(m));
+  });
+});
+
+afterEach(() => {
+  delete process.env.CX_ACCOUNT_DIR;
+  vi.restoreAllMocks();
+});
+
+const modeOf = (path: string) => statSync(path).mode & 0o777;
+
+describe("the key file", () => {
+  it("round-trips the key and creates the directory", () => {
+    expect(readStoredKey()).toBeUndefined();
+    const path = writeStoredKey(KEY);
+    expect(path).toBe(keyFilePath());
+    expect(readStoredKey()).toBe(KEY);
+  });
+
+  it("is written 0600, in a 0700 directory", () => {
+    writeStoredKey(KEY);
+    expect(modeOf(keyFilePath())).toBe(0o600);
+    expect(modeOf(accountDir())).toBe(0o700);
+  });
+
+  it("tightens a key file that already existed with loose permissions", () => {
+    // The case the mode option alone does not cover: `mode` is honoured only
+    // on create, so a rewrite of a world-readable file would silently keep it.
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(keyFilePath(), "old\n");
+    chmodSync(keyFilePath(), 0o644);
+    writeStoredKey(KEY);
+    expect(modeOf(keyFilePath())).toBe(0o600);
+    expect(readStoredKey()).toBe(KEY);
+  });
+
+  it("never leaves the key in a temp file behind", () => {
+    writeStoredKey(KEY);
+    const strays = readFileSync(keyFilePath(), "utf8");
+    expect(strays.trim()).toBe(KEY);
+    // The write goes through `<key>.<pid>.cx-tmp`; nothing of ours survives it.
+    expect(() => statSync(`${keyFilePath()}.${process.pid}.cx-tmp`)).toThrow();
+  });
+
+  it("trims whitespace, so a file written by echo works", () => {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(keyFilePath(), `  ${KEY}  \n\n`, { mode: 0o600 });
+    expect(readStoredKey()).toBe(KEY);
+  });
+
+  it("reads an empty file as no key at all", () => {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(keyFilePath(), "   \n", { mode: 0o600 });
+    // An empty credential would reach the platform and come back as an opaque
+    // 401; absent is the truth and produces the sign-in message instead.
+    expect(readStoredKey()).toBeUndefined();
+  });
+
+  it("refuses to store an empty key", () => {
+    expect(() => writeStoredKey("   ")).toThrow(/empty/);
+  });
+
+  it("warns when the key file is readable by others, without printing the key", () => {
+    writeStoredKey(KEY);
+    chmodSync(keyFilePath(), 0o644);
+    expect(readStoredKey()).toBe(KEY);
+    expect(warnings.join("\n")).toContain("readable by other users");
+    expect(warnings.join("\n")).toContain("chmod 600");
+    expect(warnings.join("\n")).not.toContain(KEY);
+  });
+
+  it("stays quiet at 0600", () => {
+    writeStoredKey(KEY);
+    readStoredKey();
+    expect(warnings).toEqual([]);
+  });
+
+  it("forgets the key but keeps the platform URL, which is not a secret", () => {
+    writeStoredKey(KEY);
+    writeStoredAccount({ baseUrl: "https://platform.example", storedAt: "2026-09-08T00:00:00.000Z" });
+    expect(removeStoredKey()).toBe(true);
+    expect(readStoredKey()).toBeUndefined();
+    expect(readStoredAccount()?.baseUrl).toBe("https://platform.example");
+    expect(removeStoredKey()).toBe(false);
+  });
+});
+
+describe("the account file", () => {
+  it("round-trips the platform and console URLs", () => {
+    writeStoredAccount({
+      baseUrl: "https://platform.example",
+      consoleUrl: "https://console.example",
+      storedAt: "2026-09-08T00:00:00.000Z",
+    });
+    expect(readStoredAccount()).toEqual({
+      baseUrl: "https://platform.example",
+      consoleUrl: "https://console.example",
+      storedAt: "2026-09-08T00:00:00.000Z",
+    });
+    expect(accountFilePath()).toContain("account.json");
+  });
+
+  it("reads a file it did not write as no account, rather than refusing", () => {
+    mkdirSync(dir, { recursive: true });
+    for (const junk of ["not json", "[]", "null", JSON.stringify({ nothing: 1 })]) {
+      writeFileSync(accountFilePath(), junk);
+      // Regenerated by the next sign-in: refusing would strand the user on a
+      // file they never edited.
+      expect(readStoredAccount()).toBeUndefined();
+    }
+  });
+});

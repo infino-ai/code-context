@@ -1,26 +1,56 @@
 # FAQ
 
-### What is code-context?
+### What is SuperGrep?
 
-Local code search for AI coding agents: a CLI (`cx`) and an MCP server over a
-ranked index that lives in plain files inside your repo. It fuses keyword
-(BM25) and semantic search in one pass and exposes read-only SQL over the
-index, so an agent answers questions about the codebase without reading it
-file by file.
+Retrieval + inference offload for AI coding agents: four tools over an index
+kept in two places. `find` and plain `sql` run on your machine, over a keyword index that
+lives in plain files inside your repo. Anything with meaning in it - `search`,
+a `sql` statement with a ranked search inside it, and `ask` - runs in the
+Infino cloud over the same index's platform copy, where every embedding is
+computed, so the heavy compute stays off your laptop. `ask` hands the
+question to small models on the Infino service, which work the index at
+once and return the rows they found. Either way the point is the same: an
+agent answers questions about
+the codebase, or delegates its exploration, without reading it file by file.
+The package, the CLI (`cx`) and the MCP server are still named
+`code-context`.
 
 ### When should an agent use it instead of grep?
 
 The rule of thumb: the more a question spans the repo, the more the index
 saves. Use it for understanding how a subsystem works, finding code by
 meaning when you do not know the identifier, and ranking or aggregating
-across the whole repo. For jumping to one known symbol or literal string, a
-plain grep is already cheap and there is no need for an index.
+across the whole repo. For the grep case itself - every occurrence of a known
+symbol or literal string - `find` answers from the same index: every matching
+line, cited `path:line`, complete and unranked, with no file scanned.
 
 ### Does my code leave the machine?
 
-No. There are no accounts, no API keys, and no server. The embedding model is
-a small local model downloaded once from the public model hub; after that
-everything runs offline and code never leaves the machine.
+Not unless you ask it to. With a local-only install there are no accounts, no
+API keys and no server: `find` and plain `sql` run offline over the keyword
+index. The opt-in is an account (`install --platform`, or `--db`, next
+question), which also keeps the index in a database you own on the Infino
+platform; that is where embeddings are computed and where `search`, semantic
+`sql` and `ask` run.
+
+### Can the index also live on the Infino platform?
+
+Yes, and it is the same index. `cx index --db https://host/<database>
+--api-key-file <path>` builds the local index exactly as without the flag and
+then loads the same chunks into that database; every sync after it (the
+explicit `cx index`, or the MCP server's auto-sync as queries arrive) applies
+the same diff to both, so the two never drift. `find`, `search` and `sql`
+keep reading the local index. `cx mcp --db ...` adds one tool that runs on the
+platform copy: `ask`, which hands a question or task to the platform's
+retrieval agent and returns the rows it retrieved - exact `path:line` places
+with the code, plus counts and rankings - for the coding agent to compose
+from, never a written summary. By default the platform embeds its copy with
+its own model. Every
+platform setting is a command-line flag on `cx index` and `cx mcp` (`--db`,
+`--api-key-file`, `--embed-provider`, `--analyzer`, the timeouts, the tool
+caps); the key comes from a file or from `INFINO_API_KEY`, never from the
+command line. [The reference's flag table](reference.md#platform-flags) has
+every one.
 
 ### How fast is it usable after indexing starts?
 
@@ -32,18 +62,22 @@ reports that honestly rather than failing.
 
 ### Do I have to index before I can search?
 
-No. The first `search` or `sql` on a repo that has never been indexed builds
-the index inline and answers on that same call - keyword search is live in
-seconds, vectors backfill behind it. Call `reindex` first if you'd rather
+No. The first `find`, `search`, or `sql` on a repo that has never been indexed
+builds the index inline and answers on that same call - keyword search is live in
+seconds, vectors backfill behind it. Run `cx index` first if you'd rather
 kick the build off explicitly, or set `CX_AUTO_INDEX=0` to make an unindexed
-query return a "index it first" error instead of building.
+query return a "index it first" error instead of building. With `--db` the
+same first-query build also loads the platform copy, once the local stages
+are done.
 
 ### Can one server handle more than one repo?
 
-Yes. Each tool takes an optional `path` (an absolute repo root); omit it to
-use the server's startup root, or pass it to target a specific repo when a
-session spans several. One server instance serves them all, each with its own
-index in its own `.infino/`.
+For `find`, `search` and `sql`, yes: each takes an optional `path` (an
+absolute repo root); omit it to use the server's startup root, or pass it to
+target a specific repo when a session spans several, each with its own index
+in its own `.infino/`. `ask` is scoped to the one platform
+database the server was started with, since that database holds one
+repository's index; it refuses a `path` naming a different one.
 
 ### Where does the index live, and can I share it?
 
@@ -61,22 +95,47 @@ no-op. The MCP server also auto-syncs in the background as queries arrive.
 
 ### What happens on a repo too big to index fully?
 
-Indexing caps how many files it takes (`CX_MAX_FILES`, default 20,000); files
-past the cap are left out. When that happens the index is marked partial:
-every `search` and `sql` result carries a `partial` note with how many files
-were skipped and the cap in effect, so an agent treats a missing match as
-"maybe not indexed" rather than "not in the repo." `cx status` shows the same,
-and `cx search` prints a warning. Raise `CX_MAX_FILES` (CLI: `--max-files`)
-and re-index for full coverage.
+Indexing caps how many files it takes (`CX_MAX_FILES`, default 500,000); files
+past the cap are left out. The cap is not there to bound memory - chunks and
+vectors stream to disk, so nothing holds the tree at once - it is there so an
+`index` aimed at the wrong directory stops instead of reading everything it can
+reach. Half a million files is past any repository and past a laptop's own code
+and logs, so a corpus you meant to index goes in whole.
+
+When a tree does reach the cap, the index is marked partial and nothing about
+it is quiet: `cx index` prints a warning on that build and on every sync after
+it, naming the files skipped and the exact `--max-files` value that would
+cover the whole tree. `cx status` reports it, and every `find`, `search` and
+`sql` result carries a `partial` note with the files skipped and the cap in
+effect, so an agent treats a missing match as "maybe not indexed" rather than
+"not in the repo." Raise `CX_MAX_FILES` (CLI: `--max-files`) and re-index for
+full coverage.
 
 ### What tools does the MCP server expose?
 
-Three, by design: `search` (hybrid keyword + semantic retrieval, one ranked
-pass, hits carry chunk content with `path:line` ranges), `sql` (read-only
-`SELECT`/`WITH` over the index, with the ranked search functions usable as
-table-valued relations so search composes with `GROUP BY`), and `reindex`
-(incremental sync). Every additional near-duplicate retrieval tool worsens an
-agent's tool selection, so the surface is kept deliberately small.
+Four, one per question: `find` (every line containing an exact string, cited
+`path:line` like `grep -n`; complete and unranked, the grep replacement),
+`search` (hybrid keyword + semantic retrieval, one ranked pass, hits carry
+chunk content with `path:line` ranges), `sql` (read-only `SELECT`/`WITH`
+over the index, with the ranked search functions usable as table-valued
+relations so search composes with `GROUP BY`) and `ask` (a question that
+spans the repository, answered as the rows the service retrieved rather than
+as prose). `find` and plain `sql` run on your machine with no account;
+`search`, a `sql` with a ranked search in it, and `ask` run in the cloud over
+the same index's platform copy.
+
+Every near-duplicate retrieval tool worsens an agent's tool selection, so
+each of the four earns its place by answering a question none of the others
+does: `find` and `search` are not duplicates, one is complete and unranked,
+the other ranked and top-k; `ask` is not a fourth flavour of either, it
+hands the whole question to a loop that queries the index itself. There used
+to be a fifth, `explore`, which ran a long multi-turn loop on one question
+and returned a written answer; measured, several asks issued together were
+faster and cheaper, so it is gone. Among
+the local three there used to be another, `reindex`; measured, no Sonnet run
+ever called it, Haiku called it where it hurt, and every tool in the list is
+prompt text on every turn. The first query builds the index, every query re-syncs it, and
+`cx index --full` rebuilds from a shell.
 
 ### How is SQL over code useful?
 

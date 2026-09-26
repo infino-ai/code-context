@@ -9,7 +9,9 @@
 
 import { appendFileSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { jsonify, type SearchResult } from "./searcher.js";
+import { jsonify, hostedTelemetry, type FindResult, type RowFindResult, type RowHit, type RowSearchResult, type SearchResult } from "./searcher.js";
+import type { RetrievalAgentResult, RetrievalAgentSpend } from "./retrieval-agent.js";
+import type { HostedDb } from "./hosted.js";
 
 /** Rough tokens-per-char - the standard heuristic for English + code. Kept
  * deliberately simple: usage reports `~` figures, not a billed count. */
@@ -38,18 +40,60 @@ export const receiptEnabled = (): boolean =>
  * it doesn't duplicate the repo. */
 export interface UsageEntry {
   ts: string;
-  tool: "search" | "sql";
+  /** The tool as the model saw it. `subagent` is the name `ask` had before,
+   * and `explore` a second platform tool that was removed once measurement
+   * showed several asks issued together beat its loop; both appear in older
+   * ledgers only, and nothing writes either now. */
+  tool: "find" | "search" | "sql" | "read" | "card" | "ask" | "answer" | "explore" | "subagent";
   query: string;
   returnedTokens: number;
   /** search only: whole-file size of the distinct files the hits came from. */
   wholeFileTokens?: number | null;
   ranking?: "hybrid" | "keyword";
-  /** search only: the response, as the regions you'd jump to. */
+  /** search and find: the response, as the regions you'd jump to (a find
+   * match is a single line, so its start and end are the same). */
   hits?: Array<{ path: string; startLine: number; endLine: number }>;
+  /** find only: matching lines across the repo, before the limit. */
+  matches?: number;
+  /** search and find over the rows of a hosted table of another shape (the
+   * MCP server's CX_REMOTE_SEARCH against a table that is not the chunks
+   * table): the table, so a reader of the ledger knows `hits` are its rows -
+   * each row's key where a chunk's path goes, and no line span - and not
+   * places in a repository. */
+  table?: string;
   /** sql only. */
   rows?: number;
   /** sql only: a truncated preview of the returned rows (the answer itself). */
   rowsPreview?: string;
+  /** ask: what the platform's agent spent on the question - its turns, and
+   * the model tokens the platform metered for the call (prompt and
+   * completion together, every model call of the loop; the platform bills
+   * this number and reports no more of its costs). The receipt shows them,
+   * the tool result does not. */
+  agentTurns?: number;
+  agentInferenceTokens?: number;
+  /** Where the platform's own time on an ask went, as it reported it: its
+   * model calls and its retrieval, in milliseconds - the split its two
+   * charge lines are made of. Absent when the platform did not say. */
+  agentModelMs?: number;
+  agentRetrievalMs?: number;
+  /** ask: whether the platform ranked the facts against the question. */
+  agentRanked?: boolean;
+  /** answer: the model that wrote the answer on the platform, as its
+   * coverage named it, and how long the writing took - so a run's ledger
+   * says who wrote each answer rather than leaving it to the config. */
+  agentWriter?: string;
+  agentWriteMs?: number;
+  /** ask: the platform's account of an audit that could not run, when the
+   * answer stands unaudited; absent when the audit ran. */
+  agentUnaudited?: string;
+  /** Written by the removed `explore` tool; read only from older ledgers. */
+  agentAnswered?: boolean;
+  /** ask: what the platform call behind this entry cost on
+   * the wire - the round trip of the answering request and the read/write
+   * tokens the platform metered (from its response headers, when present).
+   * Lives in the ledger, never in the tool result. */
+  platform?: { rttMs: number; readTokens?: number; writeTokens?: number };
 }
 
 /** Best-effort sum of the on-disk size (as tokens) of the distinct files the
@@ -84,6 +128,84 @@ export function searchEntry(result: SearchResult, root: string): UsageEntry {
   };
 }
 
+/** A find returns one line per match, so what it cost is the serialized
+ * matches themselves; the whole-file counterfactual is search's and does not
+ * apply - grep never read the files whole either.
+ *
+ * `counted` is the `-c` / count mode, where the caller gets the per-file
+ * counts and NOT the match list. Pricing the list there overstated the cost by
+ * the whole payload that was never printed - measured at "~21.4k tokens" for
+ * 49 lines of counts - and a receipt is only worth having if it is the thing
+ * that was returned. The mode has to be passed in because the result carries
+ * both shapes and cannot know which the caller rendered. */
+export function findEntry(result: FindResult, counted = false): UsageEntry {
+  const returned = counted ? jsonify(result.byFile) : jsonify(result.matches);
+  return {
+    ts: new Date().toISOString(),
+    tool: "find",
+    query: result.query,
+    returnedTokens: estTokens(returned),
+    // The places a caller would jump to. In count mode there are none: a
+    // per-file count is not a location, and claiming one line per file would
+    // put a line number on the receipt that the caller never saw.
+    ...(counted ? {} : { hits: result.matches.map((m) => ({ path: m.path, startLine: m.line, endLine: m.line })) }),
+    matches: result.total,
+  };
+}
+
+/** The line span recorded for a row: a row has no lines, and 0 is never a
+ * line number, so it reads as "none" rather than as line zero. */
+const NO_LINE = 0;
+
+/** A row hit as the ledger records a place: its key stands where a chunk's
+ * path does, since it is what a reader would look the row up by. */
+const rowPlace = (hit: RowHit, key: string) => ({ path: String(hit[key] ?? ""), startLine: NO_LINE, endLine: NO_LINE });
+
+/** A search over a hosted table's rows: what it cost is the hits serialized,
+ * since a row hit has no single content cell, and what it points at is each
+ * row's key. No whole-file counterfactual - the rows came from no file. The
+ * platform's metered tokens ride on the entry through `withPlatform`, as
+ * they do for a hosted chunks search. */
+export function rowSearchEntry(result: RowSearchResult): UsageEntry {
+  return {
+    ts: new Date().toISOString(),
+    tool: "search",
+    query: result.query,
+    returnedTokens: estTokens(jsonify(result.hits)),
+    ranking: result.ranking,
+    hits: result.hits.map((h) => rowPlace(h, result.key)),
+    table: result.table,
+  };
+}
+
+/** A find over a hosted table's rows: the matches serialized, each row's key
+ * as its place, and the table-wide total as `matches` - the count is what
+ * was counted, as it is for lines. */
+export function rowFindEntry(result: RowFindResult): UsageEntry {
+  return {
+    ts: new Date().toISOString(),
+    tool: "find",
+    query: result.query,
+    returnedTokens: estTokens(jsonify(result.matches)),
+    hits: result.matches.map((h) => rowPlace(h, result.key)),
+    matches: result.total,
+    table: result.table,
+  };
+}
+
+/** A read returns the numbered lines of the files named, so what it cost is
+ * those lines, and what it points at is each file's span. The files are the
+ * query, since a read has no other. */
+export function readEntry(files: Array<{ path: string; from: number; to: number; lines: string }>): UsageEntry {
+  return {
+    ts: new Date().toISOString(),
+    tool: "read",
+    query: files.map((f) => f.path).join(", "),
+    returnedTokens: files.reduce((n, f) => n + estTokens(f.lines), 0),
+    hits: files.map((f) => ({ path: f.path, startLine: f.from, endLine: f.to })),
+  };
+}
+
 const ROWS_PREVIEW_CAP = 2000;
 
 export function sqlEntry(query: string, rows: Array<Record<string, unknown>>): UsageEntry {
@@ -96,6 +218,55 @@ export function sqlEntry(query: string, rows: Array<Record<string, unknown>>): U
     rows: rows.length,
     rowsPreview: serialized.length > ROWS_PREVIEW_CAP ? serialized.slice(0, ROWS_PREVIEW_CAP) + "..." : serialized,
   };
+}
+
+/** A card call returns the table's description, so what it cost the caller
+ * is that serialized. It retrieves no code, so it records no places and no
+ * rows: a card is not a hit, and counting it as one would put a saving on
+ * the receipt that no file backs. */
+export function cardEntry(card: Record<string, unknown>): UsageEntry {
+  return {
+    ts: new Date().toISOString(),
+    tool: "card",
+    query: String(card.table ?? ""),
+    returnedTokens: estTokens(jsonify(card)),
+  };
+}
+
+/** An ask call returns facts - the statement, the hits and the aggregate
+ * rows - so what it cost the outer agent is those serialized (an explore
+ * call's written answer included); the hits are recorded as places like a
+ * search's, and the loop's own spend (turns, tokens) is the platform's meter
+ * and rides beside them in the ledger. `tool` names which of the two tools
+ * made the call. */
+export function subagentEntry(result: RetrievalAgentResult, spend: RetrievalAgentSpend, tool: "ask" | "explore" | "answer" = "ask"): UsageEntry {
+  return {
+    ts: new Date().toISOString(),
+    tool,
+    query: result.question,
+    returnedTokens: estTokens(jsonify({ answer: result.answer, sql: result.sql, hits: result.hits, rows: result.rows })),
+    hits: result.hits.map((h) => ({ path: h.path, startLine: h.startLine, endLine: h.endLine })),
+    rows: result.rows.length,
+    agentTurns: result.turns,
+    // The count the platform bills inference on, under the platform's own
+    // name for it; the demo's charge reads this field first.
+    agentInferenceTokens: spend.modelTokens,
+    ...(result.timing ? { agentModelMs: result.timing.modelMs, agentRetrievalMs: result.timing.retrievalMs } : {}),
+    ...(result.coverage?.ranked ? { agentRanked: true } : {}),
+    ...(result.coverage?.answer ? { agentWriter: result.coverage.answer.model, agentWriteMs: result.coverage.answer.ms } : {}),
+    ...(result.unaudited ? { agentUnaudited: result.unaudited } : {}),
+  };
+}
+
+/** Attach the platform telemetry of the call that answered this entry's
+ * question (its round trip and the tokens the platform metered) - read right
+ * after the call, while the client's last call is that one. A no-op without a
+ * platform client. Ledger-only: neither the receipt nor the tool result the
+ * model sees carries it. */
+export function withPlatform(entry: UsageEntry, source: { hosted?: HostedDb }): UsageEntry {
+  const platform = hostedTelemetry(source);
+  if (platform) entry.platform = platform;
+  return entry;
 }
 
 // --- the one-line receipt ----------------------------------------------------
@@ -111,7 +282,11 @@ const plural = (n: number, one: string, many: string): string => `${n} ${n === 1
  * Mutates and appends the running total when a session is supplied. */
 export function formatReceipt(entry: UsageEntry, session?: SessionUsage): string {
   const parts: string[] = [];
-  if (entry.tool === "search") {
+  if (entry.table !== undefined && (entry.tool === "search" || entry.tool === "find")) {
+    // Rows of a hosted table: there are no files to count, and a find's
+    // count is the table-wide total, as it is the repo-wide one for lines.
+    parts.push(`returned ~${fmtTokens(entry.returnedTokens)} tokens | ${plural(entry.matches ?? entry.hits?.length ?? 0, "row", "rows")}`);
+  } else if (entry.tool === "search") {
     const hits = entry.hits ?? [];
     const files = new Set(hits.map((h) => h.path)).size;
     // Just what was returned - no "vs whole file" counterfactual here: it's an
@@ -119,6 +294,23 @@ export function formatReceipt(entry: UsageEntry, session?: SessionUsage): string
     // it after every response. The raw wholeFileTokens still lives in the entry
     // for anyone who wants to reason about it from the ledger.
     parts.push(`returned ~${fmtTokens(entry.returnedTokens)} tokens | ${plural(hits.length, "chunk", "chunks")} / ${plural(files, "file", "files")}`);
+  } else if (entry.tool === "find") {
+    const hits = entry.hits ?? [];
+    const files = new Set(hits.map((h) => h.path)).size;
+    // The repo-wide count, not just the lines returned: a cut result still
+    // tells the reader how many matches exist.
+    parts.push(`returned ~${fmtTokens(entry.returnedTokens)} tokens | ${plural(entry.matches ?? hits.length, "match", "matches")} / ${plural(files, "file", "files")}`);
+  } else if (entry.tool === "read") {
+    const files = new Set((entry.hits ?? []).map((h) => h.path)).size;
+    parts.push(`returned ~${fmtTokens(entry.returnedTokens)} tokens | ${plural(files, "file", "files")}`);
+  } else if (entry.tool === "ask" || entry.tool === "answer" || entry.tool === "subagent" || entry.tool === "explore") {
+    // What came back, then the inner agent's spend beside it: the platform
+    // bills the model tokens, so the caller sees what one question cost there.
+    const hits = entry.hits ?? [];
+    parts.push(
+      `returned ~${fmtTokens(entry.returnedTokens)} tokens | ${plural(hits.length, "hit", "hits")} / ${plural(entry.rows ?? 0, "row", "rows")} | ` +
+        `${plural(entry.agentTurns ?? 0, "turn", "turns")} | ${fmtTokens(entry.agentInferenceTokens ?? 0)} inference tokens`,
+    );
   } else {
     parts.push(`returned ~${fmtTokens(entry.returnedTokens)} tokens | ${plural(entry.rows ?? 0, "row", "rows")}`);
   }
@@ -197,6 +389,20 @@ export interface PromptStats {
   promptsWithCx: number;
   /** transient: has the current prompt already used code-context. */
   curPromptUsedCx: boolean;
+  /** code-context invocations by tool (`find`, `search`, `sql`): which door
+   * the agent actually walks through. Absent on stats files written before
+   * it was recorded. */
+  cxCallsByTool?: Record<string, number>;
+  /** The first tool the agent called in each prompt, counted by name - a
+   * code-context tool by its short name, anything else (Grep, Read, Bash)
+   * by the name the hook delivered. This is the selection signal: whether a
+   * grep-shaped prompt opens with `find` or with Grep. Only the tools the
+   * PostToolUse hook is configured to forward are visible, so with the
+   * default `mcp__code-context.*` matcher it records code-context tools
+   * only; widen the matcher to see the rest. Absent on older stats files. */
+  firstToolByPrompt?: Record<string, number>;
+  /** transient: has the current prompt's first tool call been recorded. */
+  curPromptFirstToolSeen?: boolean;
 }
 
 /** The shape Claude Code delivers to a hook command on stdin (subset we use). */
@@ -210,6 +416,21 @@ export interface HookPayload {
 /** A tool name is code-context's when it's one of our MCP tools - matches the
  * default server and any renamed variant (e.g. code-context-local). */
 const isCodeContextTool = (name?: string): boolean => !!name && /^mcp__code[-_]?context/i.test(name);
+
+/** The short tool name inside a code-context MCP tool id:
+ * `mcp__code-context__find` -> `find`, `mcp__code-context-dev__sql` -> `sql`.
+ * The server segment may carry a suffix, so the split is on the last `__`. */
+export function codeContextToolName(name: string): string {
+  const at = name.lastIndexOf("__");
+  return at >= 0 ? name.slice(at + 2) : name;
+}
+
+/** Add one to `counts[key]`, creating the map or the key as needed. */
+function bump(counts: Record<string, number> | undefined, key: string): Record<string, number> {
+  const out = counts ?? {};
+  out[key] = (out[key] ?? 0) + 1;
+  return out;
+}
 
 const MAX_SESSIONS = 25;
 
@@ -235,10 +456,14 @@ function savePromptStats(indexDir: string, all: Record<string, PromptStats>): vo
   }
 }
 
-/** Fold one Claude Code hook event into the local counters. Best-effort. */
+/** Fold one Claude Code hook event into the local counters. Best-effort.
+ * Every PostToolUse event counts toward the first-tool-per-prompt tally
+ * (whatever tools the hook matcher forwards); only code-context's own tools
+ * count as invocations. */
 export function recordHookEvent(indexDir: string, payload: HookPayload): void {
   const event = payload.hook_event_name ?? "";
-  const tracked = event === "UserPromptSubmit" || (event === "PostToolUse" && isCodeContextTool(payload.tool_name));
+  const isCx = event === "PostToolUse" && isCodeContextTool(payload.tool_name);
+  const tracked = event === "UserPromptSubmit" || (event === "PostToolUse" && !!payload.tool_name);
   if (!tracked) return;
 
   const sid = payload.session_id ?? "unknown";
@@ -250,11 +475,23 @@ export function recordHookEvent(indexDir: string, payload: HookPayload): void {
   if (event === "UserPromptSubmit") {
     s.prompts++;
     s.curPromptUsedCx = false;
+    s.curPromptFirstToolSeen = false;
   } else {
-    s.cxCalls++;
-    if (!s.curPromptUsedCx && s.prompts > 0) {
-      s.promptsWithCx++;
-      s.curPromptUsedCx = true;
+    const rawName = payload.tool_name ?? "";
+    const label = isCx ? codeContextToolName(rawName) : rawName;
+    // The first tool of a prompt is the selection signal; a call that lands
+    // before any prompt was seen has no prompt to belong to and is not counted.
+    if (!s.curPromptFirstToolSeen && s.prompts > 0) {
+      s.firstToolByPrompt = bump(s.firstToolByPrompt, label);
+      s.curPromptFirstToolSeen = true;
+    }
+    if (isCx) {
+      s.cxCalls++;
+      s.cxCallsByTool = bump(s.cxCallsByTool, label);
+      if (!s.curPromptUsedCx && s.prompts > 0) {
+        s.promptsWithCx++;
+        s.curPromptUsedCx = true;
+      }
     }
   }
   s.lastAt = now;

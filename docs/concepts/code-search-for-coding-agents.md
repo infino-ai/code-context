@@ -3,7 +3,11 @@
 A coding agent answers a question about a codebase in one of two ways. It can
 crawl (glob, grep, then read whole files into the context window until it has
 enough to answer), or it can retrieve (ask a ranked index for the most
-relevant code and read only that). code-context is the retrieval path.
+relevant code and read only that). SuperGrep is the retrieval path, and it
+offers it two ways: `find`, `search` and `sql` for the agent to retrieve
+itself against a local index, and `ask` to hand the retrieval to a
+subagent entirely, over the same index's platform copy, so the exploration
+never enters the caller's own context at all.
 
 ## Why crawling is expensive
 
@@ -27,19 +31,25 @@ files read one at a time.
   chunks do not show.
 - **Aggregation** ("which files have the most code about X", "tally the
   codebase by language"): search composed with SQL `GROUP BY` computes the
-  answer in one engine pass. File tools have no equivalent at any budget,
-  because they would have to read the whole repo to tally it.
+  answer in one engine pass, where file tools would have to read the whole
+  repo to tally it. That is a cost win, not a quality one: on a blind judge
+  this is the category the retrieval path loses hardest, because a total over
+  a ranked search is a fact about that query rather than about the
+  repository, and the judge marks the gap - see
+  [tradeoffs](../tradeoffs.md#the-quality-gap-is-real-and-it-is-not-close).
 - **Finding by meaning**: the semantic half matches renamed symbols and
   paraphrases, so "where is auth handled" works without knowing the exact
   identifier.
 
-## Where crawling still wins
+## Pinpoint lookups
 
 Jumping to one known symbol or literal string is a single grep's job, and
-there an index does not save tokens: the grep returns one line, while ranked
-search returns content the agent did not need for a path. code-context routes
-this correctly (its tool descriptions tell an agent to prefer native grep for
-pinpoint lookups) and reaches for the index when a question spans files.
+ranked search does not save tokens there: it returns content the agent did
+not need for a path. SuperGrep answers that question with `find` instead:
+every line containing the exact text, cited `path:line`, from the index's
+token match plus a per-line check, so it returns grep's one-line-per-match
+shape without scanning a file. The ranked tools are reached for when a
+question spans files.
 
 ## Hybrid, not just semantic
 
@@ -51,12 +61,14 @@ between; one search covers both.
 
 ## Local, in files, always fresh
 
-The index lives in plain files inside the repo (`.infino/`), built and queried
-in-process with a local embedding model. Keyword search is live seconds after
-indexing starts; vectors backfill in the background; and edits re-sync
-incrementally, so the index tracks the working tree without anyone asking. No
-accounts, no keys, no server.
+The local index lives in plain files inside the repo (`.infino/`), built and
+queried in-process with a local embedding model - no accounts, no keys, no
+server. Keyword search is live seconds after indexing starts; vectors
+backfill in the background; and edits re-sync incrementally, so the index
+tracks the working tree without anyone asking. With `--db` the same chunks
+also load into a platform database, kept in sync the same way, where
+`ask` runs; that half needs a bearer key and is billed by the
+platform.
 
-See the [benchmark](../benchmark.md) for measured token and tool-call
-differences on real agent runs, and [tradeoffs](../tradeoffs.md) for the
-honest limits.
+See the [README](../../README.md#the-numbers) for measured cost and quality
+on real agent runs, and [tradeoffs](../tradeoffs.md) for the honest limits.

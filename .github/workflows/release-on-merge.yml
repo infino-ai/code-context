@@ -22,19 +22,19 @@ jobs:
     name: Tag and publish the GitHub release
     runs-on: ubuntu-latest
     if: >-
-      github.repository == 'infino-ai/code-context' &&
+      github.repository == 'infino-ai/supergrep' &&
       github.event.pull_request.merged == true &&
       startsWith(github.event.pull_request.head.ref, 'release-')
     timeout-minutes: 5
     steps:
-      - name: Mint release-App token scoped to code-context
+      - name: Mint release-App token scoped to supergrep
         id: token
         uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ vars.RELEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
           owner: infino-ai
-          repositories: code-context
+          repositories: supergrep
 
       # Check out the merge commit itself: its package.json is the version
       # this release ships, and the tag must point exactly at it.

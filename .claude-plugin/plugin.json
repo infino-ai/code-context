@@ -1,7 +1,7 @@
 {
   "name": "code-context",
-  "description": "Local hybrid keyword + semantic search and SQL over your codebase, for coding agents.",
+  "description": "SuperGrep: retrieval subagents for Claude Sonnet - find/search/sql locally, ask over the platform copy in the cloud.",
   "version": "0.5.1",
   "author": { "name": "Infino AI" },
-  "homepage": "https://github.com/infino-ai/code-context"
+  "homepage": "https://github.com/infino-ai/supergrep"
 }
