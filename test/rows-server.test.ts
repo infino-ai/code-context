@@ -183,6 +183,8 @@ describe("a table of another shape, described at startup, with answer switched o
     expect(byName.get("sql")).toContain("'validation'");
     expect(byName.get("search")).toContain("cite a row by its id");
     expect(byName.get("find")).toContain(`Every row of ${JOBS_TABLE}`);
+    // A table of rows has no files to read: no read tool on this surface.
+    expect(byName.has("read")).toBe(false);
     expect(byName.get("ask")).toContain(`the ${JOBS_TABLE} table's index`);
     // The facts of ask are rows, cut to snippets, never hits.
     expect(byName.get("ask")).toContain("returns the rows it found, never hits");

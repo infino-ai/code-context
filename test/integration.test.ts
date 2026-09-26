@@ -7,7 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { connect } from "@infino-ai/infino";
 import { indexRepo, indexRepoStaged, syncRepo } from "../src/core/indexer.js";
 import { readManifest } from "../src/core/manifest.js";
-import { analyzerOf, analyzerTokens, cutFindMatches, find, plainTerms, runSql, search } from "../src/core/searcher.js";
+import { analyzerOf, analyzerTokens, cutFindMatches, find, plainTerms, readFiles, READ_LINES_CAP, runSql, search } from "../src/core/searcher.js";
 import { TABLE } from "../src/core/config.js";
 import type { IndexHandle } from "../src/core/context.js";
 import type { Embedder } from "../src/core/embedder.js";
@@ -380,6 +380,49 @@ describe("find", () => {
     const std = { ...handle, manifest: { ...handle.manifest, analyzer: "standard" as const } };
     expect((await find(std, "Süd")).total).toBe(0);
     await expect(find(std, "->")).rejects.toThrow(/standard analyzer keeps none/);
+  });
+});
+
+describe("read", () => {
+  it("returns every file named in one call, numbered from the index, a miss beside the others", async () => {
+    const files = await readFiles(handle, ["src/auth.ts", "src/storage.ts", "nowhere.ts"]);
+    expect(files.map((f) => f.path)).toEqual(["src/auth.ts", "src/storage.ts", "nowhere.ts"]);
+    const auth = files[0] as { lines: string; from: number; to: number; total: number };
+    expect(auth.from).toBe(1);
+    expect(auth.lines.split("\n")[0]).toBe("1: // Session tokens and verification.");
+    expect(auth.lines).toContain("2: export function verifySession(token: string): boolean {");
+    expect(auth.to).toBe(auth.total);
+    const storage = files[1] as { lines: string };
+    expect(storage.lines).toContain("3: export function replayLog(): number { return 42; }");
+    expect(files[2]).toEqual({ path: "nowhere.ts", error: "not in the index" });
+  });
+
+  it("stitches overlapping windows so a line appears once, and cuts to a range", async () => {
+    const [notes] = (await readFiles(handle, ["notes.txt"])) as Array<{ lines: string; total: number; more?: unknown }>;
+    // Line 55 is in two windows of the fixed-window chunking; once here.
+    expect(notes.lines.split("\n").filter((l) => l.includes("OVERLAP_MARK"))).toHaveLength(1);
+    expect(notes.total).toBe(130);
+    expect(notes.more).toBeUndefined();
+    const [range] = (await readFiles(handle, ["notes.txt"], { from: 20, to: 22 })) as Array<{ lines: string; from: number; to: number }>;
+    expect(range.from).toBe(20);
+    expect(range.to).toBe(22);
+    expect(range.lines.split("\n")).toEqual(["20: parse_config(Path) ABC-123 x.y Süd ok", "21: filler 21", "22: filler 22"]);
+    await expect(readFiles(handle, ["notes.txt"], { from: 5, to: 2 })).rejects.toThrow(/before/);
+  });
+
+  it("pages a long file at the line cap and says where the next page starts", async () => {
+    const long = Array.from({ length: READ_LINES_CAP + 50 }, (_, i) => `row ${i + 1}`);
+    writeFileSync(join(root, "long.txt"), long.join("\n") + "\n");
+    await syncRepo({ root, db: handle.db, indexDirPath: dir, embedder: fakeEmbedder });
+    const [page] = (await readFiles(handle, ["long.txt"])) as Array<{ from: number; to: number; total: number; more?: { from: number }; lines: string }>;
+    expect(page.from).toBe(1);
+    expect(page.to).toBe(READ_LINES_CAP);
+    expect(page.more).toEqual({ from: READ_LINES_CAP + 1 });
+    expect(page.lines.split("\n")).toHaveLength(READ_LINES_CAP);
+    const [rest] = (await readFiles(handle, ["long.txt"], { from: READ_LINES_CAP + 1 })) as Array<{ from: number; to: number; more?: unknown }>;
+    expect(rest.from).toBe(READ_LINES_CAP + 1);
+    expect(rest.to).toBe(READ_LINES_CAP + 50);
+    expect(rest.more).toBeUndefined();
   });
 });
 

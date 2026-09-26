@@ -44,7 +44,7 @@ export interface UsageEntry {
    * and `explore` a second platform tool that was removed once measurement
    * showed several asks issued together beat its loop; both appear in older
    * ledgers only, and nothing writes either now. */
-  tool: "find" | "search" | "sql" | "card" | "ask" | "answer" | "explore" | "subagent";
+  tool: "find" | "search" | "sql" | "read" | "card" | "ask" | "answer" | "explore" | "subagent";
   query: string;
   returnedTokens: number;
   /** search only: whole-file size of the distinct files the hits came from. */
@@ -193,6 +193,19 @@ export function rowFindEntry(result: RowFindResult): UsageEntry {
   };
 }
 
+/** A read returns the numbered lines of the files named, so what it cost is
+ * those lines, and what it points at is each file's span. The files are the
+ * query, since a read has no other. */
+export function readEntry(files: Array<{ path: string; from: number; to: number; lines: string }>): UsageEntry {
+  return {
+    ts: new Date().toISOString(),
+    tool: "read",
+    query: files.map((f) => f.path).join(", "),
+    returnedTokens: files.reduce((n, f) => n + estTokens(f.lines), 0),
+    hits: files.map((f) => ({ path: f.path, startLine: f.from, endLine: f.to })),
+  };
+}
+
 const ROWS_PREVIEW_CAP = 2000;
 
 export function sqlEntry(query: string, rows: Array<Record<string, unknown>>): UsageEntry {
@@ -287,6 +300,9 @@ export function formatReceipt(entry: UsageEntry, session?: SessionUsage): string
     // The repo-wide count, not just the lines returned: a cut result still
     // tells the reader how many matches exist.
     parts.push(`returned ~${fmtTokens(entry.returnedTokens)} tokens | ${plural(entry.matches ?? hits.length, "match", "matches")} / ${plural(files, "file", "files")}`);
+  } else if (entry.tool === "read") {
+    const files = new Set((entry.hits ?? []).map((h) => h.path)).size;
+    parts.push(`returned ~${fmtTokens(entry.returnedTokens)} tokens | ${plural(files, "file", "files")}`);
   } else if (entry.tool === "ask" || entry.tool === "answer" || entry.tool === "subagent" || entry.tool === "explore") {
     // What came back, then the inner agent's spend beside it: the platform
     // bills the model tokens, so the caller sees what one question cost there.

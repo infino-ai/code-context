@@ -816,6 +816,93 @@ export function guardSql(sql: string): string {
   return stripped;
 }
 
+/** The most lines one file returns in one read; past it the result says
+ * where the next page starts. Four hundred is a whole source file most of
+ * the time and a bounded page of a long one. */
+export const READ_LINES_CAP = 400;
+/** The most characters of numbered lines one read returns across its files;
+ * a file past it comes back as its line count alone, to be read in its own
+ * call. The same size as a sql result's budget. */
+export const READ_CHAR_BUDGET = 24_000;
+
+export interface ReadFileResult {
+  path: string;
+  /** The first and last line returned. */
+  from: number;
+  to: number;
+  /** The lines, each numbered with its line in the file. Empty past the
+   * result budget, with `note` saying so. */
+  lines: string;
+  /** The file's last line as the index holds it. */
+  total: number;
+  /** Set when the range asked for goes past the page: where to read next. */
+  more?: { from: number };
+  note?: string;
+}
+export interface ReadFileMiss {
+  path: string;
+  error: string;
+}
+
+/** The lines of the files named, from the index rather than the disk - the
+ * same numbered lines a search hit carries, for whole files at once: what
+ * a caller does after the index has named the files it wants, in one call
+ * rather than one read per file. Chunks are stitched by line number, so a
+ * line in two overlapping windows appears once. `from`/`to` cut every file
+ * to a line range; a file over READ_LINES_CAP lines comes back a page at a
+ * time with `more`. A path the index does not hold is a miss beside the
+ * others, never a failure of the call. */
+export async function readFiles(
+  handle: IndexHandle,
+  paths: string[],
+  opts: { from?: number; to?: number } = {},
+): Promise<Array<ReadFileResult | ReadFileMiss>> {
+  const from = Math.max(1, opts.from ?? 1);
+  const to = opts.to ?? Number.MAX_SAFE_INTEGER;
+  if (to < from) throw new Error(`to (${to}) is before from (${from})`);
+  const db = localDb(handle);
+  const files = await Promise.all(
+    paths.map(async (path): Promise<ReadFileResult | ReadFileMiss> => {
+      const rows = db.querySql(
+        `SELECT start_line, ${CONTENT_COLUMN} FROM ${TABLE} WHERE path = ${sqlLiteral(path)} ORDER BY start_line`,
+      ) as Array<Record<string, unknown>>;
+      if (rows.length === 0) return { path, error: "not in the index" };
+      const byLine = new Map<number, string>();
+      for (const row of rows) {
+        const start = Number(row.start_line);
+        String(row[CONTENT_COLUMN] ?? "")
+          .split("\n")
+          .forEach((text, i) => {
+            if (!byLine.has(start + i)) byLine.set(start + i, text);
+          });
+      }
+      const numbers = [...byLine.keys()].sort((a, b) => a - b);
+      const total = numbers[numbers.length - 1];
+      const wanted = numbers.filter((n) => n >= from && n <= to);
+      const page = wanted.slice(0, READ_LINES_CAP);
+      const lines = page.map((n) => `${n}${LINE_NUMBER_SEPARATOR}${byLine.get(n)}`).join("\n");
+      const last = page[page.length - 1] ?? from;
+      return {
+        path,
+        from: page[0] ?? from,
+        to: last,
+        lines,
+        total,
+        ...(wanted.length > page.length ? { more: { from: last + 1 } } : {}),
+      };
+    }),
+  );
+  // Held to the result budget across the files, in order: the first file is
+  // always whole, and a file past the budget keeps its span and count only.
+  let chars = 0;
+  return files.map((f, i) => {
+    if ("error" in f) return f;
+    chars += f.lines.length;
+    if (i === 0 || chars <= READ_CHAR_BUDGET) return f;
+    return { ...f, lines: "", note: "past the result budget - read it in its own call, or a range of it with from and to" };
+  });
+}
+
 export async function runSql(
   handle: IndexHandle,
   embedder: Embedder | null,

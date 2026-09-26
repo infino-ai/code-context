@@ -139,6 +139,8 @@ import {
   search,
   searchHosted,
   searchRows,
+  readFiles,
+  READ_LINES_CAP,
   runSql,
   runSqlRows,
   embedsAQuery,
@@ -154,6 +156,7 @@ import {
   cardEntry,
   findEntry,
   rowFindEntry,
+  readEntry,
   searchEntry,
   rowSearchEntry,
   sqlEntry,
@@ -425,8 +428,8 @@ export const BATCH_MAX = 16;
  * instructions and the three tools' own text. */
 export const CALLS_TOGETHER =
   "Independent calls go in one reply, never one per turn: several finds, searches or statements as one " +
-  "call with queries, or side by side; and once the index has named the files, read them together in " +
-  "one reply rather than one at a time.";
+  "call with queries, or side by side; and once the index has named the files, read them with read, " +
+  "every path in one call, never one Read per file.";
 
 /** The fan-out as a preference, not a permission. "Spawn several in
  * parallel for independent questions" said the parallel call was allowed;
@@ -1658,6 +1661,7 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
         "Ranking files by how much of them is about a topic goes through hybrid_search, not bm25, when the " +
         "topic is a concept; a total over a search relation is the top k's matched lines, never a file's " +
         "length - sizes and whole-repo counts come from the chunks table with no search function.\n" +
+        "- read - the numbered lines of the files the index named, several paths in one call; a range with from and to.\n" +
         indexFirst(agentTools, TABLE) +
         "\n" +
         SWEEP_TO_A_TOOL +
@@ -1669,7 +1673,7 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
         "from those numbers and only where the thing you name sits - never the hit's whole line " +
         "range, which spans the chunk. " +
         CITE_EXACTLY +
-        " Read a file only for a hit marked truncated. " +
+        " Read files with read, every path in one call; Claude's own Read only for a hit marked truncated. " +
         "Every tool takes an optional 'path' (an absolute repo root) to target another repository. " +
         "A 'partial' marker means files over the index cap were left out, so a missing match is not " +
         "proof of absence.") +
@@ -2160,6 +2164,75 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
       }
     }),
   );
+
+  // The files the index named, read from the index: several in one call.
+  // Measured on the live demo (2026-09-26): after find and ask had named
+  // the files, the caller read them with its own Read one per turn, each
+  // turn re-sending the transcript. A rows table has no files to read.
+  if (!rows) {
+    server.registerTool(
+      "read",
+      {
+        title: "Read files the index named (several at once)",
+        annotations: READ_ONLY,
+        description:
+          "The numbered lines of the files named - several files in one call, from the index, each line " +
+          "as path:line. Use it after find, search, sql or ask have named the files you want, for every " +
+          "file at once, in place of one Read per file. from and to cut every file to a line range; a " +
+          `file over ${READ_LINES_CAP} lines comes back a page at a time, with more saying where the next ` +
+          "page starts. A path the index does not hold comes back as a miss beside the others. " +
+          "The result includes a 'usage' field, a one-line receipt of tokens returned and files.",
+        inputSchema: {
+          paths: z
+            .array(z.string().min(1))
+            .min(1)
+            .max(BATCH_MAX)
+            .describe("Repo-relative paths, as find, search, sql and ask cite them - every file you want, in one call."),
+          from: z.number().int().positive().optional().describe("First line to return, in every file named. Default 1."),
+          to: z.number().int().positive().optional().describe("Last line to return, in every file named. Default the end."),
+          path: z
+            .string()
+            .optional()
+            .describe(
+              "Absolute path to the repository root to read from. Defaults to the server's configured root; " +
+                "set it to target a specific repo when a session spans more than one.",
+            ),
+        },
+      },
+      async ({ paths, from, to, path }) => {
+        let ctx: RepoCtx;
+        try {
+          ctx = repoFor(path);
+        } catch (err) {
+          return fail((err as Error).message);
+        }
+        const ensured = await localIndex(ctx);
+        if ("failed" in ensured) return ensured.failed;
+        const { handle, autoIndexed } = ensured;
+        if (!autoIndexed) maybeAutoSync(ctx); // a fresh build is already current
+        try {
+          const t0 = performance.now();
+          const files = await readFiles(handle, paths, { from, to });
+          const got = files.filter((f): f is Exclude<typeof f, { error: string }> => !("error" in f));
+          recordOf(ctx).addPlaces(TABLE, got.map((f) => ({ path: f.path, startLine: f.from })));
+          let usage: string | undefined;
+          if (receiptOn) {
+            const entry = readEntry(got);
+            recordUsage(ctx.dir, entry);
+            usage = formatReceipt(entry, session);
+          }
+          return ok({
+            files,
+            ...(autoIndexed ? { auto_indexed: autoIndexNote(autoIndexed) } : {}),
+            took_ms: Math.round((performance.now() - t0) * 1000) / 1000,
+            ...(usage ? { usage } : {}),
+          });
+        } catch (err) {
+          return fail(`read failed: ${(err as Error).message}`);
+        }
+      },
+    );
+  }
 
   if (hosted) {
     // The call before a JOIN, on every hosted server and not only under

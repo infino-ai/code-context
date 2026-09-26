@@ -86,6 +86,9 @@ async function expectChunksText(s: Started): Promise<void> {
   // signature (three such finds returned nothing on 2026-09-20 and the model
   // fell back to a regex grep).
   expect(byName.get("find")).toContain(FIND_BY_BARE_NAME);
+  // The files the index named, read from it several at once - registered
+  // on a chunks table, where paths are files.
+  expect(byName.get("read")).toContain("several files in one call");
   expect(byName.get("ask")).toContain("Ask the repository index");
   // The opening says what one call does and covers, before what comes back.
   expect(byName.get("ask")).toContain(
