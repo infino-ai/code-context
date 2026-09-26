@@ -24,7 +24,7 @@ SuperGrep offers agents four tools over an Infino index, kept in two places. `fi
 | `find` | Every line containing an exact string, like `grep -n`: complete, unranked, with the repo-wide total and per-file counts. Tens of milliseconds from the index. |
 | `search` | One ranked pass fusing exact keyword matching with semantic similarity, so it works whether or not you know the words. Hits carry the code, cited `path:line`. |
 | `sql` | Read-only SQL over the index. The ranked searches are table-valued, so "which files have the most code about X" ranks and tallies in one query. |
-| `ask` | A question that spans the repository, handed to SuperModel, which runs the investigation against the index and returns the rows it found, cited `path:line`, rather than prose. Several asks run at once. |
+| `ask` | A question that spans the repository, handed to small models on the Infino service that run the investigation against the index and return the rows they found, cited `path:line`, rather than prose. Several asks run at once. |
 
 </details>
 

@@ -27,8 +27,8 @@
 <text x='795' y='272' fill='#24292f' font-size='13' font-weight='600' text-anchor='middle'>every embedding</text>
 <text x='795' y='290' fill='#57606a' font-size='12' text-anchor='middle'>computed here, never on your laptop</text>
 <rect x='680' y='312' width='230' height='52' rx='8' fill='#f6f8fa' stroke='#d0d7de'/>
-<text x='795' y='334' fill='#24292f' font-size='13' font-weight='600' text-anchor='middle'>SuperModel</text>
-<text x='795' y='352' fill='#57606a' font-size='12' text-anchor='middle'>our retrieval model, behind ask</text>
+<text x='795' y='334' fill='#24292f' font-size='13' font-weight='600' text-anchor='middle'>small models</text>
+<text x='795' y='352' fill='#57606a' font-size='12' text-anchor='middle'>many at once, behind ask</text>
 <rect x='680' y='374' width='230' height='52' rx='8' fill='#f6f8fa' stroke='#d0d7de'/>
 <text x='795' y='396' fill='#24292f' font-size='13' font-weight='600' text-anchor='middle'>the same index</text>
 <text x='795' y='414' fill='#57606a' font-size='12' text-anchor='middle'>search on object storage</text>

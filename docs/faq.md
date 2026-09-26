@@ -8,8 +8,9 @@ lives in plain files inside your repo. Anything with meaning in it - `search`,
 a `sql` statement with a ranked search inside it, and `ask` - runs in the
 Infino cloud over the same index's platform copy, where every embedding is
 computed, so the heavy compute stays off your laptop. `ask` hands the
-question to SuperModel, our composite retrieval model, and returns the rows
-it found. Either way the point is the same: an agent answers questions about
+question to small models on the Infino service, which work the index at
+once and return the rows they found. Either way the point is the same: an
+agent answers questions about
 the codebase, or delegates its exploration, without reading it file by file.
 The package, the CLI (`cx`) and the MCP server are still named
 `code-context`.
@@ -118,7 +119,7 @@ Four, one per question: `find` (every line containing an exact string, cited
 chunk content with `path:line` ranges), `sql` (read-only `SELECT`/`WITH`
 over the index, with the ranked search functions usable as table-valued
 relations so search composes with `GROUP BY`) and `ask` (a question that
-spans the repository, answered as the rows SuperModel retrieved rather than
+spans the repository, answered as the rows the service retrieved rather than
 as prose). `find` and plain `sql` run on your machine with no account;
 `search`, a `sql` with a ranked search in it, and `ask` run in the cloud over
 the same index's platform copy.
