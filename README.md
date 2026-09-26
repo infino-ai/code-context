@@ -98,25 +98,25 @@ git clone -b feat/side-by-side-demo https://github.com/infino-ai/supergrep
 cd supergrep && npm ci && npm run build
 ```
 
-Now, in the repository you want to search, one command:
+Now, in the directory you want to make searchable - a repository, a folder of logs, your notes, anything - one command:
 
 ```bash
 node /path/to/supergrep/dist/cli.js install --platform https://host
 ```
 
-That is the whole setup. It indexes the repository, sets you up with a free account, registers this repository's database, and writes the MCP entry. Open Claude Code there and ask a question - all four tools are live.
+That is the whole setup. It indexes the directory, sets you up with a free account, registers a database for it, and writes the MCP entry. Open Claude Code there and ask a question - all four tools are live.
 
 **A free account, no credit card required.** There is no form, no email, no password and no card, and nothing is created without your say-so: SuperGrep asks you once, tells you that the contents of the files will be uploaded to Infino, and only on your yes creates the account and stores its key at `~/.infino/key`, mode 600, readable only by you. No config file ever holds a key or a path to one. Infino is SOC 2 Type 2 certified.
 
 **Keep that key.** Because the free account asks for no email and no card, the key is the only thing that identifies you: it is how you get back in, and nothing else can. Back it up somewhere safe. When you add your details in the Infino console the same account gains a sign-in, and keys can be managed from there.
 
-**Every repository after that is the same command with no arguments at all:**
+**Every directory after that is the same command with no arguments at all:**
 
 ```bash
-cd ../another-repo && node /path/to/supergrep/dist/cli.js install
+cd ../another-project && node /path/to/supergrep/dist/cli.js install
 ```
 
-The stored key is found automatically. When the free credit runs out, `ask` says so and tells you how to add billing details and a card to the same account; `find` and plain `sql` keep working throughout.
+The stored key is found automatically, and each directory gets its own index and its own database. One server answers for every directory it has an index for: the tools take a `path`, so a session that spans several projects names the one it means. When the free credit runs out, `ask` says so and tells you how to add billing details and a card to the same account; `find` and plain `sql` keep working throughout.
 
 ### Local tools only
 
@@ -128,7 +128,7 @@ node /path/to/supergrep/dist/cli.js install
 
 Add `--local-only` to get that same local-only entry on a machine that does have an account.
 
-**Your agent can run this step itself.** `install --local-only` and `cx index` create no account, take no key and upload nothing - they write an index into `.infino/` and an entry into `.mcp.json`, both inside the repository. So if you are reading this with Claude Code open, "set SuperGrep up locally" is a thing to ask it to do rather than a thing to do yourself. The only step that needs you is `--platform`, because that one creates an account and sends the files' contents off the machine.
+**Your agent can run this step itself.** `install --local-only` and `cx index` create no account, take no key and upload nothing - they write an index into `.infino/` and an entry into `.mcp.json`, both inside the directory. So if you are reading this with Claude Code open, "set SuperGrep up locally" is a thing to ask it to do rather than a thing to do yourself. The only step that needs you is `--platform`, because that one creates an account and sends the files' contents off the machine.
 
 ### If you already have an Infino account
 
@@ -138,7 +138,7 @@ Sign in once per machine instead. The key comes from a file or standard input, n
 node /path/to/supergrep/dist/cli.js login --db https://host < keyfile
 ```
 
-Or name the database and key explicitly, per repository:
+Or name the database and key explicitly, per directory:
 
 ```bash
 node /path/to/supergrep/dist/cli.js install \
@@ -147,7 +147,7 @@ node /path/to/supergrep/dist/cli.js install \
 
 ## Indexing it yourself
 
-`install` indexes the repository for you and the MCP server keeps it current, so most of the time you never run an index by hand. When you want to - a first pass over a huge tree, a CI step, a corpus that is not a git repository - `index` is the command. (`cx` below is `node /path/to/supergrep/dist/cli.js`.)
+`install` indexes the directory for you and the MCP server keeps it current, so most of the time you never run an index by hand. When you want to - a first pass over a huge tree, a CI step, a corpus that is not a git repository - `index` is the command. (`cx` below is `node /path/to/supergrep/dist/cli.js`.)
 
 ```bash
 cx index                      # bring the index up to date; incremental, full on first run
