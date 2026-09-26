@@ -17,7 +17,11 @@ server are still named `code-context`.
 `find`, `search` and `sql` take an optional `path` (an absolute repository
 root) so one server can serve several repositories in a session, each with
 its own local index; `ask` reads one platform database and
-refuses a `path` naming a different repository.
+refuses a `path` naming a different repository. Each of the three also
+takes `queries`, a list of up to sixteen strings or statements in place of
+`query`: they run at the same time and the results come back in the same
+order, each under its query, so several lookups are one call and one turn
+of the agent rather than one per lookup.
 
 ### The SQL move
 

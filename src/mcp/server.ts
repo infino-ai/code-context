@@ -414,6 +414,20 @@ export const SWEEP_TO_A_TOOL =
   "Be efficient: prefer few, well-chosen tool calls, and hand a sweep across many files to a tool " +
   "built for it rather than searching by hand.";
 
+/** The most queries one find, search or sql call carries. */
+export const BATCH_MAX = 16;
+
+/** Independent calls in one reply. Measured 2026-09-26 on the live demo: a
+ * caller issued 25 index calls one per turn, each turn re-sending the whole
+ * transcript, where one call with `queries` or several calls side by side
+ * would have run them at the same time. The reads it makes after the index
+ * has named the files are the same shape. One sentence, shared by the
+ * instructions and the three tools' own text. */
+export const CALLS_TOGETHER =
+  "Independent calls go in one reply, never one per turn: several finds, searches or statements as one " +
+  "call with queries, or side by side; and once the index has named the files, read them together in " +
+  "one reply rather than one at a time.";
+
 /** The fan-out as a preference, not a permission. "Spawn several in
  * parallel for independent questions" said the parallel call was allowed;
  * the outer model kept asking one broad question and waiting, or walking
@@ -1216,11 +1230,44 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
     }
   };
 
-  const ok = (value: unknown) => ({ content: [{ type: "text" as const, text: jsonify(value, true) }] });
+  // The value behind an ok result, kept beside it so a batch can put the
+  // results of its queries into one object without parsing its own output.
+  const values = new WeakMap<object, unknown>();
+  const ok = (value: unknown) => {
+    const result = { content: [{ type: "text" as const, text: jsonify(value, true) }] };
+    values.set(result, value);
+    return result;
+  };
   const fail = (message: string) => ({
     content: [{ type: "text" as const, text: message }],
     isError: true,
   });
+  type ToolResult = ReturnType<typeof ok> | ReturnType<typeof fail>;
+
+  /** One call, several queries. With `queries`, each runs through `single`
+   * at the same time and the results come back in the same order, each
+   * under its query, a failed one as its message beside the others rather
+   * than in place of them; every query files its own receipt. Without it,
+   * `query` runs alone as it always did. Neither is a refusal that says so.
+   * The cap on `queries` is the schema's (BATCH_MAX), enforced before the
+   * call reaches here. */
+  const batched = async <A extends { query?: string; queries?: string[] }>(
+    tool: string,
+    args: A,
+    single: (args: A & { query: string }) => Promise<ToolResult>,
+  ): Promise<ToolResult> => {
+    const { queries, query, ...rest } = args;
+    if (queries && queries.length > 0) {
+      const t0 = performance.now();
+      const results = await Promise.all(queries.map((q) => single({ ...(rest as A), query: q })));
+      const each = results.map((r, i) =>
+        "isError" in r ? { query: queries[i], error: r.content[0]?.text ?? "failed" } : { query: queries[i], ...(values.get(r) as object) },
+      );
+      return ok({ results: each, took_ms: Math.round((performance.now() - t0) * 1000) / 1000 });
+    }
+    if (typeof query !== "string" || query.length === 0) return fail(`${tool}: give query, or queries for several at once`);
+    return single({ ...(rest as A), query });
+  };
   const noIndex = (ctx: RepoCtx) =>
     fail(`no index for ${ctx.root} yet - run \`cx index\` there once (keyword search is live in seconds).`);
 
@@ -1614,6 +1661,8 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
         indexFirst(agentTools, TABLE) +
         "\n" +
         SWEEP_TO_A_TOOL +
+        " " +
+        CALLS_TOGETHER +
         "\n" +
         "Hits carry the code: when a hit answers the question, answer from it. A hit's content shows " +
         "each line with its own number in the file, so cite a place as path:line or path:start-end " +
@@ -1662,10 +1711,18 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
         "of context, in place of the whole chunk - for logs, test output and other long records, " +
         "where the matching lines are the answer; put the words you expect on those lines in the " +
         "query. For every occurrence of an exact " +
-        "string use find; for counts and rankings use sql. The result includes a 'usage' field, a " +
-        "one-line receipt of tokens returned, chunks and files.",
+        "string use find; for counts and rankings use sql. Several searches at once: pass queries. " +
+        "The result includes a 'usage' field, a one-line receipt of tokens returned, chunks and files.",
       inputSchema: {
-        query: z.string().describe("What you're looking for - terms, a phrase, or a description."),
+        query: z.string().optional().describe("What you're looking for - terms, a phrase, or a description."),
+        queries: z
+          .array(z.string().min(1))
+          .max(BATCH_MAX)
+          .optional()
+          .describe(
+            "Several queries in one call, run at the same time; the results come back in the same order, " +
+              "each under its query. Use it in place of one call per query.",
+          ),
         k: z.number().int().positive().max(50).default(DEFAULT_SEARCH_K).describe("Maximum hits."),
         lines: z
           .boolean()
@@ -1684,7 +1741,7 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
           ),
       },
     },
-    async ({ query, k, lines, path }) => {
+    async (args) => batched("search", args, async ({ query, k, lines, path }) => {
       let ctx: RepoCtx;
       try {
         ctx = repoFor(path);
@@ -1779,7 +1836,7 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
       } catch (err) {
         return fail(`search failed: ${(err as Error).message}`);
       }
-    },
+    }),
   );
 
   server.registerTool(
@@ -1814,14 +1871,24 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
           ? "For code by meaning, when you know roughly the words, use search; for a question - how " +
             "X works, where Y is handled - use ask, several at once; for rankings use sql. "
           : "For meaning or 'how does X work' use search; for rankings use sql. ") +
+        "Several finds at once: pass queries. " +
         "The result includes a 'usage' field, a one-line receipt of tokens returned, matches and files.",
       inputSchema: {
         query: z
           .string()
           .min(1)
+          .optional()
           .describe(
             "The exact text to find, as it appears in the code - an identifier, a string, a key. Never a " +
               "signature or a line you have not read: one character off and nothing matches.",
+          ),
+        queries: z
+          .array(z.string().min(1))
+          .max(BATCH_MAX)
+          .optional()
+          .describe(
+            "Several exact strings in one call, found at the same time; the results come back in the " +
+              "same order, each under its query. Use it in place of one call per string.",
           ),
         ignoreCase: z
           .boolean()
@@ -1874,7 +1941,7 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
           ),
       },
     },
-    async ({ query, ignoreCase, defines, under, limit, context, path }) => {
+    async (args) => batched("find", args, async ({ query, ignoreCase, defines, under, limit, context, path }) => {
       let ctx: RepoCtx;
       try {
         ctx = repoFor(path);
@@ -1937,7 +2004,7 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
       } catch (err) {
         return fail(`find failed: ${(err as Error).message}`);
       }
-    },
+    }),
   );
 
   server.registerTool(
@@ -1949,7 +2016,17 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
       inputSchema: {
         query: z
           .string()
+          .optional()
           .describe("A single read-only SELECT or WITH statement. May use search table functions and {{name}} vector placeholders."),
+        queries: z
+          .array(z.string().min(1))
+          .max(BATCH_MAX)
+          .optional()
+          .describe(
+            "Several statements in one call, run at the same time and sharing embed and question; the " +
+              "results come back in the same order, each under its statement. Use it in place of one " +
+              "call per statement.",
+          ),
         embed: z
           .record(z.string(), z.string())
           .optional()
@@ -1971,7 +2048,7 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
           ),
       },
     },
-    async ({ query, embed, question, path }) => {
+    async (args) => batched("sql", args, async ({ query, embed, question, path }) => {
       let ctx: RepoCtx;
       try {
         ctx = repoFor(path);
@@ -2081,7 +2158,7 @@ export async function serveMcp(rootPath?: string, serveOptions: ServeOptions = {
       } catch (err) {
         return fail(`sql failed: ${(err as Error).message}`);
       }
-    },
+    }),
   );
 
   if (hosted) {

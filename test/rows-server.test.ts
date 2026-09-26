@@ -47,6 +47,7 @@ delete process.env.CX_INDEX_DIR;
 
 const { API_KEY_ENV, MANIFEST_NAME, configureHosted, hostedSettingsFromFlags } = await import("../src/core/config.js");
 const { SNIPPET_CHARS } = await import("../src/core/table-shape.js");
+const { BATCH_MAX } = await import("../src/mcp/server.js");
 
 /** The live table's schema, as `POST /v1/schema` returned it. */
 const JOBS_SCHEMA = [
@@ -250,6 +251,42 @@ describe("a table of another shape, described at startup, with answer switched o
     expect(statement?.query).toBe(`SELECT COUNT(*) AS n FROM hybrid_search('${JOBS_TABLE}','description_html','rust','emb', {{q:"rust engineering roles"}}, 50)`);
     const verdict = s.sent.find((x) => x.op === "validate")?.body;
     expect(verdict).toMatchObject({ table_name: JOBS_TABLE, field_name: "description_html", question: "how many rust roles?" });
+  });
+
+  it("find with queries runs every string at once and returns the results in order, each under its query", async () => {
+    const { ok, value, ops } = await call(s, "find", { queries: ["distributed systems", "rust", "paris"], limit: 5 });
+    expect(ok, String(value)).toBe(true);
+    // One platform read per query, and nothing else.
+    expect(ops).toEqual(["query_sql", "query_sql", "query_sql"]);
+    const result = value as { results: Array<{ query: string; total?: number; error?: string }>; took_ms: number };
+    expect(result.results.map((r) => r.query)).toEqual(["distributed systems", "rust", "paris"]);
+    for (const r of result.results) expect(r.total).toBe(2);
+    expect(typeof result.took_ms).toBe("number");
+  });
+
+  it("sql with queries runs every statement at once, a refused one as its message beside the others", async () => {
+    const { ok, value } = await call(s, "sql", {
+      queries: [`SELECT COUNT(*) AS n FROM ${JOBS_TABLE}`, `DROP TABLE ${JOBS_TABLE}`, `SELECT start_year, description_html FROM ${JOBS_TABLE} LIMIT 1`],
+    });
+    expect(ok, String(value)).toBe(true);
+    const result = value as { results: Array<{ query: string; rows?: unknown[]; error?: string }> };
+    expect(result.results).toHaveLength(3);
+    expect(result.results[0].rows).toEqual([{ n: 42 }]);
+    expect(result.results[1].error).toMatch(/read-only/);
+    expect(result.results[1].rows).toBeUndefined();
+    expect(result.results[2].rows).toEqual([{ start_year: 2019, description_html: "Build\nfast things" }]);
+  });
+
+  it("a call with neither query nor queries, or with too many, is refused before anything reaches the platform", async () => {
+    const neither = await call(s, "find", { limit: 5 });
+    expect(neither.ok).toBe(false);
+    expect(neither.value).toMatch(/give query, or queries/);
+    expect(neither.ops).toEqual([]);
+    // The cap is the schema's, so the refusal is the SDK's own wording.
+    const tooMany = await call(s, "search", { queries: Array.from({ length: BATCH_MAX + 1 }, (_, i) => `q${i}`) });
+    expect(tooMany.ok).toBe(false);
+    expect(tooMany.value).toMatch(new RegExp(`<=${BATCH_MAX} items`));
+    expect(tooMany.ops).toEqual([]);
   });
 
   it("sql returns a row's multi-line text as the platform gave it: a table has no lines to number", async () => {
