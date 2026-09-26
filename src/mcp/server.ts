@@ -441,7 +441,8 @@ export const CALLS_TOGETHER =
  * and the ask tool's own text on both table shapes. */
 export const PREFER_SEVERAL_ASKS =
   "Prefer several asks in one reply, one per part of the question, over one broad ask or a chain of " +
-  "your own searches.";
+  "your own searches. Ask narrow: one named thing, one mechanism, one file's role per ask - a narrow " +
+  "ask comes back in seconds with the lines, a broad one comes back thin and sends you looking yourself.";
 
 /** The order among the tools a model holds beside this server's: the index
  * first. Claude Code's own prompt prefers dedicated file and search tools
