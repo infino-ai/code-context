@@ -106,7 +106,7 @@ node /path/to/supergrep/dist/cli.js install --platform https://host
 
 That is the whole setup. It indexes the repository, sets you up with a free account, registers this repository's database, and writes the MCP entry. Open Claude Code there and ask a question - all four tools are live.
 
-**A free account, no credit card required.** There is no form, no email, no password and no card, and nothing is created without your say-so: SuperGrep asks you once, tells you that the contents of the files will be uploaded to Infino, and only on your yes creates the account and stores its key at `~/.infino/key`, mode 600, readable only by you. No config file ever holds a key or a path to one. Infino is SOC 2 compliant.
+**A free account, no credit card required.** There is no form, no email, no password and no card, and nothing is created without your say-so: SuperGrep asks you once, tells you that the contents of the files will be uploaded to Infino, and only on your yes creates the account and stores its key at `~/.infino/key`, mode 600, readable only by you. No config file ever holds a key or a path to one. Infino is SOC 2 Type 2 certified.
 
 **Keep that key.** Because the free account asks for no email and no card, the key is the only thing that identifies you: it is how you get back in, and nothing else can. Back it up somewhere safe. When you add your details in the Infino console the same account gains a sign-in, and keys can be managed from there.
 
